@@ -1,0 +1,26 @@
+[project]
+name = "photo-editor"
+version = "0.1.0"
+description = "Professional-grade Photoshop-style photo editor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.6.0",
+    "Pillow>=10.2.0",
+    "opencv-python-headless>=4.9.0",
+    "numpy>=1.26.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+photo-editor = "photo_editor.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.3",
+]
