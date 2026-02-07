@@ -2,8 +2,8 @@
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![License MIT](https://img.shields.io/badge/license-MIT-green)
+<img width="1919" height="992" alt="image" src="https://github.com/user-attachments/assets/0b87d5d4-9866-4eff-b81a-6ad657589609" />
+
 
 > **Screenshots placeholder** — screenshots go here once the UI is running.
 
