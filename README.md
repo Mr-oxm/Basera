@@ -1,6 +1,11 @@
 # Photo Editor
 
+> **v0.1.0-alpha** — Early experimental release. Expect bugs, missing features, and breaking changes.
+
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
+
+> [!WARNING]
+> This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
 
 <img width="1919" height="992" alt="image" src="https://github.com/user-attachments/assets/0b87d5d4-9866-4eff-b81a-6ad657589609" />
 
@@ -256,6 +261,44 @@ tests/
 - Layer rendering is **cached** — only dirty layers are re-rendered
 - **Tile-based rendering** architecture is included and ready for activation on large canvases
 - GPU-ready abstraction: the blending engine's functional interface allows drop-in CuPy/GPU replacements
+
+---
+
+## Known Issues & Limitations
+
+This is an early alpha — the following are known problems that need to be addressed:
+
+### Performance
+- [ ] Rendering can be slow on large canvases or with many layers
+- [ ] UI may freeze during heavy filter/adjustment operations
+- [ ] Memory usage is not optimized — large documents consume excessive RAM
+- [ ] Undo/redo stack holds full image copies, causing memory bloat
+
+### Layers
+- [ ] Layer groups do not composite correctly in all cases
+- [ ] Dragging layers to reorder can be unreliable
+- [ ] Clipping masks may not update visually in real time
+- [ ] Deleting layers sometimes leaves stale render artifacts
+
+### Masking
+- [ ] Layer masks do not paint or preview correctly in many scenarios
+- [ ] Mask feathering and refinement produce inconsistent results
+- [ ] No quick mask mode for visual mask editing
+
+### Tools
+- [ ] **Move tool** is not working — cannot drag layers on the canvas
+- [ ] **Selection tools** have no visible selection box / marching ants indicator
+- [ ] Clone Stamp and Healing Brush source point is not visualized
+- [ ] Text tool has limited editing — no in-canvas text reflow
+- [ ] Brush engine lacks pressure sensitivity and dynamics
+- [ ] Transform handles are not rendered on the canvas
+
+### General
+- [ ] No file save/export (only open is functional)
+- [ ] Keyboard shortcuts may conflict or not work on all platforms
+- [ ] Zoom and pan can feel sluggish at high zoom levels
+- [ ] No crash recovery or auto-save
+- [ ] Filter previews are not live — must apply to see result
 
 ---
 
