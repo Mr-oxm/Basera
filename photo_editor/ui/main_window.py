@@ -143,6 +143,9 @@ class MainWindow(QMainWindow):
         lp.blend_mode_hover_ended.connect(self._on_blend_hover_end)
         lp.visibility_toggled.connect(self._on_toggle_vis)
         lp.lock_toggled.connect(self._on_toggle_lock)
+        lp.layers_reordered.connect(self._on_layers_reordered)
+        lp.layers_reparented.connect(self._on_layers_reparented)
+        lp.rename_requested.connect(self._on_rename_layer)
         self._history_panel.state_selected.connect(self._on_history_jump)
         self._adj_panel.adjustment_requested.connect(self._on_adjustment)
         self._color_panel.fg_changed.connect(self._on_fg_color_changed)
@@ -212,6 +215,15 @@ class MainWindow(QMainWindow):
         if self._tools.active_type == ToolType.MOVE and self._doc:
             layer = self._doc.layers.active_layer
             if layer:
+                # For groups, compute bounding box from children
+                if layer.layer_type == LayerType.GROUP:
+                    box = self._group_bbox(layer)
+                    if box:
+                        self._canvas.set_transform_box(box)
+                    else:
+                        self._canvas.set_transform_box(None)
+                    return
+
                 tool = self._tools.active_tool
                 # Ask the tool for rotation info (includes mid-drag angle).
                 info = None
@@ -239,6 +251,24 @@ class MainWindow(QMainWindow):
                 self._canvas.set_transform_box((lx, ly, layer.width, layer.height))
                 return
         self._canvas.set_transform_box(None)
+
+    def _group_bbox(self, group) -> tuple[int, int, int, int] | None:
+        """Compute bounding box for a group from its children."""
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        found = False
+        for child in self._doc.layers:
+            if child.parent_id != group.id:
+                continue
+            cx, cy = child.position
+            min_x = min(min_x, cx)
+            min_y = min(min_y, cy)
+            max_x = max(max_x, cx + child.width)
+            max_y = max(max_y, cy + child.height)
+            found = True
+        if not found:
+            return None
+        return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
 
     # ---- File menu handlers -------------------------------------------------
 
@@ -317,9 +347,15 @@ class MainWindow(QMainWindow):
             self._refresh()
 
     def _on_add_group(self) -> None:
-        if self._doc:
+        if not self._doc:
+            return
+        selected = self._layers_panel.selected_layer_ids()
+        if len(selected) > 1:
+            # Group the selected layers into a new group
+            self._doc.group_selected_layers(selected)
+        else:
             self._doc.add_group()
-            self._refresh()
+        self._refresh()
 
     def _on_dup_layer(self) -> None:
         if self._doc and self._doc.layers.active_layer:
@@ -386,6 +422,46 @@ class MainWindow(QMainWindow):
             if layer:
                 layer.locked = not layer.locked
                 self._layers_panel.refresh(self._doc)
+
+    def _on_rename_layer(self, layer_id: str, new_name: str) -> None:
+        if self._doc:
+            layer = self._doc.layers.get(layer_id)
+            if layer:
+                layer.name = new_name
+                self._doc.save_snapshot(f"Rename to {new_name}")
+                self._refresh()
+
+    def _on_layers_reordered(self, layer_ids: list[str], target_visual_row: int) -> None:
+        """Handle drag-drop reorder from the layers panel."""
+        if not self._doc:
+            return
+        # Convert the visual display order to a new stack order.
+        # The display is top→bottom (reverse of stack bottom→top).
+        display_ids = self._layers_panel.row_layer_ids()
+
+        # Remove the dragged ids from the display order
+        remaining = [lid for lid in display_ids if lid not in layer_ids]
+
+        # Clamp target row
+        target_visual_row = max(0, min(target_visual_row, len(remaining)))
+
+        # Insert dragged ids at the target position
+        for i, lid in enumerate(layer_ids):
+            remaining.insert(target_visual_row + i, lid)
+
+        # Display order is reversed stack order.  Reverse to get stack order.
+        new_stack_order = list(reversed(remaining))
+        self._doc.layers.reorder_by_ids(new_stack_order)
+        self._doc.save_snapshot("Reorder Layers")
+        self._refresh()
+
+    def _on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
+        """Handle drag-drop into a group from the layers panel."""
+        if not self._doc:
+            return
+        self._doc.layers.reparent(layer_ids, group_id)
+        self._doc.save_snapshot("Move to Group")
+        self._refresh()
 
     def _on_toggle_vis_selected(self) -> None:
         self._layers_panel.toggle_visibility_for_selected()

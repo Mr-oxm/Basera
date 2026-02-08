@@ -9,6 +9,7 @@ import numpy as np
 
 from .tool_base import Tool
 from ..core.document import Document
+from ..core.enums import LayerType
 from ..transforms.transform_engine import TransformEngine
 
 
@@ -68,6 +69,11 @@ class MoveTool(Tool):
         self._anchor_screen: tuple[float, float] = (0.0, 0.0)
         self._anchor_sign: tuple[int, int] = (0, 0)
         self._is_rotated_resize: bool = False
+        # Group support: track children and their original state
+        self._group_children: list = []
+        self._group_child_positions: dict[str, tuple[int, int]] = {}
+        self._group_child_pixels: dict[str, np.ndarray] = {}
+        self._group_orig_bbox: tuple[int, int, int, int] | None = None
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -93,12 +99,37 @@ class MoveTool(Tool):
 
     @staticmethod
     def _bbox(doc: Document) -> tuple[int, int, int, int] | None:
-        """Return (x, y, w, h) bounding box of the active layer in doc coords."""
+        """Return (x, y, w, h) bounding box of the active layer in doc coords.
+
+        For groups, the box encompasses all child layers.
+        """
         layer = doc.layers.active_layer
         if layer is None:
             return None
+        if layer.layer_type == LayerType.GROUP:
+            return MoveTool._group_bbox(doc, layer)
         lx, ly = layer.position
         return (lx, ly, layer.width, layer.height)
+
+    @staticmethod
+    def _group_bbox(doc: Document, group) -> tuple[int, int, int, int] | None:
+        """Compute a bounding box that encompasses all children of *group*."""
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        found = False
+        for child in doc.layers:
+            if child.parent_id != group.id:
+                continue
+            cx, cy = child.position
+            min_x = min(min_x, cx)
+            min_y = min(min_y, cy)
+            max_x = max(max_x, cx + child.width)
+            max_y = max(max_y, cy + child.height)
+            found = True
+        if not found:
+            lx, ly = group.position
+            return (lx, ly, group.width, group.height)
+        return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
 
     def _hit_test(self, doc: Document, x: int, y: int) -> tuple[_Mode, _Handle]:
         layer = doc.layers.active_layer
@@ -174,21 +205,44 @@ class MoveTool(Tool):
 
         self._start_x, self._start_y = x, y
         self._orig_position = layer.position
-        self._orig_pixels = layer.pixels.copy()
-        self._orig_width = layer.width
-        self._orig_height = layer.height
         self._dragging = True
         self._active_layer = layer
         self._is_rotated_resize = False
 
+        # -- Group setup ---------------------------------------------------
+        self._group_children = []
+        self._group_child_positions = {}
+        self._group_child_pixels = {}
+        self._group_orig_bbox = None
+
+        if layer.layer_type == LayerType.GROUP:
+            for child in doc.layers:
+                if child.parent_id == layer.id:
+                    self._group_children.append(child)
+                    self._group_child_positions[child.id] = child.position
+                    self._group_child_pixels[child.id] = child.pixels.copy()
+            bbox = self._group_bbox(doc, layer)
+            self._group_orig_bbox = bbox
+            if bbox:
+                self._orig_width = bbox[2]
+                self._orig_height = bbox[3]
+            else:
+                self._orig_width = layer.width
+                self._orig_height = layer.height
+            self._orig_pixels = None  # not used for groups
+            return  # skip single-layer setup below
+
+        # -- Single-layer setup --------------------------------------------
+        self._orig_pixels = layer.pixels.copy()
+        self._orig_width = layer.width
+        self._orig_height = layer.height
+
         if self._mode == _Mode.ROTATE:
             if layer.transform_base_w == 0:
-                # First rotation — record the original (un-rotated) dims & pixels
                 layer.transform_base_w = layer.width
                 layer.transform_base_h = layer.height
                 layer._transform_original = layer.pixels.copy()
             else:
-                # Subsequent rotation — use pre-rotation original for quality
                 if layer._transform_original is not None:
                     self._orig_pixels = layer._transform_original.copy()
 
@@ -196,15 +250,12 @@ class MoveTool(Tool):
             if (layer.transform_angle != 0.0
                     and layer.transform_base_w > 0
                     and layer._transform_original is not None):
-                # Resizing a rotated layer: work with pre-rotation pixels
                 self._is_rotated_resize = True
                 self._orig_pixels = layer._transform_original.copy()
                 self._orig_width = layer.transform_base_w
                 self._orig_height = layer.transform_base_h
-                # Compute the anchor (opposite point) in screen coordinates
                 self._setup_resize_anchor(layer)
             else:
-                # Plain resize — clear any stale rotation state
                 layer.transform_angle = 0.0
                 layer.transform_base_w = 0
                 layer.transform_base_h = 0
@@ -240,19 +291,32 @@ class MoveTool(Tool):
         dx = x - self._start_x
         dy = y - self._start_y
 
+        is_group = layer.layer_type == LayerType.GROUP
+
         if self._mode == _Mode.MOVE:
             ox, oy = self._orig_position
             layer.position = (ox + dx, oy + dy)
+            # Move all group children together
+            for child in self._group_children:
+                cox, coy = self._group_child_positions[child.id]
+                child.position = (cox + dx, coy + dy)
 
         elif self._mode == _Mode.RESIZE:
-            self._apply_resize(layer, dx, dy)
+            if is_group:
+                self._apply_group_resize(dx, dy)
+            else:
+                self._apply_resize(layer, dx, dy)
 
         elif self._mode == _Mode.ROTATE:
-            self._apply_rotate(layer, x, y)
+            if is_group:
+                self._apply_group_rotate(x, y)
+            else:
+                self._apply_rotate(layer, x, y)
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         if self._mode == _Mode.ROTATE and self._active_layer is not None:
-            self._active_layer.transform_angle += self._current_angle
+            if self._active_layer.layer_type != LayerType.GROUP:
+                self._active_layer.transform_angle += self._current_angle
         self._dragging = False
         self._orig_pixels = None
         self._mode = _Mode.NONE
@@ -260,6 +324,10 @@ class MoveTool(Tool):
         self._current_angle = 0.0
         self._active_layer = None
         self._is_rotated_resize = False
+        self._group_children = []
+        self._group_child_positions = {}
+        self._group_child_pixels = {}
+        self._group_orig_bbox = None
 
     # ------------------------------------------------------------------
     # Resize
@@ -337,7 +405,7 @@ class MoveTool(Tool):
             layer.position = (int(new_x), int(new_y))
 
     # ------------------------------------------------------------------
-    # Rotate
+    # Rotate (single layer)
     # ------------------------------------------------------------------
 
     def _apply_rotate(self, layer, x: int, y: int) -> None:
@@ -367,3 +435,95 @@ class MoveTool(Tool):
         rh, rw = rotated.shape[:2]
         layer.pixels = rotated
         layer.position = (int(cx - rw / 2), int(cy - rh / 2))
+
+    # ------------------------------------------------------------------
+    # Group resize
+    # ------------------------------------------------------------------
+
+    def _apply_group_resize(self, dx: int, dy: int) -> None:
+        bbox = self._group_orig_bbox
+        if bbox is None:
+            return
+
+        bx, by, bw, bh = bbox
+        ow, oh = float(bw), float(bh)
+        ldx, ldy = float(dx), float(dy)
+
+        new_w, new_h = ow, oh
+        h = self._handle
+
+        if h in (_Handle.TL, _Handle.L, _Handle.BL):
+            new_w = max(4.0, ow - ldx)
+        elif h in (_Handle.TR, _Handle.R, _Handle.BR):
+            new_w = max(4.0, ow + ldx)
+
+        if h in (_Handle.TL, _Handle.T, _Handle.TR):
+            new_h = max(4.0, oh - ldy)
+        elif h in (_Handle.BL, _Handle.B, _Handle.BR):
+            new_h = max(4.0, oh + ldy)
+
+        sx = new_w / max(ow, 1)
+        sy = new_h / max(oh, 1)
+
+        # New bbox origin shifts when resizing from top/left handles
+        new_bx, new_by = float(bx), float(by)
+        if h in (_Handle.TL, _Handle.L, _Handle.BL):
+            new_bx = bx + (ow - new_w)
+        if h in (_Handle.TL, _Handle.T, _Handle.TR):
+            new_by = by + (oh - new_h)
+
+        for child in self._group_children:
+            orig_pixels = self._group_child_pixels[child.id]
+            orig_cx, orig_cy = self._group_child_positions[child.id]
+
+            scaled = TransformEngine.scale(orig_pixels, sx, sy)
+            child.pixels = scaled
+
+            rel_x = orig_cx - bx
+            rel_y = orig_cy - by
+            child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
+
+    # ------------------------------------------------------------------
+    # Group rotate
+    # ------------------------------------------------------------------
+
+    def _apply_group_rotate(self, x: int, y: int) -> None:
+        bbox = self._group_orig_bbox
+        if bbox is None:
+            return
+
+        bx, by, bw, bh = bbox
+        gcx = bx + bw / 2.0
+        gcy = by + bh / 2.0
+
+        a0 = math.atan2(self._start_y - gcy, self._start_x - gcx)
+        a1 = math.atan2(y - gcy, x - gcx)
+        angle_deg = -math.degrees(a1 - a0)
+        self._current_angle = angle_deg
+
+        rad = math.radians(angle_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        for child in self._group_children:
+            orig_pixels = self._group_child_pixels[child.id]
+            orig_cx, orig_cy = self._group_child_positions[child.id]
+            orig_ch, orig_cw = orig_pixels.shape[:2]
+
+            # Rotate child pixels
+            rotated = TransformEngine.rotate(orig_pixels, angle_deg, expand=True)
+            rh, rw = rotated.shape[:2]
+            child.pixels = rotated
+
+            # Rotate child center around the group center
+            child_mid_x = orig_cx + orig_cw / 2.0
+            child_mid_y = orig_cy + orig_ch / 2.0
+            dx_c = child_mid_x - gcx
+            dy_c = child_mid_y - gcy
+            new_dx = dx_c * cos_a + dy_c * sin_a
+            new_dy = -dx_c * sin_a + dy_c * cos_a
+
+            child.position = (
+                int(gcx + new_dx - rw / 2),
+                int(gcy + new_dy - rh / 2),
+            )

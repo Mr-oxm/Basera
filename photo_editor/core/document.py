@@ -59,6 +59,14 @@ class Document:
         self._dirty = True
         return group
 
+    def group_selected_layers(self, layer_ids: list[str], name: str = "Group") -> Layer | None:
+        """Create a new group containing the given layers."""
+        group = self.layers.create_group_from(layer_ids, name)
+        if group:
+            self._snapshot("Group Layers")
+            self._dirty = True
+        return group
+
     def place_image(self, pixels: np.ndarray, name: str = "Placed Image") -> Layer:
         """Import an RGBA image as a new layer."""
         h, w = pixels.shape[:2]
@@ -123,11 +131,13 @@ class Document:
 
     def _snapshot(self, action: str) -> None:
         state = HistoryState(name=action)
-        # Save pixel data for every layer
+        # Save pixel data and mask data for every layer
         for layer in self.layers:
             state.layer_data[layer.id] = layer.pixels.copy()
             if layer._transform_original is not None:
                 state.layer_data[f"_orig_{layer.id}"] = layer._transform_original.copy()
+            if layer._mask is not None:
+                state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
         # Save the full layer structure so add/remove can be undone
         layer_metas = []
         for layer in self.layers:
@@ -145,6 +155,7 @@ class Document:
                 "mask_enabled": layer.mask_enabled,
                 "clipping_mask": layer.clipping_mask,
                 "parent_id": layer.parent_id,
+                "children": list(layer.children),
                 "transform_angle": layer.transform_angle,
                 "transform_base_w": layer.transform_base_w,
                 "transform_base_h": layer.transform_base_h,
@@ -182,11 +193,18 @@ class Document:
                     transform_base_w=meta.get("transform_base_w", 0),
                     transform_base_h=meta.get("transform_base_h", 0),
                 )
+                # Restore children list
+                layer.children = list(meta.get("children", []))
+                # Restore pixel data
                 if lid in state.layer_data:
                     layer.pixels = state.layer_data[lid].copy()
                 orig_key = f"_orig_{lid}"
                 if orig_key in state.layer_data:
                     layer._transform_original = state.layer_data[orig_key].copy()
+                # Restore mask data
+                mask_key = f"_mask_{lid}"
+                if mask_key in state.layer_data:
+                    layer._mask = state.layer_data[mask_key].copy()
                 new_stack.add(layer)
             new_stack.active_index = state.metadata.get("_active_index", 0)
             self.layers = new_stack
