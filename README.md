@@ -41,7 +41,7 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 | `effects/` | Effect base class and pipeline |
 | `adjustments/` | 15 non-destructive adjustments (Brightness, Levels, Curves…) |
 | `filters/` | 24 destructive filters across 6 categories |
-| `tools/` | 14 interactive tools (Brush, Eraser, Clone Stamp…) |
+| `tools/` | 13 interactive tools (Brush, Eraser, Clone Stamp, Move w/ transform…) |
 | `styles/` | 10 layer styles (Drop Shadow, Glow, Bevel…) + engine |
 | `masks/` | Mask manager and low-level mask operations |
 | `transforms/` | Geometric transforms (scale, rotate, skew, perspective, warp) |
@@ -72,16 +72,38 @@ Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturatio
 **Stylize:** Emboss · Find Edges · Solarize · Oil Paint  
 **Render:** Clouds · Difference Clouds · Lighting Effects
 
+### Move & Transform (unified on-canvas workflow)
+- **Move tool** with a Photoshop-style **bounding box** around the selected layer
+- **Resize** by dragging corner / edge handles — anchor-based positioning keeps the opposite side fixed
+- **Rotate** by dragging outside the bounding box — bounding box visually rotates with the content
+- **Resize after rotation** works correctly: the pre-rotation pixels are scaled then re-rotated, so the rotation is never lost and quality is preserved
+- Per-layer rotation state — switch layers or tools and come back; the bounding box shows the correct rotation
+- Smart cursor feedback: resize arrows, move cross, or rotation crosshair depending on hover position
+- All transform operations are fully **undoable / redoable**
+
+### History & Undo System
+- Linear undo / redo stack (configurable depth, default 50 states)
+- **Full structural undo**: adding, placing, duplicating, and deleting layers can all be undone and redone — the entire layer stack (order, metadata, pixels) is saved and rebuilt on restore
+- Per-layer state (position, visibility, opacity, blend mode, rotation) is captured in every snapshot
+- History panel with click-to-jump navigation
+- Opening an image creates an "Open Image" base state — undo never goes back to a blank canvas
+
 ### Drawing Tools (14)
-Brush · Eraser · Clone Stamp · Healing Brush · Gradient · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · Text · Shape · Transform · Move
+Brush · Eraser · Clone Stamp · Healing Brush · Gradient · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · Text · Shape · Move (with integrated Transform)
 
 ### Layer Styles (10)
 Drop Shadow · Inner Shadow · Outer Glow · Inner Glow · Bevel & Emboss · Satin · Color Overlay · Gradient Overlay · Pattern Overlay · Stroke
 
+### Layers Panel
+- Dedicated **eye icon** button to toggle layer visibility
+- Dedicated **lock icon** button to toggle layer locking
+- Icons update in real time; buttons positioned to the right of the layer name
+- Click to select, add, duplicate, delete layers
+
 ### Selection System
 Rectangle · Ellipse · Lasso · Magic Wand · Feather · Grow/Shrink · Invert
 
-### Transform Tools
+### Transform Engine
 Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ### UI
@@ -93,6 +115,7 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 - Status bar with cursor position, zoom level, document info
 - Drag & drop image loading
 - New Document dialog with presets
+- **Real-time blend mode preview** — hover over blend modes in the dropdown to see a live preview on the canvas before committing
 
 ---
 
@@ -220,7 +243,7 @@ photo_editor/
 │   ├── distort/
 │   ├── stylize/
 │   └── render/
-├── tools/                   # 14 interactive tools
+├── tools/                   # 13 interactive tools (Move w/ integrated transform)
 ├── styles/                  # 10 layer styles + engine
 ├── effects/                 # Effect pipeline
 ├── masks/                   # Mask manager & operations
@@ -272,13 +295,13 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] Rendering can be slow on large canvases or with many layers
 - [ ] UI may freeze during heavy filter/adjustment operations
 - [ ] Memory usage is not optimized — large documents consume excessive RAM
-- [ ] Undo/redo stack holds full image copies, causing memory bloat
+- [ ] Undo/redo stack holds full image copies (including pre-rotation originals), causing memory bloat
 
 ### Layers
 - [ ] Layer groups do not composite correctly in all cases
 - [ ] Dragging layers to reorder can be unreliable
 - [ ] Clipping masks may not update visually in real time
-- [ ] Deleting layers sometimes leaves stale render artifacts
+- [x] ~~Deleting layers sometimes leaves stale render artifacts~~ (fixed — full structural undo rebuilds the stack)
 
 ### Masking
 - [ ] Layer masks do not paint or preview correctly in many scenarios
@@ -286,19 +309,19 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] No quick mask mode for visual mask editing
 
 ### Tools
-- [ ] **Move tool** is not working — cannot drag layers on the canvas
+- [x] ~~**Move tool** is not working — cannot drag layers on the canvas~~ (fixed — full move/resize/rotate via bounding box)
 - [ ] **Selection tools** have no visible selection box / marching ants indicator
 - [ ] Clone Stamp and Healing Brush source point is not visualized
 - [ ] Text tool has limited editing — no in-canvas text reflow
 - [ ] Brush engine lacks pressure sensitivity and dynamics
-- [ ] Transform handles are not rendered on the canvas
+- [x] ~~Transform handles are not rendered on the canvas~~ (fixed — bounding box with 8 handles, rotates with content)
 
 ### General
-- [ ] No file save/export (only open is functional)
 - [ ] Keyboard shortcuts may conflict or not work on all platforms
 - [ ] Zoom and pan can feel sluggish at high zoom levels
 - [ ] No crash recovery or auto-save
-- [ ] Filter previews are not live — must apply to see result
+- [x] ~~Filter previews are not live — must apply to see result~~ (blend mode preview is now live on hover)
+- [x] ~~No file save/export~~ (Save / Save As now functional)
 
 ---
 
