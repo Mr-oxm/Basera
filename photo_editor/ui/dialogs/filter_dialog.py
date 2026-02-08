@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QLabel, QScrollArea, QSlider, QVBoxLayout, QWidget,
@@ -44,6 +44,9 @@ _RANGE_HINTS: dict[str, tuple[int, int]] = {
 class FilterDialog(QDialog):
     """Builds sliders automatically from a params dict."""
 
+    # Emitted (debounced) whenever the user changes any parameter.
+    params_changed = Signal(dict)
+
     def __init__(self, title: str, params: dict, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -51,6 +54,13 @@ class FilterDialog(QDialog):
         self._raw = dict(params)      # original types preserved
         self._flat: dict[str, object] = {}  # flattened for UI
         self._widgets: dict[str, QWidget] = {}
+
+        # Debounce timer for live preview (50 ms)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setInterval(50)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._emit_params)
+
         self._flatten_params()
         self._build_ui()
 
@@ -144,6 +154,12 @@ class FilterDialog(QDialog):
             self._flat[key] = int(value)
         else:
             self._flat[key] = value
+        # Schedule debounced preview update
+        self._preview_timer.start()
+
+    def _emit_params(self) -> None:
+        """Emit the reconstructed params dict for live preview."""
+        self.params_changed.emit(self.get_params())
 
     def get_params(self) -> dict:
         """Reconstruct the original param shapes from flat values."""

@@ -28,7 +28,6 @@ class Document:
         bg = Layer(name="Background", width=width, height=height)
         bg.pixels[:] = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         self.layers.add(bg)
-        self._snapshot("New Document")
 
     # ---- Dirty flag ---------------------------------------------------------
 
@@ -126,12 +125,16 @@ class Document:
         state = HistoryState(name=action)
         for layer in self.layers:
             state.layer_data[layer.id] = layer.pixels.copy()
+            state.metadata[f"pos_{layer.id}"] = layer.position
         self.history.push(state)
 
     def _restore(self, state: HistoryState) -> None:
         for layer in self.layers:
             if layer.id in state.layer_data:
                 layer.pixels = state.layer_data[layer.id].copy()
+            pos_key = f"pos_{layer.id}"
+            if pos_key in state.metadata:
+                layer.position = state.metadata[pos_key]
         self._dirty = True
 
     # ---- Canvas ops ---------------------------------------------------------

@@ -1,6 +1,13 @@
-"""Runs adjustment and filter dialogs and applies results to the document."""
+"""Runs adjustment and filter dialogs and applies results to the document.
+
+Supports real-time preview: while the dialog is open, every parameter
+change temporarily applies the filter/adjustment to the active layer so
+the user sees the effect on the full canvas before committing.
+"""
 
 from __future__ import annotations
+
+from typing import Callable
 
 import numpy as np
 from PySide6.QtWidgets import QWidget
@@ -81,8 +88,19 @@ def _filter_map() -> dict[str, type]:
     }
 
 
-def run_adjustment(name: str, doc: Document, parent: QWidget | None = None) -> bool:
-    """Show a dialog for *name*, apply to active layer. Returns True if applied."""
+# ---- Public API -----------------------------------------------------------
+
+def run_adjustment(
+    name: str,
+    doc: Document,
+    parent: QWidget | None = None,
+    preview_fn: Callable[[], None] | None = None,
+) -> bool:
+    """Show a dialog for *name*, apply to active layer. Returns True if applied.
+
+    If *preview_fn* is provided it is called after every parameter change so
+    the canvas updates in real time.
+    """
     adj_cls = _adj_map().get(name)
     if adj_cls is None:
         return False
@@ -92,13 +110,21 @@ def run_adjustment(name: str, doc: Document, parent: QWidget | None = None) -> b
     if not adj.default_params:
         return _apply_to_layer(doc, adj, {})
 
-    dlg = FilterDialog(f"Adjustment — {name}", adj.default_params, parent=parent)
-    if dlg.exec():
-        return _apply_to_layer(doc, adj, dlg.get_params())
-    return False
+    return _run_dialog_with_preview(
+        title=f"Adjustment — {name}",
+        processor=adj,
+        doc=doc,
+        parent=parent,
+        preview_fn=preview_fn,
+    )
 
 
-def run_filter(key: str, doc: Document, parent: QWidget | None = None) -> bool:
+def run_filter(
+    key: str,
+    doc: Document,
+    parent: QWidget | None = None,
+    preview_fn: Callable[[], None] | None = None,
+) -> bool:
     """Show a dialog for filter *key*, apply to active layer."""
     filt_cls = _filter_map().get(key)
     if filt_cls is None:
@@ -108,13 +134,72 @@ def run_filter(key: str, doc: Document, parent: QWidget | None = None) -> bool:
     if not filt.default_params:
         return _apply_to_layer(doc, filt, {})
 
-    dlg = FilterDialog(f"Filter — {filt.name}", filt.default_params, parent=parent)
-    if dlg.exec():
-        return _apply_to_layer(doc, filt, dlg.get_params())
-    return False
+    return _run_dialog_with_preview(
+        title=f"Filter — {filt.name}",
+        processor=filt,
+        doc=doc,
+        parent=parent,
+        preview_fn=preview_fn,
+    )
+
+
+# ---- Internal helpers -----------------------------------------------------
+
+def _run_dialog_with_preview(
+    title: str,
+    processor,
+    doc: Document,
+    parent: QWidget | None,
+    preview_fn: Callable[[], None] | None,
+) -> bool:
+    """Show *FilterDialog*, live-preview on the canvas, commit or rollback."""
+    layer = doc.layers.active_layer
+    if layer is None or layer.locked:
+        return False
+
+    # Keep a copy of the original pixels so we can restore on cancel
+    # or re-apply cleanly on each param change.
+    original_pixels = layer.pixels.copy()
+
+    dlg = FilterDialog(title, processor.default_params, parent=parent)
+
+    # ---- live-preview callback -------------------------------------------
+    def _on_params_changed(params: dict) -> None:
+        """Apply the filter with current params and refresh the canvas."""
+        try:
+            layer.pixels = processor.apply(original_pixels.copy(), params)
+        except Exception:
+            # If the filter fails with some param combo, silently keep
+            # the last good state so the UI doesn't freeze.
+            return
+        if preview_fn is not None:
+            preview_fn()
+
+    dlg.params_changed.connect(_on_params_changed)
+
+    # Show an initial preview with default params so the user immediately
+    # sees the effect.
+    _on_params_changed(processor.default_params)
+
+    accepted = dlg.exec()
+
+    if accepted:
+        # Apply with the final params (might already be set by preview,
+        # but re-apply to be safe with the exact dialog values).
+        final_params = dlg.get_params()
+        layer.pixels = processor.apply(original_pixels.copy(), final_params)
+        doc.save_snapshot(processor.name)
+        return True
+    else:
+        # Cancelled — restore original pixels
+        layer.pixels = original_pixels
+        if preview_fn is not None:
+            preview_fn()
+        return False
 
 
 def _apply_to_layer(doc: Document, processor, params: dict) -> bool:
+    """Immediate apply (no dialog, no preview)."""
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return False

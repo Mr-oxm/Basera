@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import (
@@ -91,6 +93,7 @@ class CanvasView(QWidget):
         self._drag_rect: QRectF | None = None
         # Transform bounding box (x, y, w, h) in document coordinates
         self._transform_box: tuple[int, int, int, int] | None = None
+        self._transform_angle: float = 0.0  # rotation angle in degrees
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -127,9 +130,11 @@ class CanvasView(QWidget):
         self._drag_rect = rect
         self.update()
 
-    def set_transform_box(self, box: tuple[int, int, int, int] | None) -> None:
+    def set_transform_box(self, box: tuple[int, int, int, int] | None,
+                          angle: float = 0.0) -> None:
         """Set the bounding box for the active layer (doc coords: x, y, w, h)."""
         self._transform_box = box
+        self._transform_angle = angle
         self.update()
 
     def set_tool_cursor(self, tool_type: ToolType) -> None:
@@ -236,17 +241,35 @@ class CanvasView(QWidget):
         if br is None:
             return
 
-        # Outer rectangle
+        cx = br.x() + br.width() / 2
+        cy = br.y() + br.height() / 2
+        hw, hh = br.width() / 2, br.height() / 2
+
+        p.save()
+        p.translate(cx, cy)
+        if self._transform_angle != 0.0:
+            # QPainter rotates clockwise for positive angles;
+            # TransformEngine (cv2) rotates counter-clockwise for positive.
+            p.rotate(-self._transform_angle)
+
+        # Outer rectangle (centered at origin)
         p.setPen(QPen(QColor(0, 150, 255), 1.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(br)
+        p.drawRect(QRectF(-hw, -hh, br.width(), br.height()))
 
         # Handle squares
         hs = 7
+        handle_pts = [
+            (-hw, -hh), (0, -hh), (hw, -hh),
+            (-hw, 0), (hw, 0),
+            (-hw, hh), (0, hh), (hw, hh),
+        ]
         p.setPen(QPen(QColor(0, 150, 255), 1))
         p.setBrush(QColor(255, 255, 255))
-        for _name, hx, hy in self._handle_positions(br):
+        for hx, hy in handle_pts:
             p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
+
+        p.restore()
 
     def _update_transform_cursor(self, pos: QPointF) -> None:
         """Adjust cursor shape when hovering over the transform box / handles."""
@@ -255,16 +278,32 @@ class CanvasView(QWidget):
         if br is None:
             return
 
-        px, py = pos.x(), pos.y()
-        for name, hx, hy in self._handle_positions(br):
+        cx = br.x() + br.width() / 2
+        cy = br.y() + br.height() / 2
+        hw, hh = br.width() / 2, br.height() / 2
+
+        # Inverse-rotate the mouse position into the box's local frame
+        px, py = pos.x() - cx, pos.y() - cy
+        if self._transform_angle != 0.0:
+            rad = math.radians(self._transform_angle)
+            rx = px * math.cos(rad) - py * math.sin(rad)
+            ry = px * math.sin(rad) + py * math.cos(rad)
+            px, py = rx, ry
+
+        # Hit-test against centered handle positions
+        local_handles = [
+            ("TL", -hw, -hh), ("T", 0, -hh), ("TR", hw, -hh),
+            ("L", -hw, 0), ("R", hw, 0),
+            ("BL", -hw, hh), ("B", 0, hh), ("BR", hw, hh),
+        ]
+        for name, hx, hy in local_handles:
             if abs(px - hx) <= _HANDLE_HIT and abs(py - hy) <= _HANDLE_HIT:
                 self.setCursor(QCursor(_HANDLE_CURSORS[name]))
                 return
 
-        if br.contains(pos):
+        if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         else:
-            # Outside the box → rotate zone (no standard rotate cursor)
             self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
     # ---- Mouse events -------------------------------------------------------

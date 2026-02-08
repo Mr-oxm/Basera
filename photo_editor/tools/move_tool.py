@@ -47,6 +47,27 @@ class MoveTool(Tool):
         self._orig_width: int = 0
         self._orig_height: int = 0
         self._dragging: bool = False
+        self._current_angle: float = 0.0
+        # Reference to the layer being rotated (for mid-drag writes)
+        self._active_layer = None
+
+    # ------------------------------------------------------------------
+    # Public query (used by MainWindow for bounding-box overlay)
+    # ------------------------------------------------------------------
+
+    def rotation_info_for(self, layer) -> tuple[int, int, float] | None:
+        """Return ``(base_w, base_h, total_angle)`` for *layer*.
+
+        The total angle includes any mid-drag rotation that has not yet
+        been committed.  Returns ``None`` when the layer has no rotation.
+        """
+        if layer is None:
+            return None
+        extra = self._current_angle if (layer is self._active_layer) else 0.0
+        total = layer.transform_angle + extra
+        if total != 0.0 and layer.transform_base_w > 0:
+            return (layer.transform_base_w, layer.transform_base_h, total)
+        return None
 
     # ------------------------------------------------------------------
     # Hit testing
@@ -62,12 +83,40 @@ class MoveTool(Tool):
         return (lx, ly, layer.width, layer.height)
 
     def _hit_test(self, doc: Document, x: int, y: int) -> tuple[_Mode, _Handle]:
+        layer = doc.layers.active_layer
+        if layer is None:
+            return _Mode.NONE, _Handle.NONE
+
+        total_angle = layer.transform_angle + self._current_angle
+
+        # When there is accumulated rotation, test against the rotated
+        # (original-sized) box by inverse-rotating the click point.
+        if total_angle != 0.0 and layer.transform_base_w > 0:
+            lx, ly = layer.position
+            cx = lx + layer.width / 2
+            cy = ly + layer.height / 2
+            rad = math.radians(total_angle)
+            dx, dy = x - cx, y - cy
+            # Inverse of the QPainter rotation applied to the box
+            rx = dx * math.cos(rad) - dy * math.sin(rad)
+            ry = dx * math.sin(rad) + dy * math.cos(rad)
+            hw = layer.transform_base_w / 2
+            hh = layer.transform_base_h / 2
+            return self._hit_test_rect(-hw, -hh, layer.transform_base_w,
+                                       layer.transform_base_h, rx, ry)
+
+        # Normal (no rotation) hit-test on current layer bounds
         bbox = self._bbox(doc)
         if bbox is None:
             return _Mode.NONE, _Handle.NONE
-
         bx, by, bw, bh = bbox
-        m = self.HANDLE_MARGIN
+        return self._hit_test_rect(bx, by, bw, bh, x, y)
+
+    @staticmethod
+    def _hit_test_rect(bx: float, by: float, bw: float, bh: float,
+                       x: float, y: float) -> tuple[_Mode, _Handle]:
+        """Hit-test a point against a rectangle and its handles."""
+        m = MoveTool.HANDLE_MARGIN
         mx, my = bx + bw / 2, by + bh / 2
 
         handles = [
@@ -112,6 +161,17 @@ class MoveTool(Tool):
         self._orig_height = layer.height
         self._dragging = True
 
+        # Rotation tracking
+        if self._mode == _Mode.ROTATE and self._base_width == 0:
+            # First rotation — record the original (un-rotated) dimensions
+            self._base_width = layer.width
+            self._base_height = layer.height
+        elif self._mode == _Mode.RESIZE:
+            # Resize resets accumulated rotation (shape fundamentally changes)
+            self._accumulated_angle = 0.0
+            self._base_width = 0
+            self._base_height = 0
+
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         if not self._dragging:
             return
@@ -133,10 +193,13 @@ class MoveTool(Tool):
             self._apply_rotate(layer, x, y)
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
+        if self._mode == _Mode.ROTATE:
+            self._accumulated_angle += self._current_angle
         self._dragging = False
         self._orig_pixels = None
         self._mode = _Mode.NONE
         self._handle = _Handle.NONE
+        self._current_angle = 0.0
 
     # ------------------------------------------------------------------
     # Resize
@@ -188,7 +251,10 @@ class MoveTool(Tool):
 
         a0 = math.atan2(self._start_y - cy, self._start_x - cx)
         a1 = math.atan2(y - cy, x - cx)
-        angle_deg = math.degrees(a1 - a0)
+        # Negate: screen coords are y-down, so atan2 gives the
+        # opposite sign from the visual rotation direction.
+        angle_deg = -math.degrees(a1 - a0)
+        self._current_angle = angle_deg
 
         rotated = TransformEngine.rotate(self._orig_pixels, angle_deg, expand=True)
         rh, rw = rotated.shape[:2]

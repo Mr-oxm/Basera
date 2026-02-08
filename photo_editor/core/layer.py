@@ -27,6 +27,11 @@ class Layer:
     mask_enabled: bool = True
     clipping_mask: bool = False
     parent_id: str | None = None
+    # Persistent rotation tracking — lets the bounding box stay rotated
+    # across tool / layer switches.
+    transform_angle: float = 0.0
+    transform_base_w: int = 0
+    transform_base_h: int = 0
 
     def __post_init__(self) -> None:
         self._pixels = np.zeros((self.height, self.width, 4), dtype=np.float32)
@@ -98,6 +103,9 @@ class Layer:
             blend_mode=self.blend_mode,
             visible=self.visible,
             position=self.position,
+            transform_angle=self.transform_angle,
+            transform_base_w=self.transform_base_w,
+            transform_base_h=self.transform_base_h,
         )
         new._pixels = self._pixels.copy()
         if self._mask is not None:

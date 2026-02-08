@@ -46,6 +46,9 @@ class MainWindow(QMainWindow):
         self._pipeline = RenderPipeline()
         self._tools = ToolManager()
 
+        # Blend-mode hover preview state
+        self._blend_preview_original: BlendMode | None = None
+
         # Render throttle — max ~30 fps during drag
         self._render_timer = QTimer(self)
         self._render_timer.setInterval(33)
@@ -136,6 +139,8 @@ class MainWindow(QMainWindow):
         lp.mask_requested.connect(self._on_add_mask)
         lp.opacity_changed.connect(self._on_opacity)
         lp.blend_mode_changed.connect(self._on_blend_mode)
+        lp.blend_mode_hovered.connect(self._on_blend_hover)
+        lp.blend_mode_hover_ended.connect(self._on_blend_hover_end)
         lp.visibility_toggled.connect(self._on_toggle_vis)
         lp.lock_toggled.connect(self._on_toggle_lock)
         self._history_panel.state_selected.connect(self._on_history_jump)
@@ -209,6 +214,17 @@ class MainWindow(QMainWindow):
         if self._tools.active_type == ToolType.MOVE and self._doc:
             layer = self._doc.layers.active_layer
             if layer:
+                tool = self._tools.active_tool
+                # When there is accumulated rotation, show the original-
+                # sized box centred on the layer and rotated.
+                if hasattr(tool, "rotation_info") and tool.rotation_info is not None:
+                    bw, bh, angle = tool.rotation_info
+                    lx, ly = layer.position
+                    cx = lx + layer.width / 2
+                    cy = ly + layer.height / 2
+                    box = (int(cx - bw / 2), int(cy - bh / 2), bw, bh)
+                    self._canvas.set_transform_box(box, angle)
+                    return
                 lx, ly = layer.position
                 self._canvas.set_transform_box((lx, ly, layer.width, layer.height))
                 return
@@ -230,6 +246,9 @@ class MainWindow(QMainWindow):
         self._doc = Document(w, h, name=Path(path).stem)
         self._doc.file_path = path
         self._doc.layers[0].pixels = img
+        # First history entry captures the loaded image so undo never
+        # goes back to a blank canvas.
+        self._doc.save_snapshot("Open Image")
         self._refresh()
         self._canvas.zoom_to_fit()
         self._status.set_document_info(self._doc.name, w, h)
@@ -268,17 +287,27 @@ class MainWindow(QMainWindow):
     def _on_undo(self) -> None:
         if self._doc:
             self._doc.undo()
+            self._reset_tool_rotation()
             self._refresh()
 
     def _on_redo(self) -> None:
         if self._doc:
             self._doc.redo()
+            self._reset_tool_rotation()
             self._refresh()
 
     def _on_history_jump(self, index: int) -> None:
         if self._doc:
             self._doc.navigate_history(index)
+            self._reset_tool_rotation()
             self._refresh()
+
+    def _reset_tool_rotation(self) -> None:
+        """Clear the move tool's accumulated rotation so the box matches
+        the restored layer state after undo / redo / layer switch."""
+        tool = self._tools.active_tool
+        if hasattr(tool, "reset_rotation_state"):
+            tool.reset_rotation_state()
 
     # ---- Layer ops ----------------------------------------------------------
 
@@ -311,6 +340,7 @@ class MainWindow(QMainWindow):
     def _on_layer_selected(self, stack_index: int) -> None:
         if self._doc:
             self._doc.layers.active_index = stack_index
+            self._reset_tool_rotation()
             self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:
@@ -319,8 +349,28 @@ class MainWindow(QMainWindow):
             self._refresh_canvas_only()
 
     def _on_blend_mode(self, mode: BlendMode) -> None:
+        # Clear hover-preview state — the user committed a selection.
+        self._blend_preview_original = None
         if self._doc and self._doc.layers.active_layer:
             self._doc.layers.active_layer.blend_mode = mode
+            self._refresh_canvas_only()
+
+    def _on_blend_hover(self, mode: BlendMode) -> None:
+        """Temporarily preview a blend mode while hovering in the dropdown."""
+        if not self._doc or not self._doc.layers.active_layer:
+            return
+        if self._blend_preview_original is None:
+            self._blend_preview_original = self._doc.layers.active_layer.blend_mode
+        self._doc.layers.active_layer.blend_mode = mode
+        self._refresh_canvas_only()
+
+    def _on_blend_hover_end(self) -> None:
+        """Restore the original blend mode when the dropdown is dismissed."""
+        if not self._doc or not self._doc.layers.active_layer:
+            return
+        if self._blend_preview_original is not None:
+            self._doc.layers.active_layer.blend_mode = self._blend_preview_original
+            self._blend_preview_original = None
             self._refresh_canvas_only()
 
     def _on_toggle_vis(self, layer_id: str) -> None:
@@ -431,12 +481,24 @@ class MainWindow(QMainWindow):
 
     # ---- Adjustments / Filters ----------------------------------------------
 
+    def _preview_render(self) -> None:
+        """Re-render the canvas for a live filter/adjustment preview."""
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        if active:
+            self._pipeline.invalidate(active.id)
+        else:
+            self._pipeline.invalidate()
+        result = self._pipeline.execute_to_uint8(self._doc)
+        self._canvas.set_image(result)
+
     def _on_adjustment(self, name: str) -> None:
-        if self._doc and run_adjustment(name, self._doc, self):
+        if self._doc and run_adjustment(name, self._doc, self, preview_fn=self._preview_render):
             self._refresh()
 
     def _on_filter(self, key: str) -> None:
-        if self._doc and run_filter(key, self._doc, self):
+        if self._doc and run_filter(key, self._doc, self, preview_fn=self._preview_render):
             self._refresh()
 
     # ---- Image transforms ---------------------------------------------------
