@@ -215,15 +215,27 @@ class MainWindow(QMainWindow):
             layer = self._doc.layers.active_layer
             if layer:
                 tool = self._tools.active_tool
-                # When there is accumulated rotation, show the original-
-                # sized box centred on the layer and rotated.
-                if hasattr(tool, "rotation_info") and tool.rotation_info is not None:
-                    bw, bh, angle = tool.rotation_info
+                # Ask the tool for rotation info (includes mid-drag angle).
+                info = None
+                if hasattr(tool, "rotation_info_for"):
+                    info = tool.rotation_info_for(layer)
+                if info is not None:
+                    bw, bh, angle = info
                     lx, ly = layer.position
                     cx = lx + layer.width / 2
                     cy = ly + layer.height / 2
                     box = (int(cx - bw / 2), int(cy - bh / 2), bw, bh)
                     self._canvas.set_transform_box(box, angle)
+                    return
+                # Fall back: check the layer's own stored rotation
+                if layer.transform_angle != 0.0 and layer.transform_base_w > 0:
+                    bw = layer.transform_base_w
+                    bh = layer.transform_base_h
+                    lx, ly = layer.position
+                    cx = lx + layer.width / 2
+                    cy = ly + layer.height / 2
+                    box = (int(cx - bw / 2), int(cy - bh / 2), bw, bh)
+                    self._canvas.set_transform_box(box, layer.transform_angle)
                     return
                 lx, ly = layer.position
                 self._canvas.set_transform_box((lx, ly, layer.width, layer.height))
@@ -287,27 +299,17 @@ class MainWindow(QMainWindow):
     def _on_undo(self) -> None:
         if self._doc:
             self._doc.undo()
-            self._reset_tool_rotation()
             self._refresh()
 
     def _on_redo(self) -> None:
         if self._doc:
             self._doc.redo()
-            self._reset_tool_rotation()
             self._refresh()
 
     def _on_history_jump(self, index: int) -> None:
         if self._doc:
             self._doc.navigate_history(index)
-            self._reset_tool_rotation()
             self._refresh()
-
-    def _reset_tool_rotation(self) -> None:
-        """Clear the move tool's accumulated rotation so the box matches
-        the restored layer state after undo / redo / layer switch."""
-        tool = self._tools.active_tool
-        if hasattr(tool, "reset_rotation_state"):
-            tool.reset_rotation_state()
 
     # ---- Layer ops ----------------------------------------------------------
 
@@ -340,7 +342,6 @@ class MainWindow(QMainWindow):
     def _on_layer_selected(self, stack_index: int) -> None:
         if self._doc:
             self._doc.layers.active_index = stack_index
-            self._reset_tool_rotation()
             self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:

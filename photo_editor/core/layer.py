@@ -40,6 +40,9 @@ class Layer:
         self._adjustment: object | None = None
         self._adjustment_params: dict = {}
         self.children: list[str] = []
+        # Pre-rotation pixel data (set on first rotate so resize can
+        # scale the original and re-apply the rotation).
+        self._transform_original: np.ndarray | None = None
 
     # ---- Pixel data ---------------------------------------------------------
 
@@ -111,6 +114,8 @@ class Layer:
         if self._mask is not None:
             new._mask = self._mask.copy()
         new._styles = list(self._styles)
+        if self._transform_original is not None:
+            new._transform_original = self._transform_original.copy()
         return new
 
     def fill(self, color: np.ndarray) -> None:

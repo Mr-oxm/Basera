@@ -123,18 +123,81 @@ class Document:
 
     def _snapshot(self, action: str) -> None:
         state = HistoryState(name=action)
+        # Save pixel data for every layer
         for layer in self.layers:
             state.layer_data[layer.id] = layer.pixels.copy()
-            state.metadata[f"pos_{layer.id}"] = layer.position
+            if layer._transform_original is not None:
+                state.layer_data[f"_orig_{layer.id}"] = layer._transform_original.copy()
+        # Save the full layer structure so add/remove can be undone
+        layer_metas = []
+        for layer in self.layers:
+            layer_metas.append({
+                "id": layer.id,
+                "name": layer.name,
+                "width": layer.width,
+                "height": layer.height,
+                "layer_type": layer.layer_type,
+                "opacity": layer.opacity,
+                "blend_mode": layer.blend_mode,
+                "visible": layer.visible,
+                "locked": layer.locked,
+                "position": layer.position,
+                "mask_enabled": layer.mask_enabled,
+                "clipping_mask": layer.clipping_mask,
+                "parent_id": layer.parent_id,
+                "transform_angle": layer.transform_angle,
+                "transform_base_w": layer.transform_base_w,
+                "transform_base_h": layer.transform_base_h,
+            })
+        state.metadata["_layer_order"] = [l.id for l in self.layers]
+        state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
+        state.metadata["_active_index"] = self.layers.active_index
         self.history.push(state)
 
     def _restore(self, state: HistoryState) -> None:
-        for layer in self.layers:
-            if layer.id in state.layer_data:
-                layer.pixels = state.layer_data[layer.id].copy()
-            pos_key = f"pos_{layer.id}"
-            if pos_key in state.metadata:
-                layer.position = state.metadata[pos_key]
+        order: list[str] | None = state.metadata.get("_layer_order")
+        meta_map: dict | None = state.metadata.get("_layer_meta")
+
+        if order is not None and meta_map is not None:
+            # Rebuild the layer stack from the snapshot
+            from .layer_stack import LayerStack
+            new_stack = LayerStack()
+            for lid in order:
+                meta = meta_map[lid]
+                layer = Layer(
+                    name=meta["name"],
+                    width=meta["width"],
+                    height=meta["height"],
+                    layer_type=meta["layer_type"],
+                    id=lid,
+                    opacity=meta["opacity"],
+                    blend_mode=meta["blend_mode"],
+                    visible=meta["visible"],
+                    locked=meta["locked"],
+                    position=meta["position"],
+                    mask_enabled=meta["mask_enabled"],
+                    clipping_mask=meta["clipping_mask"],
+                    parent_id=meta["parent_id"],
+                    transform_angle=meta.get("transform_angle", 0.0),
+                    transform_base_w=meta.get("transform_base_w", 0),
+                    transform_base_h=meta.get("transform_base_h", 0),
+                )
+                if lid in state.layer_data:
+                    layer.pixels = state.layer_data[lid].copy()
+                orig_key = f"_orig_{lid}"
+                if orig_key in state.layer_data:
+                    layer._transform_original = state.layer_data[orig_key].copy()
+                new_stack.add(layer)
+            new_stack.active_index = state.metadata.get("_active_index", 0)
+            self.layers = new_stack
+        else:
+            # Legacy fallback: only pixel data & positions stored
+            for layer in self.layers:
+                if layer.id in state.layer_data:
+                    layer.pixels = state.layer_data[layer.id].copy()
+                pos_key = f"pos_{layer.id}"
+                if pos_key in state.metadata:
+                    layer.position = state.metadata[pos_key]
         self._dirty = True
 
     # ---- Canvas ops ---------------------------------------------------------
