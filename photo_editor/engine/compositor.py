@@ -1,4 +1,10 @@
-"""Layer compositor with clipping-mask and group support."""
+"""Layer compositor with clipping-mask and group support.
+
+Uses ``BlendingEngine.blend_region_inplace`` for fast region-based
+compositing — same optimisation strategy as RenderEngine.
+"""
+
+from __future__ import annotations
 
 import numpy as np
 
@@ -17,29 +23,53 @@ class Compositor:
     def composite(self, stack: LayerStack, width: int, height: int) -> np.ndarray:
         canvas = np.zeros((height, width, 4), dtype=np.float32)
         layers = list(stack)
+
+        # Pre-scan for clipping-mask needs
+        visible = [
+            l for l in layers
+            if l.visible and l.parent_id is None
+            and l.layer_type != LayerType.ADJUSTMENT
+        ]
+        needs_placed: set[str] = set()
+        for i in range(len(visible) - 1):
+            if visible[i + 1].clipping_mask:
+                needs_placed.add(visible[i].id)
+
         prev_img: np.ndarray | None = None
 
-        for layer in layers:
-            if not layer.visible:
-                continue
-            # Skip children — they're composited within their group
-            if layer.parent_id is not None:
-                continue
+        for layer in visible:
             if layer.layer_type == LayerType.GROUP:
                 group_img = self._composite_group(layer, stack, width, height)
-                canvas = self._blending.blend(canvas, group_img, layer.blend_mode, layer.opacity)
+                self._blending.blend_region_inplace(
+                    canvas, group_img, (0, 0),
+                    layer.blend_mode, layer.opacity,
+                )
                 prev_img = group_img
                 continue
 
-            img = self._place(layer, width, height)
+            mask = layer.mask if layer.mask_enabled else None
+
             if layer.clipping_mask and prev_img is not None:
-                img = img.copy()
-                img[..., 3:4] *= prev_img[..., 3:4]
-            mask = self._place_mask(layer, width, height) if layer.mask_enabled else None
-            canvas = self._blending.blend_with_mask(
-                canvas, img, mask, layer.blend_mode, layer.opacity,
-            )
-            prev_img = img
+                placed = self._place(layer, width, height)
+                placed[..., 3:4] *= prev_img[..., 3:4]
+                placed_mask = (
+                    self._place_mask(layer, width, height) if mask is not None else None
+                )
+                self._blending.blend_region_inplace(
+                    canvas, placed, (0, 0),
+                    layer.blend_mode, layer.opacity, placed_mask,
+                )
+                prev_img = placed
+            else:
+                self._blending.blend_region_inplace(
+                    canvas, layer.pixels, layer.position,
+                    layer.blend_mode, layer.opacity, mask,
+                )
+                if layer.id in needs_placed:
+                    prev_img = self._place(layer, width, height)
+                else:
+                    prev_img = None
+
         return canvas
 
     def _composite_group(
@@ -49,10 +79,10 @@ class Compositor:
         for layer in stack:
             if layer.parent_id != group.id or not layer.visible:
                 continue
-            img = self._place(layer, w, h)
-            mask = self._place_mask(layer, w, h) if layer.mask_enabled else None
-            canvas = self._blending.blend_with_mask(
-                canvas, img, mask, layer.blend_mode, layer.opacity,
+            mask = layer.mask if layer.mask_enabled else None
+            self._blending.blend_region_inplace(
+                canvas, layer.pixels, layer.position,
+                layer.blend_mode, layer.opacity, mask,
             )
         return canvas
 
@@ -71,7 +101,6 @@ class Compositor:
 
     @staticmethod
     def _place_mask(layer: Layer, cw: int, ch: int) -> np.ndarray | None:
-        """Place the layer's mask into a canvas-sized array."""
         if layer.mask is None:
             return None
         canvas = np.zeros((ch, cw), dtype=np.float32)

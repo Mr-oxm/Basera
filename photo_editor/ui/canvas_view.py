@@ -1,4 +1,9 @@
-"""Zoomable, pannable canvas with selection overlay, transform box, and tool cursors."""
+"""Zoomable, pannable canvas with selection overlay, transform box, and tool cursors.
+
+Uses ``QOpenGLWidget`` when available so all QPainter operations are
+GPU-accelerated.  Falls back to the software ``QWidget`` path
+transparently.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,12 @@ from PySide6.QtGui import (
     QPen, QPixmap, QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
+
+try:
+    from PySide6.QtOpenGLWidgets import QOpenGLWidget
+    _BASE_CLASS = QOpenGLWidget
+except ImportError:
+    _BASE_CLASS = QWidget
 
 from ..core.enums import ToolType
 
@@ -69,8 +80,12 @@ _HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
 _HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
 
 
-class CanvasView(QWidget):
-    """Interactive canvas that displays the composited document."""
+class CanvasView(_BASE_CLASS):
+    """Interactive canvas that displays the composited document.
+
+    Inherits from QOpenGLWidget when available (GPU-accelerated QPainter),
+    otherwise falls back to QWidget (software rasterizer).
+    """
 
     cursor_moved = Signal(int, int)
     tool_pressed = Signal(int, int, float)
@@ -100,6 +115,8 @@ class CanvasView(QWidget):
         self._brush_cursor_visible: bool = False
         self._dab_pixmap: QPixmap | None = None       # pre-computed dab (brush or eraser)
         self._dab_is_eraser: bool = False
+        # Cache identity of last rgba buffer to skip redundant QPixmap builds
+        self._last_rgba: np.ndarray | None = None
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -108,6 +125,10 @@ class CanvasView(QWidget):
     # ---- Public API ---------------------------------------------------------
 
     def set_image(self, rgba: np.ndarray) -> None:
+        # Skip redundant QPixmap creation when the buffer is identical
+        if rgba is self._last_rgba:
+            return
+        self._last_rgba = rgba
         h, w = rgba.shape[:2]
         self._doc_w, self._doc_h = w, h
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
@@ -239,13 +260,10 @@ class CanvasView(QWidget):
 
         dr = self._doc_rect()
 
-        # Checkerboard (tiled — fast)
+        # Checkerboard — single hardware-accelerated tiled draw
         p.save()
         p.setClipRect(dr.toAlignedRect())
-        tile = _checker_tile()
-        for y in range(int(dr.top()), int(dr.bottom()), tile.height()):
-            for x in range(int(dr.left()), int(dr.right()), tile.width()):
-                p.drawPixmap(x, y, tile)
+        p.drawTiledPixmap(dr.toAlignedRect(), _checker_tile())
         p.restore()
 
         # Document image

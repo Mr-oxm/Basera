@@ -168,10 +168,21 @@ class MainWindow(QMainWindow):
         self._canvas.zoom_to_fit()
         self._status.set_document_info(self._doc.name, w, h)
 
-    def _refresh(self) -> None:
+    def _refresh(self, invalidate: bool = True) -> None:
+        """Full UI refresh.
+
+        Parameters
+        ----------
+        invalidate : bool
+            If *True* (default), the render cache is marked stale so the
+            composite is recomputed.  Pass *False* for operations that
+            only change non-pixel state (layer selection, panel sync)
+            to skip expensive recompositing.
+        """
         if not self._doc:
             return
-        self._pipeline.invalidate()
+        if invalidate:
+            self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result)
         self._layers_panel.refresh(self._doc)
@@ -183,11 +194,7 @@ class MainWindow(QMainWindow):
         """Re-render and update canvas only (skip panel updates)."""
         if not self._doc:
             return
-        active = self._doc.layers.active_layer
-        if active:
-            self._pipeline.invalidate(active.id)
-        else:
-            self._pipeline.invalidate()
+        self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result)
         self._update_transform_box()
@@ -421,7 +428,9 @@ class MainWindow(QMainWindow):
             layer = self._doc.layers.get(layer_id)
             if layer:
                 layer.locked = not layer.locked
+                # Lock doesn't affect pixel data — skip invalidation
                 self._layers_panel.refresh(self._doc)
+                self._update_transform_box()
 
     def _on_rename_layer(self, layer_id: str, new_name: str) -> None:
         if self._doc:
@@ -429,7 +438,7 @@ class MainWindow(QMainWindow):
             if layer:
                 layer.name = new_name
                 self._doc.save_snapshot(f"Rename to {new_name}")
-                self._refresh()
+                self._refresh(invalidate=False)
 
     def _on_layers_reordered(self, layer_ids: list[str], target_visual_row: int) -> None:
         """Handle drag-drop reorder from the layers panel."""

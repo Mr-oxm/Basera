@@ -49,15 +49,23 @@ class Tool(ABC):
         radius: int, color: np.ndarray, hardness: float = 1.0,
         opacity: float = 1.0,
     ) -> None:
-        """Stamp a circular brush dab onto *target*."""
+        """Stamp a circular brush dab onto *target* (region-optimised)."""
         h, w = target.shape[:2]
         y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
         x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
         if y1 <= y0 or x1 <= x0:
             return
-        yy, xx = np.mgrid[y0:y1, x0:x1]
-        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2).astype(np.float32)
-        mask = np.clip(1.0 - dist / max(radius, 1), 0, 1) ** (1.0 / max(hardness, 0.01))
+        # Use arange + broadcasting — half the memory of mgrid
+        yy = np.arange(y0, y1, dtype=np.float32)[:, np.newaxis]
+        xx = np.arange(x0, x1, dtype=np.float32)[np.newaxis, :]
+        dist_sq = (xx - cx) ** 2 + (yy - cy) ** 2
+        r = max(radius, 1)
+        mask = np.clip(1.0 - np.sqrt(dist_sq) / r, 0, 1)
+        np.power(mask, 1.0 / max(hardness, 0.01), out=mask)
         mask *= opacity
         mask = mask[..., np.newaxis]
-        target[y0:y1, x0:x1] = target[y0:y1, x0:x1] * (1 - mask) + color * mask
+        # In-place compositing on the target slice
+        roi = target[y0:y1, x0:x1]
+        inv_mask = 1.0 - mask
+        np.multiply(roi, inv_mask, out=roi)
+        roi += color * mask
