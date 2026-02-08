@@ -36,6 +36,14 @@ class Tool(ABC):
     def on_release(self, doc: Document, x: int, y: int) -> None:
         ...
 
+    def generate_preview_dab(self) -> np.ndarray | None:
+        """Return an RGBA uint8 array showing what a single dab looks like.
+
+        Override in subclasses to provide a real-time preview stamp.
+        Returns ``None`` if this tool has no preview.
+        """
+        return None
+
     def _stamp_circle(
         self, target: np.ndarray, cx: int, cy: int,
         radius: int, color: np.ndarray, hardness: float = 1.0,

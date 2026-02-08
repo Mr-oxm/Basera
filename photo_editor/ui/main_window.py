@@ -145,9 +145,7 @@ class MainWindow(QMainWindow):
         lp.lock_toggled.connect(self._on_toggle_lock)
         self._history_panel.state_selected.connect(self._on_history_jump)
         self._adj_panel.adjustment_requested.connect(self._on_adjustment)
-        self._color_panel.fg_changed.connect(
-            lambda c: self._tools.set_foreground_color(c.to_array()),
-        )
+        self._color_panel.fg_changed.connect(self._on_fg_color_changed)
         self._props_panel.value_changed.connect(self._on_prop_changed)
 
     # ---- Wiring: canvas -----------------------------------------------------
@@ -416,12 +414,19 @@ class MainWindow(QMainWindow):
 
     # ---- Tools + Canvas -----------------------------------------------------
 
+    # Tools that should display a real-time brush size cursor
+    _BRUSH_CURSOR_TOOLS = {
+        ToolType.BRUSH, ToolType.ERASER,
+        ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH,
+    }
+
     def _on_tool_selected(self, t: ToolType) -> None:
         self._tools.select(t)
         self._status.set_tool(t.name.replace("_", " ").title())
         self._canvas.set_tool_cursor(t)
         self._update_properties_panel()
         self._update_transform_box()
+        self._update_brush_cursor()
 
     def _on_canvas_press(self, x: int, y: int, pressure: float) -> None:
         self._dragging = True
@@ -479,6 +484,36 @@ class MainWindow(QMainWindow):
                 self._tools.set_property(key, float(value) / 100.0)
             else:
                 self._tools.set_property(key, float(value))
+        # Live-update brush cursor when any visual property changes
+        if key in ("size", "hardness", "opacity", "flow"):
+            self._update_brush_cursor()
+
+    # ---- Brush cursor --------------------------------------------------------
+
+    def _update_brush_cursor(self) -> None:
+        """Generate the actual dab preview and push it to the canvas."""
+        tool_type = self._tools.active_type
+        if tool_type in self._BRUSH_CURSOR_TOOLS:
+            tool = self._tools.active_tool
+            if tool is None:
+                self._canvas.hide_brush_preview()
+                return
+            # Ask the tool to generate its preview dab (exact stamp)
+            dab = tool.generate_preview_dab() if hasattr(tool, "generate_preview_dab") else None
+            if dab is not None:
+                is_eraser = tool_type == ToolType.ERASER
+                self._canvas.set_brush_dab(dab, is_eraser=is_eraser)
+            else:
+                self._canvas.hide_brush_preview()
+            # Use blank cursor — the painted dab replaces the system cursor
+            self._canvas.setCursor(Qt.CursorShape.BlankCursor)
+        else:
+            self._canvas.hide_brush_preview()
+
+    def _on_fg_color_changed(self, color) -> None:
+        """Forward foreground colour to tools and update brush preview."""
+        self._tools.set_foreground_color(color.to_array())
+        self._update_brush_cursor()
 
     # ---- Adjustments / Filters ----------------------------------------------
 

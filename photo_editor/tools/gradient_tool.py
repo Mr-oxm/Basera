@@ -75,8 +75,12 @@ class GradientTool(Tool):
         if layer is None or layer.locked:
             return
 
+        # Convert document coords to layer-local pixel coords
+        lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
-        gradient = self._render_gradient(h, w, self._start_x, self._start_y, x, y)
+        gradient = self._render_gradient(h, w,
+                                         self._start_x - lx, self._start_y - ly,
+                                         x - lx, y - ly)
 
         if self.opacity < 1.0:
             layer.pixels[:] = layer.pixels * (1 - self.opacity) + gradient * self.opacity

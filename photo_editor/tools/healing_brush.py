@@ -113,10 +113,11 @@ class HealingBrushTool(Tool):
         layer = doc.layers.active_layer
         if layer is None or layer.locked:
             return
+        lx, ly = layer.position
         radius = max(1, self.size // 2)
         step = max(1.0, radius * 0.5)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._heal_patch(layer.pixels, px, py, radius)
+            self._heal_patch(layer.pixels, px - lx, py - ly, radius)
 
     # ------------------------------------------------------------------
     # Tool interface

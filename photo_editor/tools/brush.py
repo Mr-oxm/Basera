@@ -22,6 +22,27 @@ class BrushTool(Tool):
         self._drawing: bool = False
 
     # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def generate_preview_dab(self) -> np.ndarray | None:
+        """Return the exact RGBA uint8 dab that a single stamp would paint."""
+        d = max(self.size, 1)
+        r = d / 2.0
+        center = r - 0.5
+        dab = np.zeros((d, d, 4), dtype=np.uint8)
+        yy, xx = np.mgrid[0:d, 0:d]
+        dist = np.sqrt((xx - center) ** 2 + (yy - center) ** 2).astype(np.float32)
+        mask = np.clip(1.0 - dist / max(r, 1), 0, 1)
+        mask = mask ** (1.0 / max(self.hardness, 0.01))
+        mask *= self.opacity * self.flow
+        # Apply foreground colour
+        for c in range(3):
+            dab[..., c] = np.clip(self.color[c] * 255, 0, 255).astype(np.uint8)
+        dab[..., 3] = np.clip(mask * 255, 0, 255).astype(np.uint8)
+        return dab
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -46,11 +67,12 @@ class BrushTool(Tool):
         layer = doc.layers.active_layer
         if layer is None or layer.locked:
             return
+        lx, ly = layer.position
         radius = self._effective_radius(pressure)
         eff_opacity = self._effective_opacity(pressure)
         step = max(1.0, radius * 2 * self.spacing)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._stamp_circle(layer.pixels, px, py, radius,
+            self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
                                self.color, self.hardness, eff_opacity)
 
     # ------------------------------------------------------------------

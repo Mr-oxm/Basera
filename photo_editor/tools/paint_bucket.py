@@ -61,16 +61,19 @@ class PaintBucketTool(Tool):
         layer = doc.layers.active_layer
         if layer is None or layer.locked:
             return
+        # Convert document coords to layer-local pixel coords
+        lx, ly = layer.position
+        px, py = x - lx, y - ly
         h, w = layer.pixels.shape[:2]
-        if x < 0 or x >= w or y < 0 or y >= h:
+        if px < 0 or px >= w or py < 0 or py >= h:
             return
 
         doc.save_snapshot("Paint Bucket Fill")
 
         if self.contiguous:
-            fill_mask = self._flood_fill_mask(layer.pixels, x, y, self.tolerance)
+            fill_mask = self._flood_fill_mask(layer.pixels, px, py, self.tolerance)
         else:
-            fill_mask = self._global_tolerance_mask(layer.pixels, x, y, self.tolerance)
+            fill_mask = self._global_tolerance_mask(layer.pixels, px, py, self.tolerance)
 
         mask = fill_mask.astype(np.float32)[..., np.newaxis] * self.opacity
         layer.pixels[:] = layer.pixels * (1 - mask) + self.color * mask

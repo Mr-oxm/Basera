@@ -7,8 +7,8 @@ import math
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import (
-    QColor, QCursor, QImage, QMouseEvent, QPainter, QPen,
-    QPixmap, QWheelEvent,
+    QColor, QCursor, QImage, QMouseEvent, QPainter,
+    QPen, QPixmap, QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -94,6 +94,12 @@ class CanvasView(QWidget):
         # Transform bounding box (x, y, w, h) in document coordinates
         self._transform_box: tuple[int, int, int, int] | None = None
         self._transform_angle: float = 0.0  # rotation angle in degrees
+        # Brush cursor / live dab preview
+        self._brush_size: int = 0       # diameter in document pixels (0 = hidden)
+        self._brush_cursor_pos: QPointF = QPointF()   # last mouse widget pos
+        self._brush_cursor_visible: bool = False
+        self._dab_pixmap: QPixmap | None = None       # pre-computed dab (brush or eraser)
+        self._dab_is_eraser: bool = False
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -140,6 +146,55 @@ class CanvasView(QWidget):
     def set_tool_cursor(self, tool_type: ToolType) -> None:
         shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
+
+    # ---- Brush cursor / live dab preview ------------------------------------
+
+    def set_brush_dab(self, dab_rgba: np.ndarray | None,
+                      is_eraser: bool = False) -> None:
+        """Set the pre-computed dab preview (RGBA uint8).
+
+        For a **brush** the dab is drawn directly (paint colour + hardness).
+        For an **eraser** the dab's alpha channel is used to shape a
+        checkerboard pattern that previews the transparency to be created.
+        """
+        if dab_rgba is None or dab_rgba.size == 0:
+            self._dab_pixmap = None
+            self._brush_size = 0
+            self._dab_is_eraser = False
+            self.update()
+            return
+
+        h, w = dab_rgba.shape[:2]
+        self._brush_size = w  # diameter in doc pixels
+        self._dab_is_eraser = is_eraser
+
+        if is_eraser:
+            # Build a checkerboard image shaped by the eraser's alpha mask.
+            # This shows exactly the transparency pattern the eraser will
+            # create, following the tool's hardness / opacity / future shapes.
+            alpha = dab_rgba[..., 3]  # uint8, 0-255
+            cs = max(2, w // 8)       # checker square size
+            yy, xx = np.mgrid[0:h, 0:w]
+            parity = ((yy // cs) + (xx // cs)) % 2
+            checker = np.zeros((h, w, 4), dtype=np.uint8)
+            checker[..., :3] = np.where(parity[..., None] == 0, 230, 180)
+            checker[..., 3] = alpha   # shaped by the eraser dab
+            qimg = QImage(checker.data, w, h, w * 4,
+                          QImage.Format.Format_RGBA8888)
+            self._dab_pixmap = QPixmap.fromImage(qimg.copy())
+        else:
+            # Convert the RGBA dab straight into a QPixmap
+            qimg = QImage(dab_rgba.data, w, h, w * 4,
+                          QImage.Format.Format_RGBA8888)
+            self._dab_pixmap = QPixmap.fromImage(qimg.copy())
+
+        self.update()
+
+    def hide_brush_preview(self) -> None:
+        self._dab_pixmap = None
+        self._brush_size = 0
+        self._brush_cursor_visible = False
+        self.update()
 
     @property
     def zoom(self) -> float:
@@ -212,6 +267,10 @@ class CanvasView(QWidget):
         # Transform bounding box with handles
         if self._transform_box is not None:
             self._draw_transform_box(p, dr)
+
+        # Brush cursor preview circle
+        if self._brush_size > 0 and self._brush_cursor_visible:
+            self._draw_brush_cursor(p)
 
         p.end()
 
@@ -306,6 +365,50 @@ class CanvasView(QWidget):
         else:
             self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
+    # ---- Brush cursor drawing -----------------------------------------------
+
+    def _draw_brush_cursor(self, p: QPainter) -> None:
+        """Draw a live preview of the actual dab that will be applied."""
+        pos = self._brush_cursor_pos
+        radius_screen = (self._brush_size / 2) * self._zoom
+
+        # Don't draw if it's tiny (< 2px on screen) — crosshair suffices
+        if radius_screen < 1.5:
+            return
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        dab_screen = radius_screen * 2  # full diameter on screen
+        target = QRectF(pos.x() - radius_screen, pos.y() - radius_screen,
+                        dab_screen, dab_screen)
+
+        # ---- Draw the actual dab preview ----
+        if self._dab_pixmap is not None:
+            p.drawPixmap(target.toAlignedRect(), self._dab_pixmap)
+
+        # ---- Outline ring (thin, clean) ----
+        pen_outer = QPen(QColor(0, 0, 0, 160), 1.0)
+        pen_outer.setCosmetic(True)
+        p.setPen(pen_outer)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(pos, radius_screen, radius_screen)
+
+        pen_inner = QPen(QColor(255, 255, 255, 180), 1.0)
+        pen_inner.setCosmetic(True)
+        pen_inner.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen_inner)
+        p.drawEllipse(pos, radius_screen, radius_screen)
+
+        # Crosshair at center
+        ch = max(3.0, min(radius_screen * 0.12, 6.0))
+        p.setPen(QPen(QColor(255, 255, 255, 200), 1.0))
+        p.drawLine(QPointF(pos.x() - ch, pos.y()), QPointF(pos.x() + ch, pos.y()))
+        p.drawLine(QPointF(pos.x(), pos.y() - ch), QPointF(pos.x(), pos.y() + ch))
+
+        p.restore()
+
     # ---- Mouse events -------------------------------------------------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -332,10 +435,26 @@ class CanvasView(QWidget):
             return
         dx, dy = self._canvas_to_doc(event.position())
         self.cursor_moved.emit(dx, dy)
+
+        # Update brush cursor position and visibility
+        if self._brush_size > 0:
+            self._brush_cursor_pos = event.position()
+            self._brush_cursor_visible = True
+            self.update()
+
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.tool_moved.emit(dx, dy, 1.0)
         elif self._transform_box is not None:
             self._update_transform_cursor(event.position())
+
+    def leaveEvent(self, _event) -> None:
+        self._brush_cursor_visible = False
+        self.update()
+
+    def enterEvent(self, _event) -> None:
+        if self._brush_size > 0:
+            self._brush_cursor_visible = True
+            self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
