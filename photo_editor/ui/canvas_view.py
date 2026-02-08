@@ -1,4 +1,4 @@
-"""Zoomable, pannable canvas with selection overlay and tool cursors."""
+"""Zoomable, pannable canvas with selection overlay, transform box, and tool cursors."""
 
 from __future__ import annotations
 
@@ -52,6 +52,20 @@ _CURSORS: dict[ToolType, Qt.CursorShape] = {
     ToolType.CROP: Qt.CursorShape.CrossCursor,
 }
 
+# Cursor shapes for bounding-box handles
+_HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
+    "TL": Qt.CursorShape.SizeFDiagCursor,
+    "TR": Qt.CursorShape.SizeBDiagCursor,
+    "BL": Qt.CursorShape.SizeBDiagCursor,
+    "BR": Qt.CursorShape.SizeFDiagCursor,
+    "T": Qt.CursorShape.SizeVerCursor,
+    "B": Qt.CursorShape.SizeVerCursor,
+    "L": Qt.CursorShape.SizeHorCursor,
+    "R": Qt.CursorShape.SizeHorCursor,
+}
+
+_HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
+
 
 class CanvasView(QWidget):
     """Interactive canvas that displays the composited document."""
@@ -75,6 +89,8 @@ class CanvasView(QWidget):
         self._sel_pixmap: QPixmap | None = None
         # Drag rect feedback for selection tools
         self._drag_rect: QRectF | None = None
+        # Transform bounding box (x, y, w, h) in document coordinates
+        self._transform_box: tuple[int, int, int, int] | None = None
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -109,6 +125,11 @@ class CanvasView(QWidget):
 
     def set_drag_rect(self, rect: QRectF | None) -> None:
         self._drag_rect = rect
+        self.update()
+
+    def set_transform_box(self, box: tuple[int, int, int, int] | None) -> None:
+        """Set the bounding box for the active layer (doc coords: x, y, w, h)."""
+        self._transform_box = box
         self.update()
 
     def set_tool_cursor(self, tool_type: ToolType) -> None:
@@ -183,7 +204,68 @@ class CanvasView(QWidget):
             p.setBrush(QColor(100, 180, 255, 30))
             p.drawRect(self._drag_rect)
 
+        # Transform bounding box with handles
+        if self._transform_box is not None:
+            self._draw_transform_box(p, dr)
+
         p.end()
+
+    # ---- Transform box -------------------------------------------------------
+
+    def _box_widget_rect(self, dr: QRectF) -> QRectF | None:
+        """Return the transform box rectangle in widget coordinates."""
+        if self._transform_box is None or self._doc_w == 0 or self._doc_h == 0:
+            return None
+        x, y, w, h = self._transform_box
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+        return QRectF(dr.left() + x * sx, dr.top() + y * sy, w * sx, h * sy)
+
+    def _handle_positions(self, br: QRectF) -> list[tuple[str, float, float]]:
+        """Return handle (name, cx, cy) in widget coordinates."""
+        x, y = br.x(), br.y()
+        w, h = br.width(), br.height()
+        return [
+            ("TL", x, y), ("T", x + w / 2, y), ("TR", x + w, y),
+            ("L", x, y + h / 2), ("R", x + w, y + h / 2),
+            ("BL", x, y + h), ("B", x + w / 2, y + h), ("BR", x + w, y + h),
+        ]
+
+    def _draw_transform_box(self, p: QPainter, dr: QRectF) -> None:
+        br = self._box_widget_rect(dr)
+        if br is None:
+            return
+
+        # Outer rectangle
+        p.setPen(QPen(QColor(0, 150, 255), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(br)
+
+        # Handle squares
+        hs = 7
+        p.setPen(QPen(QColor(0, 150, 255), 1))
+        p.setBrush(QColor(255, 255, 255))
+        for _name, hx, hy in self._handle_positions(br):
+            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
+
+    def _update_transform_cursor(self, pos: QPointF) -> None:
+        """Adjust cursor shape when hovering over the transform box / handles."""
+        dr = self._doc_rect()
+        br = self._box_widget_rect(dr)
+        if br is None:
+            return
+
+        px, py = pos.x(), pos.y()
+        for name, hx, hy in self._handle_positions(br):
+            if abs(px - hx) <= _HANDLE_HIT and abs(py - hy) <= _HANDLE_HIT:
+                self.setCursor(QCursor(_HANDLE_CURSORS[name]))
+                return
+
+        if br.contains(pos):
+            self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
+        else:
+            # Outside the box → rotate zone (no standard rotate cursor)
+            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
     # ---- Mouse events -------------------------------------------------------
 
@@ -213,6 +295,8 @@ class CanvasView(QWidget):
         self.cursor_moved.emit(dx, dy)
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.tool_moved.emit(dx, dy, 1.0)
+        elif self._transform_box is not None:
+            self._update_transform_cursor(event.position())
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:

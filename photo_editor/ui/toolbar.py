@@ -21,7 +21,6 @@ _TOOLS: list[tuple[ToolType, str, str, str]] = [
     (ToolType.MAGIC_WAND,     "W", "Magic Wand",      "\u2728"),
     (ToolType.TEXT,            "T", "Text",            "\u0054"),
     (ToolType.SHAPE,          "U", "Shape",           "\u25B3"),
-    (ToolType.TRANSFORM,      "Ctrl+T", "Transform",  "\u21BB"),
     (ToolType.ZOOM,           "Z", "Zoom",            "\u2315"),
     (ToolType.PAN,            "H", "Pan",             "\u270B"),
     (ToolType.EYEDROPPER,     "I", "Eyedropper",      "\u2316"),

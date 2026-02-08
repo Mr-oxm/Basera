@@ -1,8 +1,8 @@
-"""Layers panel — visibility toggles, opacity, blend mode, groups."""
+"""Layers panel — visibility toggles, lock buttons, opacity, blend mode, groups."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QSlider,
@@ -13,11 +13,45 @@ from ...core.document import Document
 from ...core.enums import BlendMode
 
 
+class _LayerItemWidget(QWidget):
+    """Custom widget for a single row in the layers list."""
+
+    visibility_clicked = Signal(str)
+    lock_clicked = Signal(str)
+
+    def __init__(self, layer_id: str, name: str, visible: bool, locked: bool, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 1, 4, 1)
+        layout.setSpacing(4)
+
+        # Visibility button
+        self._vis_btn = QPushButton("\U0001F441" if visible else "\u25CB")
+        self._vis_btn.setFixedSize(26, 22)
+        self._vis_btn.setFlat(True)
+        self._vis_btn.setToolTip("Toggle visibility")
+        self._vis_btn.clicked.connect(lambda: self.visibility_clicked.emit(layer_id))
+        layout.addWidget(self._vis_btn)
+
+        # Lock button
+        self._lock_btn = QPushButton("\U0001F512" if locked else "\U0001F513")
+        self._lock_btn.setFixedSize(26, 22)
+        self._lock_btn.setFlat(True)
+        self._lock_btn.setToolTip("Toggle lock")
+        self._lock_btn.clicked.connect(lambda: self.lock_clicked.emit(layer_id))
+        layout.addWidget(self._lock_btn)
+
+        # Layer name
+        label = QLabel(name)
+        layout.addWidget(label, 1)
+
+
 class LayersPanel(QWidget):
     """Dockable panel for managing the layer stack."""
 
     layer_selected = Signal(int)       # row index (reversed)
     visibility_toggled = Signal(str)   # layer id
+    lock_toggled = Signal(str)         # layer id
     opacity_changed = Signal(float)
     blend_mode_changed = Signal(BlendMode)
     add_requested = Signal()
@@ -69,7 +103,6 @@ class LayersPanel(QWidget):
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self._list.currentRowChanged.connect(self._on_row_changed)
-        self._list.itemDoubleClicked.connect(self._on_double_click)
         root.addWidget(self._list, 1)
 
         # Bottom buttons
@@ -98,12 +131,14 @@ class LayersPanel(QWidget):
 
         self._list.clear()
         for layer in reversed(list(document.layers)):
-            vis = "👁" if layer.visible else "○ "
-            lock = " 🔒" if layer.locked else ""
-            text = f"  {vis}  {layer.name}{lock}"
-            item = QListWidgetItem(text)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, layer.id)
+            item.setSizeHint(QSize(0, 30))
+            widget = _LayerItemWidget(layer.id, layer.name, layer.visible, layer.locked)
+            widget.visibility_clicked.connect(self.visibility_toggled.emit)
+            widget.lock_clicked.connect(self.lock_toggled.emit)
             self._list.addItem(item)
+            self._list.setItemWidget(item, widget)
 
         # Highlight active layer
         active_idx = len(document.layers) - 1 - document.layers.active_index
@@ -145,12 +180,6 @@ class LayersPanel(QWidget):
                 self._blend_combo.blockSignals(True)
                 self._blend_combo.setCurrentIndex(blend_idx)
                 self._blend_combo.blockSignals(False)
-
-    def _on_double_click(self, item: QListWidgetItem) -> None:
-        """Double-click toggles visibility."""
-        layer_id = item.data(Qt.ItemDataRole.UserRole)
-        if layer_id:
-            self.visibility_toggled.emit(layer_id)
 
     def _on_opacity_changed(self, value: int) -> None:
         if self._refreshing:

@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
         lp.opacity_changed.connect(self._on_opacity)
         lp.blend_mode_changed.connect(self._on_blend_mode)
         lp.visibility_toggled.connect(self._on_toggle_vis)
+        lp.lock_toggled.connect(self._on_toggle_lock)
         self._history_panel.state_selected.connect(self._on_history_jump)
         self._adj_panel.adjustment_requested.connect(self._on_adjustment)
         self._color_panel.fg_changed.connect(
@@ -170,6 +171,7 @@ class MainWindow(QMainWindow):
         self._layers_panel.refresh(self._doc)
         self._history_panel.refresh(self._doc.history)
         self._update_selection_overlay()
+        self._update_transform_box()
 
     def _refresh_canvas_only(self) -> None:
         """Re-render and update canvas only (skip panel updates)."""
@@ -182,6 +184,7 @@ class MainWindow(QMainWindow):
             self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result)
+        self._update_transform_box()
 
     def _schedule_render(self) -> None:
         """Request a deferred render (throttled to ~30fps)."""
@@ -200,6 +203,16 @@ class MainWindow(QMainWindow):
                 self._canvas.set_selection_mask(self._doc.selection._mask)
                 return
         self._canvas.set_selection_mask(None)
+
+    def _update_transform_box(self) -> None:
+        """Show transform bounding box when the Move tool is active."""
+        if self._tools.active_type == ToolType.MOVE and self._doc:
+            layer = self._doc.layers.active_layer
+            if layer:
+                lx, ly = layer.position
+                self._canvas.set_transform_box((lx, ly, layer.width, layer.height))
+                return
+        self._canvas.set_transform_box(None)
 
     # ---- File menu handlers -------------------------------------------------
 
@@ -298,6 +311,7 @@ class MainWindow(QMainWindow):
     def _on_layer_selected(self, stack_index: int) -> None:
         if self._doc:
             self._doc.layers.active_index = stack_index
+            self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:
         if self._doc and self._doc.layers.active_layer:
@@ -315,6 +329,14 @@ class MainWindow(QMainWindow):
             if layer:
                 layer.visible = not layer.visible
                 self._refresh_canvas_only()
+                self._layers_panel.refresh(self._doc)
+
+    def _on_toggle_lock(self, layer_id: str) -> None:
+        if self._doc:
+            layer = self._doc.layers.get(layer_id)
+            if layer:
+                layer.locked = not layer.locked
+                self._layers_panel.refresh(self._doc)
 
     def _on_toggle_vis_selected(self) -> None:
         self._layers_panel.toggle_visibility_for_selected()
@@ -348,6 +370,7 @@ class MainWindow(QMainWindow):
         self._status.set_tool(t.name.replace("_", " ").title())
         self._canvas.set_tool_cursor(t)
         self._update_properties_panel()
+        self._update_transform_box()
 
     def _on_canvas_press(self, x: int, y: int, pressure: float) -> None:
         self._dragging = True

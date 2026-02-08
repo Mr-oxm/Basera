@@ -19,6 +19,7 @@ from ..tools.shape_tool import ShapeTool
 from ..tools.text_tool import TextTool
 from ..tools.tool_base import Tool
 from ..tools.transform_tool import TransformTool
+from ..tools.move_tool import MoveTool
 
 
 class ToolManager:
@@ -26,6 +27,7 @@ class ToolManager:
 
     def __init__(self) -> None:
         self._tools: dict[ToolType, Tool] = {
+            ToolType.MOVE: MoveTool(),
             ToolType.BRUSH: BrushTool(),
             ToolType.ERASER: EraserTool(),
             ToolType.CLONE_STAMP: CloneStampTool(),
