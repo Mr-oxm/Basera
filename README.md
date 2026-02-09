@@ -10,8 +10,6 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 <img width="1919" height="992" alt="image" src="https://github.com/user-attachments/assets/0b87d5d4-9866-4eff-b81a-6ad657589609" />
 
 
-> **Screenshots placeholder** — screenshots go here once the UI is running.
-
 ---
 
 ## Architecture
