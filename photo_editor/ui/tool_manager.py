@@ -91,9 +91,16 @@ class ToolManager:
     # ---- Properties ---------------------------------------------------------
 
     def get_properties(self) -> dict[str, tuple[float, float, float]]:
-        """Return {name: (current_value, min, max)} for the active tool."""
+        """Return {name: (current_value, min, max)} for the active tool.
+
+        The Text tool's properties are handled by the specialised text
+        properties bar, so they are not returned here.
+        """
         tool = self.active_tool
         if tool is None:
+            return {}
+        # Text tool uses its own properties bar — skip generic introspection
+        if self._active_type == ToolType.TEXT:
             return {}
         defs: dict[str, tuple[float, float, float]] = {}
         _RANGES = {

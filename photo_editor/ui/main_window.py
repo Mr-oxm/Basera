@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QRectF, QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QDockWidget, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
 )
@@ -66,20 +67,38 @@ class MainWindow(QMainWindow):
     # ---- UI assembly --------------------------------------------------------
 
     def _build_ui(self) -> None:
+        from PySide6.QtWidgets import QWidget, QVBoxLayout
+        
         self._menu = EditorMenuBar(self)
         self.setMenuBar(self._menu)
         self._toolbar = EditorToolbar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._toolbar)
+        
+        # Create horizontal properties panel (not docked)
+        self._props_panel = PropertiesPanel()
+        
+        # Create a central widget with vertical layout: properties panel + canvas
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        
+        # Add properties panel at top
+        central_layout.addWidget(self._props_panel)
+        
+        # Add canvas below
         self._canvas = CanvasView(self)
-        self.setCentralWidget(self._canvas)
+        central_layout.addWidget(self._canvas)
+        
+        self.setCentralWidget(central)
+        
+        # Dock panels on the sides
         self._layers_panel = LayersPanel()
         self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
         self._history_panel = HistoryPanel()
         self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
         self._adj_panel = AdjustmentsPanel()
         self._dock(self._adj_panel, "Adjustments", Qt.DockWidgetArea.RightDockWidgetArea)
-        self._props_panel = PropertiesPanel()
-        self._dock(self._props_panel, "Properties", Qt.DockWidgetArea.RightDockWidgetArea)
         self._color_panel = ColorPanel()
         self._dock(self._color_panel, "Color", Qt.DockWidgetArea.LeftDockWidgetArea)
         self._status = EditorStatusBar(self)
@@ -150,11 +169,13 @@ class MainWindow(QMainWindow):
         self._adj_panel.adjustment_requested.connect(self._on_adjustment)
         self._color_panel.fg_changed.connect(self._on_fg_color_changed)
         self._props_panel.value_changed.connect(self._on_prop_changed)
+        self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
 
     # ---- Wiring: canvas -----------------------------------------------------
 
     def _wire_canvas(self) -> None:
         self._canvas.cursor_moved.connect(self._status.set_cursor_pos)
+        self._canvas.cursor_moved.connect(self._on_canvas_hover)
         self._canvas.tool_pressed.connect(self._on_canvas_press)
         self._canvas.tool_moved.connect(self._on_canvas_move)
         self._canvas.tool_released.connect(self._on_canvas_release)
@@ -506,25 +527,37 @@ class MainWindow(QMainWindow):
     }
 
     def _on_tool_selected(self, t: ToolType) -> None:
+        # Commit any in-progress text editing when switching away
+        if self._tools.active_type == ToolType.TEXT and t != ToolType.TEXT:
+            self._text_exit_editing()
         self._tools.select(t)
         self._status.set_tool(t.name.replace("_", " ").title())
         self._canvas.set_tool_cursor(t)
         self._update_properties_panel()
         self._update_transform_box()
         self._update_brush_cursor()
+        # Setup text tool callbacks
+        if t == ToolType.TEXT:
+            self._text_setup()
+
+    def _on_canvas_hover(self, x: int, y: int) -> None:
+        """Handle non-drag mouse movement for cursor updates."""
+        if self._tools.active_type == ToolType.TEXT:
+            self._text_update_hover_cursor(x, y)
 
     def _on_canvas_press(self, x: int, y: int, pressure: float) -> None:
         self._dragging = True
         self._tools.on_press(self._doc, x, y, pressure)
-        # For selection tools, track drag start for visual feedback
         tool_type = self._tools.active_type
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
             self._drag_start = (x, y)
+        elif tool_type == ToolType.TEXT:
+            self._text_update_overlay()
 
     def _on_canvas_move(self, x: int, y: int, pressure: float) -> None:
-        self._tools.on_move(self._doc, x, y, pressure)
-        # Update drag rect for selection tools
         tool_type = self._tools.active_type
+        self._tools.on_move(self._doc, x, y, pressure)
+        
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT) and hasattr(self, "_drag_start"):
             sx, sy = self._drag_start
             dr = self._canvas._doc_rect()
@@ -533,8 +566,13 @@ class MainWindow(QMainWindow):
             zw = abs(x - sx) / self._canvas._doc_w * dr.width()
             zh = abs(y - sy) / self._canvas._doc_h * dr.height()
             self._canvas.set_drag_rect(QRectF(zx, zy, zw, zh))
+        elif tool_type == ToolType.TEXT:
+            # Update overlay to show drawing preview or editing state
+            self._text_update_overlay()
+            # Update cursor shape on hover (only when not dragging)
+            if not self._dragging:
+                self._text_update_hover_cursor(x, y)
         else:
-            # Schedule throttled render for painting tools
             self._schedule_render()
 
     def _on_canvas_release(self, x: int, y: int) -> None:
@@ -543,16 +581,29 @@ class MainWindow(QMainWindow):
         self._canvas.set_drag_rect(None)
         if hasattr(self, "_drag_start"):
             del self._drag_start
-        # Full refresh to sync panels + selection overlay
         self._refresh()
+        # Update text overlay after release (may have created a new text layer)
+        if self._tools.active_type == ToolType.TEXT:
+            self._text_update_overlay()
 
     # ---- Properties panel ---------------------------------------------------
 
     def _update_properties_panel(self) -> None:
-        self._props_panel.clear()
+        tool_type = self._tools.active_type
         tool = self._tools.active_tool
         if tool is None:
+            self._props_panel.clear()
+            self._props_panel.set_text_mode(False)
             return
+
+        # Text tool uses its own specialised properties bar
+        if tool_type == ToolType.TEXT:
+            self._props_panel.clear()
+            self._props_panel.set_text_mode(True, tool)
+            return
+
+        self._props_panel.set_text_mode(False)
+        self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
             label = key.replace("_", " ").title()
@@ -569,9 +620,16 @@ class MainWindow(QMainWindow):
                 self._tools.set_property(key, float(value) / 100.0)
             else:
                 self._tools.set_property(key, float(value))
-        # Live-update brush cursor when any visual property changes
         if key in ("size", "hardness", "opacity", "flow"):
             self._update_brush_cursor()
+
+    def _on_text_prop_changed(self, key: str, value: object) -> None:
+        """Handle property changes from the text properties bar."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.TEXT:
+            return
+        tool.apply_property(key, value)
+        self._text_update_overlay()
 
     # ---- Brush cursor --------------------------------------------------------
 
@@ -641,6 +699,136 @@ class MainWindow(QMainWindow):
         elif op == "rotate_ccw":
             layer.pixels = TransformEngine.rotate(px, 90)
         self._refresh()
+
+    # ---- Text tool management -----------------------------------------------
+
+    def _text_setup(self) -> None:
+        """Configure the text tool with callbacks."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        tool.set_refresh_callback(self._text_on_refresh)
+        tool.set_overlay_callback(self._text_update_overlay)
+        self._canvas.set_key_handler(self._text_on_key)
+
+    def _text_on_refresh(self) -> None:
+        """Called by the text tool when it needs a visual refresh."""
+        self._pipeline.invalidate()
+        result = self._pipeline.execute_to_uint8(self._doc)
+        self._canvas.set_image(result)
+        self._text_update_overlay()
+
+    def _text_on_key(self, key: int, text: str, modifiers) -> bool:
+        """Forward key events to the text tool."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.TEXT:
+            return False
+        consumed = tool.on_key_press(key, text, modifiers)
+        if consumed:
+            self._text_update_overlay()
+        return consumed
+
+    def _text_update_overlay(self) -> None:
+        """Sync the text editing overlay state to the canvas."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.TEXT:
+            self._canvas.set_text_editing(False)
+            self._canvas.set_text_box(None)
+            self._canvas.set_text_draw_rect(None)
+            return
+
+        # Drawing preview
+        if tool.is_drawing:
+            self._canvas.set_text_editing(False)
+            self._canvas.set_text_box(None)
+            self._canvas.set_text_draw_rect(tool.draw_rect)
+            return
+
+        self._canvas.set_text_draw_rect(None)
+
+        # Editing mode
+        if tool.is_editing and tool.text_data is not None:
+            td = tool.text_data
+            self._canvas.set_text_editing(True)
+            box = tool.editing_box()
+            angle = tool.editing_rotation()
+            self._canvas.set_text_box(box, angle)
+
+            # Cursor position
+            cx, cy = td.cursor_to_xy(td.cursor_pos)
+            ch = td.cursor_line_height(td.cursor_pos)
+            self._canvas.set_text_cursor(cx, cy, ch)
+
+            # Selection rectangles
+            sel_rects = []
+            if td.has_selection:
+                lo, hi = td.selection_range
+                lines = td.compute_layout()
+                pos = 0
+                for line in lines:
+                    line_len = sum(len(g.char) for g in line.glyphs)
+                    line_end = pos + line_len
+                    if line_end <= lo or pos >= hi:
+                        pos = line_end
+                        continue
+                    # This line has some selection
+                    sel_start_in_line = max(lo, pos) - pos
+                    sel_end_in_line = min(hi, line_end) - pos
+                    # Compute x positions
+                    x0 = line.x_offset
+                    x1 = line.x_offset
+                    ci = 0
+                    for g in line.glyphs:
+                        if ci == sel_start_in_line:
+                            x0 = g.x
+                        if ci == sel_end_in_line:
+                            x1 = g.x
+                            break
+                        ci += len(g.char)
+                    else:
+                        x1 = line.x_offset + sum(g.advance for g in line.glyphs)
+                    sel_rects.append((int(x0), int(line.y),
+                                     int(x1 - x0), int(line.height)))
+                    pos = line_end
+            self._canvas.set_text_selection_rects(sel_rects)
+            # Also hide transform box when editing text
+            self._canvas.set_transform_box(None)
+        else:
+            self._canvas.set_text_editing(False)
+            self._canvas.set_text_box(None)
+            self._canvas.set_text_selection_rects([])
+
+    def _text_update_hover_cursor(self, x: int, y: int) -> None:
+        """Change the mouse cursor when hovering over text box handles."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.TEXT:
+            return
+        hint = tool.hit_test_cursor_shape(x, y)
+        if hint is None:
+            self._canvas.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        elif hint == "text":
+            self._canvas.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+        elif hint in ("resize_tl", "resize_br"):
+            self._canvas.setCursor(QCursor(Qt.CursorShape.SizeFDiagCursor))
+        elif hint in ("resize_tr", "resize_bl"):
+            self._canvas.setCursor(QCursor(Qt.CursorShape.SizeBDiagCursor))
+        elif hint in ("resize_t", "resize_b"):
+            self._canvas.setCursor(QCursor(Qt.CursorShape.SizeVerCursor))
+        elif hint in ("resize_l", "resize_r"):
+            self._canvas.setCursor(QCursor(Qt.CursorShape.SizeHorCursor))
+        else:
+            self._canvas.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
+
+    def _text_exit_editing(self) -> None:
+        """Commit text editing and clean up overlay."""
+        tool = self._tools.active_tool
+        if tool is not None and hasattr(tool, "commit_editing"):
+            tool.commit_editing(self._doc)
+        self._canvas.set_text_editing(False)
+        self._canvas.set_text_box(None)
+        self._canvas.set_text_draw_rect(None)
+        self._canvas.set_text_selection_rects([])
+        self._canvas.set_key_handler(None)
 
     # ---- Zoom ---------------------------------------------------------------
 

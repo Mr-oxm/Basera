@@ -141,7 +141,7 @@ class Document:
         # Save the full layer structure so add/remove can be undone
         layer_metas = []
         for layer in self.layers:
-            layer_metas.append({
+            meta = {
                 "id": layer.id,
                 "name": layer.name,
                 "width": layer.width,
@@ -159,7 +159,12 @@ class Document:
                 "transform_angle": layer.transform_angle,
                 "transform_base_w": layer.transform_base_w,
                 "transform_base_h": layer.transform_base_h,
-            })
+            }
+            # Save text layer data if present
+            td = getattr(layer, "_text_data", None)
+            if td is not None:
+                meta["_text_data"] = td.to_dict()
+            layer_metas.append(meta)
         state.metadata["_layer_order"] = [l.id for l in self.layers]
         state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
         state.metadata["_active_index"] = self.layers.active_index
@@ -205,6 +210,11 @@ class Document:
                 mask_key = f"_mask_{lid}"
                 if mask_key in state.layer_data:
                     layer._mask = state.layer_data[mask_key].copy()
+                # Restore text layer data
+                td_dict = meta.get("_text_data")
+                if td_dict is not None:
+                    from .text_layer import TextLayerData
+                    layer._text_data = TextLayerData.from_dict(td_dict)
                 new_stack.add(layer)
             new_stack.active_index = state.metadata.get("_active_index", 0)
             self.layers = new_stack

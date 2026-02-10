@@ -1,0 +1,48 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environment variables
+.env
+.env.local
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Application specific
+*.log
+*.bak
+.cache/

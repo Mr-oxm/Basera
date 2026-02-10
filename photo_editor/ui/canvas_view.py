@@ -1,4 +1,5 @@
-"""Zoomable, pannable canvas with selection overlay, transform box, and tool cursors.
+"""Zoomable, pannable canvas with selection overlay, transform box, tool cursors,
+and in-canvas text editing overlay (cursor, selection highlight, text box).
 
 Uses ``QOpenGLWidget`` when available so all QPainter operations are
 GPU-accelerated.  Falls back to the software ``QWidget`` path
@@ -10,9 +11,9 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QCursor, QImage, QMouseEvent, QPainter,
+    QColor, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter,
     QPen, QPixmap, QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
@@ -118,6 +119,22 @@ class CanvasView(_BASE_CLASS):
         # Cache identity of last rgba buffer to skip redundant QPixmap builds
         self._last_rgba: np.ndarray | None = None
 
+        # Text editing overlay state
+        self._text_cursor_pos: tuple[int, int] | None = None   # (x, y) in doc coords
+        self._text_cursor_height: int = 20
+        self._text_cursor_visible: bool = False     # blink state
+        self._text_editing: bool = False
+        self._text_box: tuple[int, int, int, int] | None = None  # (x, y, w, h)
+        self._text_box_angle: float = 0.0
+        self._text_draw_rect: tuple[int, int, int, int] | None = None  # drawing preview
+        self._text_selection_rects: list[tuple[int, int, int, int]] = []  # selection highlight
+        # Cursor blink timer
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(530)
+        self._blink_timer.timeout.connect(self._blink_cursor)
+        # Key event forwarding for text editing
+        self._key_handler = None  # callable(key, text, modifiers) -> bool
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(200, 200)
@@ -167,6 +184,57 @@ class CanvasView(_BASE_CLASS):
     def set_tool_cursor(self, tool_type: ToolType) -> None:
         shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
+
+    # ---- Text editing overlay API -------------------------------------------
+
+    def set_text_editing(self, editing: bool) -> None:
+        """Enable / disable text editing overlay."""
+        self._text_editing = editing
+        if editing:
+            self._text_cursor_visible = True
+            self._blink_timer.start()
+        else:
+            self._blink_timer.stop()
+            self._text_cursor_visible = False
+            self._text_cursor_pos = None
+            self._text_box = None
+            self._text_draw_rect = None
+            self._text_selection_rects = []
+        self.update()
+
+    def set_text_cursor(self, x: int, y: int, height: int) -> None:
+        """Set the text cursor position in document coordinates."""
+        self._text_cursor_pos = (x, y)
+        self._text_cursor_height = height
+        self._text_cursor_visible = True
+        self._blink_timer.start()
+        self.update()
+
+    def set_text_box(self, box: tuple[int, int, int, int] | None,
+                     angle: float = 0.0) -> None:
+        """Set the text bounding box (doc coords) for overlay drawing."""
+        self._text_box = box
+        self._text_box_angle = angle
+        self.update()
+
+    def set_text_draw_rect(self, rect: tuple[int, int, int, int] | None) -> None:
+        """Set the text box drawing preview rectangle (doc coords)."""
+        self._text_draw_rect = rect
+        self.update()
+
+    def set_text_selection_rects(self, rects: list[tuple[int, int, int, int]]) -> None:
+        """Set selection highlight rectangles (doc coords relative to text box)."""
+        self._text_selection_rects = rects
+        self.update()
+
+    def set_key_handler(self, handler) -> None:
+        """Set the key event handler for text editing.
+        handler(key: int, text: str, modifiers: Qt.KeyboardModifier) -> bool"""
+        self._key_handler = handler
+
+    def _blink_cursor(self) -> None:
+        self._text_cursor_visible = not self._text_cursor_visible
+        self.update()
 
     # ---- Brush cursor / live dab preview ------------------------------------
 
@@ -285,6 +353,16 @@ class CanvasView(_BASE_CLASS):
         # Transform bounding box with handles
         if self._transform_box is not None:
             self._draw_transform_box(p, dr)
+
+        # Text editing overlays
+        if self._text_draw_rect is not None:
+            self._draw_text_draw_rect(p, dr)
+        if self._text_box is not None:
+            self._draw_text_box(p, dr)
+        if self._text_selection_rects:
+            self._draw_text_selection(p, dr)
+        if self._text_cursor_pos is not None and self._text_cursor_visible and self._text_editing:
+            self._draw_text_cursor(p, dr)
 
         # Brush cursor preview circle
         if self._brush_size > 0 and self._brush_cursor_visible:
@@ -426,6 +504,151 @@ class CanvasView(_BASE_CLASS):
         p.drawLine(QPointF(pos.x(), pos.y() - ch), QPointF(pos.x(), pos.y() + ch))
 
         p.restore()
+
+    # ---- Text overlay drawing -----------------------------------------------
+
+    def _doc_to_widget(self, dr: QRectF, dx: float, dy: float) -> QPointF:
+        """Convert document coords to widget coords."""
+        sx = dr.width() / self._doc_w if self._doc_w else 1
+        sy = dr.height() / self._doc_h if self._doc_h else 1
+        return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
+
+    def _draw_text_cursor(self, p: QPainter, dr: QRectF) -> None:
+        """Draw the blinking text cursor."""
+        if self._text_cursor_pos is None:
+            return
+        cx, cy = self._text_cursor_pos
+        h = self._text_cursor_height
+
+        # If there's a text box with rotation, apply rotation
+        if self._text_box is not None and self._text_box_angle != 0.0:
+            bx, by, bw, bh = self._text_box
+            box_cx = bx + bw / 2.0
+            box_cy = by + bh / 2.0
+            wc = self._doc_to_widget(dr, box_cx, box_cy)
+            p.save()
+            p.translate(wc.x(), wc.y())
+            p.rotate(-self._text_box_angle)
+            # Draw cursor relative to box center
+            sx = dr.width() / self._doc_w if self._doc_w else 1
+            sy = dr.height() / self._doc_h if self._doc_h else 1
+            lcx = (bx + cx - box_cx) * sx
+            lcy = (by + cy - box_cy) * sy
+            lh = h * sy
+            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.drawLine(QPointF(lcx, lcy), QPointF(lcx, lcy + lh))
+            p.setPen(QPen(QColor(0, 0, 0), 1))
+            p.drawLine(QPointF(lcx, lcy), QPointF(lcx, lcy + lh))
+            p.restore()
+        else:
+            # No rotation
+            top = self._doc_to_widget(dr, cx + (self._text_box[0] if self._text_box else 0),
+                                      cy + (self._text_box[1] if self._text_box else 0))
+            bot = self._doc_to_widget(dr, cx + (self._text_box[0] if self._text_box else 0),
+                                      cy + h + (self._text_box[1] if self._text_box else 0))
+            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.drawLine(top, bot)
+            p.setPen(QPen(QColor(0, 0, 0), 1))
+            p.drawLine(top, bot)
+
+    def _draw_text_box(self, p: QPainter, dr: QRectF) -> None:
+        """Draw the text bounding box with resize handles."""
+        if self._text_box is None or self._doc_w == 0:
+            return
+        x, y, w, h = self._text_box
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+
+        p.save()
+        if self._text_box_angle != 0.0:
+            cx = x + w / 2.0
+            cy = y + h / 2.0
+            wc = self._doc_to_widget(dr, cx, cy)
+            p.translate(wc.x(), wc.y())
+            p.rotate(-self._text_box_angle)
+            hw, hh = w * sx / 2, h * sy / 2
+        else:
+            tl = self._doc_to_widget(dr, x, y)
+            p.translate(tl.x() + w * sx / 2, tl.y() + h * sy / 2)
+            hw, hh = w * sx / 2, h * sy / 2
+
+        # Dashed box
+        pen = QPen(QColor(0, 150, 255), 1.5, Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(QRectF(-hw, -hh, hw * 2, hh * 2))
+
+        # Handles
+        hs = 6
+        handle_pts = [
+            (-hw, -hh), (0, -hh), (hw, -hh),
+            (-hw, 0), (hw, 0),
+            (-hw, hh), (0, hh), (hw, hh),
+        ]
+        p.setPen(QPen(QColor(0, 150, 255), 1))
+        p.setBrush(QColor(255, 255, 255))
+        for hx, hy in handle_pts:
+            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
+
+        p.restore()
+
+    def _draw_text_draw_rect(self, p: QPainter, dr: QRectF) -> None:
+        """Draw the text box creation preview rectangle."""
+        if self._text_draw_rect is None or self._doc_w == 0:
+            return
+        x, y, w, h = self._text_draw_rect
+        tl = self._doc_to_widget(dr, x, y)
+        br = self._doc_to_widget(dr, x + w, y + h)
+        pen = QPen(QColor(0, 150, 255), 2.0, Qt.PenStyle.SolidLine)
+        p.setPen(pen)
+        p.setBrush(QColor(0, 150, 255, 40))
+        p.drawRect(QRectF(tl, br))
+
+    def _draw_text_selection(self, p: QPainter, dr: QRectF) -> None:
+        """Draw text selection highlight rectangles."""
+        if not self._text_selection_rects or not self._text_box:
+            return
+        bx, by = self._text_box[0], self._text_box[1]
+        sx = dr.width() / self._doc_w if self._doc_w else 1
+        sy = dr.height() / self._doc_h if self._doc_h else 1
+
+        p.save()
+        if self._text_box_angle != 0.0:
+            bw, bh = self._text_box[2], self._text_box[3]
+            cx = bx + bw / 2.0
+            cy = by + bh / 2.0
+            wc = self._doc_to_widget(dr, cx, cy)
+            p.translate(wc.x(), wc.y())
+            p.rotate(-self._text_box_angle)
+            offset_x = -bw / 2.0 * sx
+            offset_y = -bh / 2.0 * sy
+        else:
+            tl = self._doc_to_widget(dr, bx, by)
+            offset_x = tl.x()
+            offset_y = tl.y()
+            p.translate(0, 0)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(60, 130, 220, 80))
+        for rx, ry, rw, rh in self._text_selection_rects:
+            if self._text_box_angle != 0.0:
+                p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy,
+                                  rw * sx, rh * sy))
+            else:
+                p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy,
+                                  rw * sx, rh * sy))
+        p.restore()
+
+    # ---- Key events (text editing) ------------------------------------------
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._key_handler is not None and self._text_editing:
+            consumed = self._key_handler(
+                event.key(), event.text(), event.modifiers())
+            if consumed:
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     # ---- Mouse events -------------------------------------------------------
 
