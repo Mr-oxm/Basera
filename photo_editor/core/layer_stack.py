@@ -79,7 +79,8 @@ class LayerStack:
 
         Pass ``None`` to un-parent (move to top level).
         The layers are also repositioned in the stack so that children
-        sit just before (below) their new group.
+        sit just before (below) their new group, or at the top of the
+        stack when un-parenting.
         """
         new_parent = self.get(new_parent_id) if new_parent_id else None
         for lid in layer_ids:
@@ -96,24 +97,27 @@ class LayerStack:
             if new_parent and lid not in new_parent.children:
                 new_parent.children.append(lid)
 
-        # Reposition layers in the stack just before the group so that
-        # compositing order is correct.
+        # Reposition layers in the stack.
+        # First, pull the affected layers out of the list.
+        moved: list[Layer] = []
+        for lid in layer_ids:
+            for i, layer in enumerate(self._layers):
+                if layer.id == lid:
+                    moved.append(self._layers.pop(i))
+                    break
+
         if new_parent_id:
-            moved: list[Layer] = []
-            for lid in layer_ids:
-                for i, layer in enumerate(self._layers):
-                    if layer.id == lid:
-                        moved.append(self._layers.pop(i))
-                        break
-            # Find the group's current index
+            # Insert just before the group so compositing order is correct.
             group_idx = 0
             for i, layer in enumerate(self._layers):
                 if layer.id == new_parent_id:
                     group_idx = i
                     break
-            # Insert just before the group
             for j, layer in enumerate(moved):
                 self._layers.insert(group_idx + j, layer)
+        else:
+            # Un-parenting: append at the end (top of the stack).
+            self._layers.extend(moved)
 
     def create_group_from(self, layer_ids: list[str], group_name: str = "Group") -> "Layer | None":
         """Create a new group layer containing *layer_ids*."""

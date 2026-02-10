@@ -164,6 +164,10 @@ class Document:
             td = getattr(layer, "_text_data", None)
             if td is not None:
                 meta["_text_data"] = td.to_dict()
+            # Save adjustment / filter layer data if present
+            if layer.adjustment is not None:
+                meta["_adjustment_name"] = layer.adjustment.name
+                meta["_adjustment_params"] = dict(layer.adjustment_params)
             layer_metas.append(meta)
         state.metadata["_layer_order"] = [l.id for l in self.layers]
         state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
@@ -215,6 +219,18 @@ class Document:
                 if td_dict is not None:
                     from .text_layer import TextLayerData
                     layer._text_data = TextLayerData.from_dict(td_dict)
+                # Restore adjustment / filter layer data
+                adj_name = meta.get("_adjustment_name")
+                if adj_name is not None:
+                    from ..ui.filter_runner import _adj_map, _filter_name_map
+                    layer_lt = meta.get("layer_type")
+                    if layer_lt == LayerType.FILTER:
+                        cls = _filter_name_map().get(adj_name)
+                    else:
+                        cls = _adj_map().get(adj_name)
+                    if cls is not None:
+                        layer._adjustment = cls()
+                        layer._adjustment_params = dict(meta.get("_adjustment_params", {}))
                 new_stack.add(layer)
             new_stack.active_index = state.metadata.get("_active_index", 0)
             self.layers = new_stack

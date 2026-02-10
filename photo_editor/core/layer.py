@@ -116,6 +116,10 @@ class Layer:
         new._styles = list(self._styles)
         if self._transform_original is not None:
             new._transform_original = self._transform_original.copy()
+        # Copy adjustment layer data
+        if self._adjustment is not None:
+            new._adjustment = self._adjustment
+            new._adjustment_params = dict(self._adjustment_params)
         return new
 
     def fill(self, color: np.ndarray) -> None:

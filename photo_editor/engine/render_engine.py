@@ -65,7 +65,6 @@ class RenderEngine:
         visible = [
             layer for layer in document.layers
             if layer.visible and layer.parent_id is None
-            and layer.layer_type != LayerType.ADJUSTMENT
         ]
         needs_placed: set[str] = set()
         for i in range(len(visible) - 1):
@@ -75,6 +74,13 @@ class RenderEngine:
         prev_img: np.ndarray | None = None
 
         for layer in visible:
+            if layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                # Apply adjustment/filter to composite built so far
+                adj = layer.adjustment
+                if adj is not None:
+                    canvas = adj.apply(canvas, layer.adjustment_params)
+                continue
+
             if layer.layer_type == LayerType.GROUP:
                 group_img = self._render_group(layer, document, w, h)
                 # Group composite is canvas-sized already → position (0,0)

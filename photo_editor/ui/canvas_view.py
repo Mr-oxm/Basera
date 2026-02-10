@@ -141,9 +141,9 @@ class CanvasView(_BASE_CLASS):
 
     # ---- Public API ---------------------------------------------------------
 
-    def set_image(self, rgba: np.ndarray) -> None:
+    def set_image(self, rgba: np.ndarray, force: bool = False) -> None:
         # Skip redundant QPixmap creation when the buffer is identical
-        if rgba is self._last_rgba:
+        if not force and rgba is self._last_rgba:
             return
         self._last_rgba = rgba
         h, w = rgba.shape[:2]

@@ -19,9 +19,8 @@ from ..utils.image_io import load_image, save_image
 from .canvas_view import CanvasView
 from .dialogs.layer_styles_dialog import LayerStylesDialog
 from .dialogs.new_document import NewDocumentDialog
-from .filter_runner import run_adjustment, run_filter
+from .filter_runner import _adj_map, _filter_name_map, run_adjustment, run_filter
 from .menus import EditorMenuBar
-from .panels.adjustments_panel import AdjustmentsPanel
 from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
@@ -98,8 +97,6 @@ class MainWindow(QMainWindow):
         self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
         self._history_panel = HistoryPanel()
         self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
-        self._adj_panel = AdjustmentsPanel()
-        self._dock(self._adj_panel, "Adjustments", Qt.DockWidgetArea.RightDockWidgetArea)
         self._color_panel = ColorPanel()
         self._dock(self._color_panel, "Color", Qt.DockWidgetArea.LeftDockWidgetArea)
         self._status = EditorStatusBar(self)
@@ -144,7 +141,7 @@ class MainWindow(QMainWindow):
         for key, action in a.items():
             if key.startswith("filter_"):
                 fkey = key[len("filter_"):]
-                action.triggered.connect(lambda checked, k=fkey: self._on_filter(k))
+                action.triggered.connect(lambda checked, k=fkey: self._on_menu_filter(k))
 
     # ---- Wiring: panels -----------------------------------------------------
 
@@ -166,9 +163,13 @@ class MainWindow(QMainWindow):
         lp.lock_toggled.connect(self._on_toggle_lock)
         lp.layers_reordered.connect(self._on_layers_reordered)
         lp.layers_reparented.connect(self._on_layers_reparented)
+        lp.layers_unparented.connect(self._on_layers_unparented)
         lp.rename_requested.connect(self._on_rename_layer)
+        lp.adjustment_layer_requested.connect(self._on_add_adjustment_layer)
+        lp.edit_adjustment_requested.connect(self._on_edit_adjustment_layer)
+        lp.filter_layer_requested.connect(self._on_add_filter_layer)
+        lp.edit_filter_requested.connect(self._on_edit_filter_layer)
         self._history_panel.state_selected.connect(self._on_history_jump)
-        self._adj_panel.adjustment_requested.connect(self._on_adjustment)
         self._color_panel.fg_changed.connect(self._on_fg_color_changed)
         self._props_panel.value_changed.connect(self._on_prop_changed)
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
@@ -207,7 +208,7 @@ class MainWindow(QMainWindow):
         if invalidate:
             self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result)
+        self._canvas.set_image(result, force=invalidate)
         self._layers_panel.refresh(self._doc)
         self._history_panel.refresh(self._doc.history)
         self._update_selection_overlay()
@@ -385,6 +386,7 @@ class MainWindow(QMainWindow):
             self._doc.group_selected_layers(selected)
         else:
             self._doc.add_group()
+        self._pipeline.engine.invalidate_all()
         self._refresh()
 
     def _on_dup_layer(self) -> None:
@@ -485,6 +487,7 @@ class MainWindow(QMainWindow):
         new_stack_order = list(reversed(remaining))
         self._doc.layers.reorder_by_ids(new_stack_order)
         self._doc.save_snapshot("Reorder Layers")
+        self._pipeline.engine.invalidate_all()
         self._refresh()
 
     def _on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
@@ -493,6 +496,16 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, group_id)
         self._doc.save_snapshot("Move to Group")
+        self._pipeline.engine.invalidate_all()
+        self._refresh()
+
+    def _on_layers_unparented(self, layer_ids: list[str]) -> None:
+        """Handle drag-drop out of a group — remove layers from their group."""
+        if not self._doc:
+            return
+        self._doc.layers.reparent(layer_ids, None)
+        self._doc.save_snapshot("Remove from Group")
+        self._pipeline.engine.invalidate_all()
         self._refresh()
 
     def _on_toggle_vis_selected(self) -> None:
@@ -688,6 +701,132 @@ class MainWindow(QMainWindow):
     def _on_adjustment(self, name: str) -> None:
         if self._doc and run_adjustment(name, self._doc, self, preview_fn=self._preview_render):
             self._refresh()
+
+    def _on_add_adjustment_layer(self, name: str) -> None:
+        """Create a new adjustment layer for the given adjustment *name*."""
+        if not self._doc:
+            return
+        adj_cls = _adj_map().get(name)
+        if adj_cls is None:
+            return
+        adj = adj_cls()
+        layer = self._doc.add_layer(name=name, layer_type=LayerType.ADJUSTMENT)
+        layer.adjustment = adj
+        layer.adjustment_params = dict(adj.default_params)
+        self._refresh()
+        # Open the edit dialog immediately (skip for param-less adjustments like Invert)
+        if adj.default_params:
+            self._on_edit_adjustment_layer(layer.id)
+
+    def _on_edit_adjustment_layer(self, layer_id: str) -> None:
+        """Open a dialog to edit an existing adjustment layer's parameters."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.get(layer_id)
+        if layer is None or layer.layer_type != LayerType.ADJUSTMENT:
+            return
+        adj = layer.adjustment
+        if adj is None:
+            return
+        # If no params (e.g. Invert), nothing to edit
+        if not adj.default_params:
+            return
+
+        from .dialogs.filter_dialog import FilterDialog
+
+        current_params = dict(layer.adjustment_params) if layer.adjustment_params else dict(adj.default_params)
+        dlg = FilterDialog(f"Adjustment — {adj.name}", current_params, parent=self)
+
+        def _on_preview(params: dict) -> None:
+            layer.adjustment_params = params
+            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
+            result = self._pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(result, force=True)
+
+        dlg.params_changed.connect(_on_preview)
+
+        # Show initial preview with current params
+        _on_preview(current_params)
+
+        old_params = dict(current_params)
+        if dlg.exec():
+            layer.adjustment_params = dlg.get_params()
+            self._doc.save_snapshot(f"Edit {adj.name}")
+            self._refresh()
+        else:
+            # Cancelled — restore original params
+            layer.adjustment_params = old_params
+            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
+            self._refresh()
+
+    def _on_add_filter_layer(self, display_name: str) -> None:
+        """Create a new filter layer for the given filter display name."""
+        if not self._doc:
+            return
+        fmap = _filter_name_map()
+        filt_cls = fmap.get(display_name)
+        if filt_cls is None:
+            return
+        filt = filt_cls()
+        layer = self._doc.add_layer(name=display_name, layer_type=LayerType.FILTER)
+        layer.adjustment = filt
+        layer.adjustment_params = dict(filt.default_params)
+        self._refresh()
+        # Open the edit dialog immediately (skip for param-less filters)
+        if filt.default_params:
+            self._on_edit_filter_layer(layer.id)
+
+    def _on_edit_filter_layer(self, layer_id: str) -> None:
+        """Open a dialog to edit an existing filter layer's parameters."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.get(layer_id)
+        if layer is None or layer.layer_type != LayerType.FILTER:
+            return
+        filt = layer.adjustment
+        if filt is None:
+            return
+        if not filt.default_params:
+            return
+
+        from .dialogs.filter_dialog import FilterDialog
+
+        current_params = dict(layer.adjustment_params) if layer.adjustment_params else dict(filt.default_params)
+        dlg = FilterDialog(f"Filter \u2014 {filt.name}", current_params, parent=self)
+
+        def _on_preview(params: dict) -> None:
+            layer.adjustment_params = params
+            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
+            result = self._pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(result, force=True)
+
+        dlg.params_changed.connect(_on_preview)
+        _on_preview(current_params)
+
+        old_params = dict(current_params)
+        if dlg.exec():
+            layer.adjustment_params = dlg.get_params()
+            self._doc.save_snapshot(f"Edit {filt.name}")
+            self._refresh()
+        else:
+            layer.adjustment_params = old_params
+            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
+            self._refresh()
+
+    def _on_menu_filter(self, key: str) -> None:
+        """Menu bar filter entry — create a filter layer by internal key."""
+        if not self._doc:
+            return
+        from .filter_runner import _filter_map
+        filt_cls = _filter_map().get(key)
+        if filt_cls is None:
+            return
+        filt = filt_cls()
+        self._on_add_filter_layer(filt.name)
 
     def _on_filter(self, key: str) -> None:
         if self._doc and run_filter(key, self._doc, self, preview_fn=self._preview_render):

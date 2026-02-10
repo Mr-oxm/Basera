@@ -88,6 +88,17 @@ def _filter_map() -> dict[str, type]:
     }
 
 
+def _filter_name_map() -> dict[str, type]:
+    """Return a mapping from *display name* → filter class.
+
+    Unlike ``_filter_map`` (which uses internal underscore keys), this
+    dict is keyed by each filter's ``.name`` attribute so that snapshot
+    restore and the layers panel can look up classes by display name.
+    """
+    m = _filter_map()
+    return {cls().name: cls for cls in m.values()}
+
+
 # ---- Public API -----------------------------------------------------------
 
 def run_adjustment(

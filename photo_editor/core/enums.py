@@ -48,6 +48,7 @@ class LayerType(Enum):
     TEXT = auto()
     SHAPE = auto()
     ADJUSTMENT = auto()
+    FILTER = auto()
     GROUP = auto()
     SMART_OBJECT = auto()
 
