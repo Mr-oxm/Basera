@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 
+from ..blending.blend_modes import get_blend_func
+from ..core.enums import BlendMode
 from .style_base import LayerStyle
 
 
@@ -63,6 +65,14 @@ class DropShadow(LayerStyle):
         shadow[:, :, 1] = color[1]
         shadow[:, :, 2] = color[2]
         shadow[:, :, 3] = shadow_alpha
+
+        # Apply blend mode to shadow colour before compositing
+        mode = self.params.blend_mode
+        if mode != BlendMode.NORMAL:
+            blend_fn = get_blend_func(mode)
+            blended_rgb = blend_fn(img[:, :, :3], shadow[:, :, :3])
+            np.clip(blended_rgb, 0, 1, out=blended_rgb)
+            shadow[:, :, :3] = blended_rgb
 
         # Composite: shadow behind layer  (dst-over equivalent)
         out = img.copy()

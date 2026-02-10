@@ -6,14 +6,19 @@ from .style_base import LayerStyle
 
 
 class StyleEngine:
-    """Applies a list of LayerStyle objects to a rendered layer."""
+    """Applies a list of :class:`LayerStyle` objects to a rendered layer.
+
+    Each style's ``.apply()`` handles its own internal opacity *and*
+    blend-mode compositing.  The engine simply chains them: each style
+    receives the output of the previous one, and the final result is
+    returned.  Styles are applied **top-to-bottom** (list order).
+    """
 
     @staticmethod
     def apply_styles(layer_image: np.ndarray, styles: list[LayerStyle]) -> np.ndarray:
         result = layer_image.copy()
         for style in styles:
-            if style.params.enabled:
-                styled = style.apply(result)
-                a = style.params.opacity
-                result = result * (1 - a) + styled * a
+            if not style.params.enabled:
+                continue
+            result = style.apply(result)
         return np.clip(result, 0, 1)

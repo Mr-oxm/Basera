@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 
+from ..blending.blend_modes import get_blend_func
+from ..core.enums import BlendMode
 from .style_base import LayerStyle
 
 
@@ -54,6 +56,13 @@ class GradientOverlay(LayerStyle):
         grad = np.zeros((h, w, 3), dtype=np.float32)
         for c in range(3):
             grad[:, :, c] = c1[c] * (1.0 - t) + c2[c] * t
+
+        # Apply blend mode
+        mode = self.params.blend_mode
+        if mode != BlendMode.NORMAL:
+            blend_fn = get_blend_func(mode)
+            grad = blend_fn(img[:, :, :3], grad)
+            np.clip(grad, 0, 1, out=grad)
 
         # Blend onto the layer, masked by alpha
         blend_t = alpha * opacity

@@ -319,6 +319,7 @@ class LayersPanel(QWidget):
     merge_down_requested = Signal()
     flatten_requested = Signal()
     rename_requested = Signal(str, str)   # layer_id, new_name
+    styles_requested = Signal()             # open layer-styles dialog
     layers_reordered = Signal(list, int)
     layers_reparented = Signal(list, str)
 
@@ -381,6 +382,7 @@ class LayersPanel(QWidget):
             ("Grp", "New group / group selected", self.group_requested),
             ("Dup", "Duplicate", self.duplicate_requested),
             ("Msk", "Add mask", self.mask_requested),
+            ("fx", "Layer styles", self.styles_requested),
             ("Del", "Delete layer", self.delete_requested),
         ]:
             b = QPushButton(label)

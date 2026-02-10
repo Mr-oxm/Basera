@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..core.enums import BlendMode
+
 
 @dataclass
 class StyleParams:
@@ -12,6 +14,7 @@ class StyleParams:
 
     enabled: bool = True
     opacity: float = 1.0
+    blend_mode: BlendMode = BlendMode.NORMAL
     extra: dict = field(default_factory=dict)
 
 

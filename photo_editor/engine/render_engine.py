@@ -19,6 +19,7 @@ from ..blending.blending_engine import BlendingEngine
 from ..core.document import Document
 from ..core.enums import BlendMode, LayerType
 from ..core.layer import Layer
+from ..styles.style_engine import StyleEngine
 
 
 class RenderEngine:
@@ -89,7 +90,13 @@ class RenderEngine:
             if layer.clipping_mask and prev_img is not None:
                 # Clipping-mask layer: needs the previous layer's placed
                 # image → fall back to the full-canvas path.
-                placed = self._place(layer, w, h)
+                if layer.styles:
+                    layer_copy = Layer(layer.name, layer.width, layer.height)
+                    layer_copy._pixels = StyleEngine.apply_styles(layer.pixels, layer.styles)
+                    layer_copy.position = layer.position
+                    placed = self._place(layer_copy, w, h)
+                else:
+                    placed = self._place(layer, w, h)
                 placed[..., 3:4] *= prev_img[..., 3:4]
                 placed_mask = (
                     self._place_mask(layer, w, h) if mask is not None else None
@@ -101,8 +108,11 @@ class RenderEngine:
                 prev_img = placed
             else:
                 # --- Fast path: region blend directly -----------------
+                pixels = layer.pixels
+                if layer.styles:
+                    pixels = StyleEngine.apply_styles(pixels, layer.styles)
                 self._blending.blend_region_inplace(
-                    canvas, layer.pixels, layer.position,
+                    canvas, pixels, layer.position,
                     layer.blend_mode, layer.opacity, mask,
                 )
                 # Only compute the placed image if the NEXT layer needs
@@ -131,8 +141,11 @@ class RenderEngine:
             if layer.parent_id != group.id or not layer.visible:
                 continue
             mask = layer.mask if layer.mask_enabled else None
+            pixels = layer.pixels
+            if layer.styles:
+                pixels = StyleEngine.apply_styles(pixels, layer.styles)
             self._blending.blend_region_inplace(
-                canvas, layer.pixels, layer.position,
+                canvas, pixels, layer.position,
                 layer.blend_mode, layer.opacity, mask,
             )
         return canvas

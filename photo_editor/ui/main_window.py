@@ -17,6 +17,7 @@ from ..engine.render_pipeline import RenderPipeline
 from ..transforms.transform_engine import TransformEngine
 from ..utils.image_io import load_image, save_image
 from .canvas_view import CanvasView
+from .dialogs.layer_styles_dialog import LayerStylesDialog
 from .dialogs.new_document import NewDocumentDialog
 from .filter_runner import run_adjustment, run_filter
 from .menus import EditorMenuBar
@@ -156,6 +157,7 @@ class MainWindow(QMainWindow):
         lp.delete_requested.connect(self._on_del_layer)
         lp.group_requested.connect(self._on_add_group)
         lp.mask_requested.connect(self._on_add_mask)
+        lp.styles_requested.connect(self._on_layer_styles)
         lp.opacity_changed.connect(self._on_opacity)
         lp.blend_mode_changed.connect(self._on_blend_mode)
         lp.blend_mode_hovered.connect(self._on_blend_hover)
@@ -902,6 +904,52 @@ class MainWindow(QMainWindow):
         layer.transform_base_h = 0
         layer._transform_original = None
         self._refresh()
+
+    # ---- Layer Styles -------------------------------------------------------
+
+    def _on_layer_styles(self) -> None:
+        """Open the Layer Styles dialog for the active layer."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.active_layer
+        if not layer:
+            return
+
+        # Snapshot the current styles so we can revert on Cancel
+        import copy
+        old_styles = copy.deepcopy(layer.styles)
+
+        dlg = LayerStylesDialog(existing_styles=layer.styles, parent=self)
+
+        # ---- Live preview: apply on every parameter tweak ----
+        _connected_panels: set[str] = set()
+
+        def _preview() -> None:
+            layer._styles = dlg.get_styles()
+            self._refresh()
+            # Re-wire any newly added panels (from the "+" button)
+            _wire_panels()
+
+        def _wire_panels() -> None:
+            for key, panel in dlg._panels.items():
+                if key not in _connected_panels:
+                    panel.changed.connect(_preview)
+                    _connected_panels.add(key)
+
+        _wire_panels()
+
+        def _accept(styles: list) -> None:
+            layer._styles = list(styles)
+            self._doc.save_snapshot(f"Layer Style \u2013 {layer.name}")
+            self._refresh()
+
+        def _reject() -> None:
+            layer._styles = old_styles
+            self._refresh()
+
+        dlg.styles_accepted.connect(_accept)
+        dlg.rejected.connect(_reject)
+        dlg.exec()
 
     # ---- Zoom ---------------------------------------------------------------
 

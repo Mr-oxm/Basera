@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 
+from ..blending.blend_modes import get_blend_func
+from ..core.enums import BlendMode
 from .style_base import LayerStyle
 
 
@@ -61,11 +63,19 @@ class Stroke(LayerStyle):
         stroke[:, :, 2] = color[2]
         stroke[:, :, 3] = stroke_mask
 
+        # Apply blend mode
+        mode = self.params.blend_mode
+        if mode != BlendMode.NORMAL:
+            blend_fn = get_blend_func(mode)
+            blended_rgb = blend_fn(img[:, :, :3], stroke[:, :, :3])
+            np.clip(blended_rgb, 0, 1, out=blended_rgb)
+            stroke[:, :, :3] = blended_rgb
+
         if position == "inside":
             # Blend stroke colour inside the layer
             out = img.copy()
             for c in range(3):
-                out[:, :, c] = img[:, :, c] * (1.0 - stroke_mask) + color[c] * stroke_mask
+                out[:, :, c] = img[:, :, c] * (1.0 - stroke_mask) + stroke[:, :, c] * stroke_mask
             return np.clip(out, 0, 1)
 
         # Outside / center – composite stroke behind layer
