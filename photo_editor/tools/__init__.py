@@ -11,6 +11,10 @@ from .selection_tools import RectSelectTool, EllipseSelectTool, LassoTool, Magic
 from .text_tool import TextTool
 from .shape_tool import ShapeTool
 from .transform_tool import TransformTool
+from .zoom_tool import ZoomTool
+from .pan_tool import PanTool
+from .eyedropper import EyedropperTool
+from .crop_tool import CropTool
 
 __all__ = [
     "Tool",
@@ -27,4 +31,8 @@ __all__ = [
     "TextTool",
     "ShapeTool",
     "TransformTool",
+    "ZoomTool",
+    "PanTool",
+    "EyedropperTool",
+    "CropTool",
 ]

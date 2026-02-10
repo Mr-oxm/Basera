@@ -79,6 +79,7 @@ class EraserTool(Tool):
         # Also fade RGB towards transparent to avoid colour fringing
         for c in range(3):
             target[y0:y1, x0:x1, c] *= (1.0 - mask)
+        np.clip(target[y0:y1, x0:x1], 0, 1, out=target[y0:y1, x0:x1])
 
     def _erase_along(self, doc: Document, x0: int, y0: int, x1: int, y1: int,
                      pressure: float) -> None:

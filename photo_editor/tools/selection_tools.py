@@ -143,23 +143,16 @@ class MagicWandTool(Tool):
 
     def _flood_mask(self, pixels: np.ndarray, sx: int, sy: int) -> np.ndarray:
         h, w = pixels.shape[:2]
-        seed = pixels[sy, sx].copy()
-        tol = self.tolerance / 255.0
-        visited = np.zeros((h, w), dtype=np.bool_)
-        mask = np.zeros((h, w), dtype=np.float32)
-        stack = [(sx, sy)]
-        while stack:
-            cx, cy = stack.pop()
-            if cx < 0 or cx >= w or cy < 0 or cy >= h:
-                continue
-            if visited[cy, cx]:
-                continue
-            visited[cy, cx] = True
-            if np.abs(pixels[cy, cx] - seed).max() > tol:
-                continue
-            mask[cy, cx] = 1.0
-            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
-        return mask
+        tol = self.tolerance
+        # Convert to uint8 for cv2.floodFill
+        pixels_u8 = np.clip(pixels * 255, 0, 255).astype(np.uint8)
+        ff_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+        lo_diff = (int(tol),) * pixels_u8.shape[2]
+        hi_diff = (int(tol),) * pixels_u8.shape[2]
+        cv2.floodFill(pixels_u8, ff_mask, (sx, sy), 255,
+                      loDiff=lo_diff, upDiff=hi_diff,
+                      flags=cv2.FLOODFILL_MASK_ONLY | (255 << 8))
+        return ff_mask[1:-1, 1:-1].astype(np.float32)
 
     def _global_mask(self, pixels: np.ndarray, sx: int, sy: int) -> np.ndarray:
         seed = pixels[sy, sx]
@@ -170,14 +163,17 @@ class MagicWandTool(Tool):
         layer = doc.layers.active_layer
         if layer is None:
             return
+        # Convert document coords to layer-local pixel coords
+        lx, ly = layer.position
+        px, py = x - lx, y - ly
         h, w = layer.pixels.shape[:2]
-        if x < 0 or x >= w or y < 0 or y >= h:
+        if px < 0 or px >= w or py < 0 or py >= h:
             return
 
         if self.contiguous:
-            mask = self._flood_mask(layer.pixels, x, y)
+            mask = self._flood_mask(layer.pixels, px, py)
         else:
-            mask = self._global_mask(layer.pixels, x, y)
+            mask = self._global_mask(layer.pixels, px, py)
 
         doc.selection._mask = mask
         if self.feather > 0:

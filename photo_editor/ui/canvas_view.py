@@ -13,8 +13,8 @@ import math
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter,
-    QPen, QPixmap, QWheelEvent,
+    QColor, QCursor, QImage, QKeyEvent, QLinearGradient, QMouseEvent,
+    QPainter, QPainterPath, QPen, QPixmap, QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -29,6 +29,58 @@ from ..core.enums import ToolType
 # Pre-built checkerboard tile (fast)
 _CHECKER_SIZE = 16
 _CHECKER_TILE: QPixmap | None = None
+
+# Custom gradient cursor (built lazily)
+_GRADIENT_CURSOR: QCursor | None = None
+
+
+def _make_gradient_cursor() -> QCursor:
+    """Build a crosshair cursor with a tiny gradient swatch indicator."""
+    size = 32
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    cx, cy = size // 2, size // 2
+
+    # Outer thin crosshair (black shadow)
+    pen = QPen(QColor(0, 0, 0, 160), 1.4)
+    pen.setCosmetic(True)
+    p.setPen(pen)
+    gap = 4
+    arm = 10
+    p.drawLine(cx, cy - arm, cx, cy - gap)
+    p.drawLine(cx, cy + gap, cx, cy + arm)
+    p.drawLine(cx - arm, cy, cx - gap, cy)
+    p.drawLine(cx + gap, cy, cx + arm, cy)
+
+    # Inner white crosshair
+    pen2 = QPen(QColor(255, 255, 255, 230), 1.0)
+    pen2.setCosmetic(True)
+    p.setPen(pen2)
+    p.drawLine(cx, cy - arm, cx, cy - gap)
+    p.drawLine(cx, cy + gap, cx, cy + arm)
+    p.drawLine(cx - arm, cy, cx - gap, cy)
+    p.drawLine(cx + gap, cy, cx + arm, cy)
+
+    # Small gradient rectangle at bottom-right
+    gx, gy, gw, gh = cx + 3, cy + 3, 9, 7
+    grad = QLinearGradient(gx, gy, gx + gw, gy)
+    grad.setColorAt(0.0, QColor(0, 0, 0))
+    grad.setColorAt(1.0, QColor(255, 255, 255))
+    p.setPen(QPen(QColor(160, 160, 160), 0.8))
+    p.setBrush(grad)
+    p.drawRoundedRect(gx, gy, gw, gh, 1.5, 1.5)
+
+    p.end()
+    return QCursor(pm, cx, cy)
+
+
+def _gradient_cursor() -> QCursor:
+    global _GRADIENT_CURSOR
+    if _GRADIENT_CURSOR is None:
+        _GRADIENT_CURSOR = _make_gradient_cursor()
+    return _GRADIENT_CURSOR
 
 
 def _checker_tile() -> QPixmap:
@@ -50,7 +102,7 @@ _CURSORS: dict[ToolType, Qt.CursorShape] = {
     ToolType.ERASER: Qt.CursorShape.CrossCursor,
     ToolType.CLONE_STAMP: Qt.CursorShape.CrossCursor,
     ToolType.HEALING_BRUSH: Qt.CursorShape.CrossCursor,
-    ToolType.GRADIENT: Qt.CursorShape.CrossCursor,
+    ToolType.GRADIENT: None,  # handled separately with custom pixmap cursor
     ToolType.PAINT_BUCKET: Qt.CursorShape.CrossCursor,
     ToolType.RECT_SELECT: Qt.CursorShape.CrossCursor,
     ToolType.ELLIPSE_SELECT: Qt.CursorShape.CrossCursor,
@@ -135,6 +187,12 @@ class CanvasView(_BASE_CLASS):
         # Key event forwarding for text editing
         self._key_handler = None  # callable(key, text, modifiers) -> bool
 
+        # Gradient handle overlay state
+        self._grad_start: tuple[int, int] | None = None   # doc coords
+        self._grad_end: tuple[int, int] | None = None
+        self._grad_stops: list = []                        # GradientStop list
+        self._grad_handles_visible: bool = False
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(200, 200)
@@ -148,13 +206,17 @@ class CanvasView(_BASE_CLASS):
         self._last_rgba = rgba
         h, w = rgba.shape[:2]
         self._doc_w, self._doc_h = w, h
+        # Use the buffer directly without .copy() — QPixmap.fromImage
+        # copies the data internally so we don't need a second copy.
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
-        self._pixmap = QPixmap.fromImage(qimg.copy())
+        self._pixmap = QPixmap.fromImage(qimg)
         self.update()
 
     def set_selection_mask(self, mask: np.ndarray | None) -> None:
         """Set the selection mask for overlay rendering."""
         if mask is None:
+            if self._sel_pixmap is None:
+                return  # already cleared, skip update
             self._sel_pixmap = None
             self._sel_mask = None
             self.update()
@@ -165,9 +227,9 @@ class CanvasView(_BASE_CLASS):
         overlay[..., 0] = 70   # blue tint
         overlay[..., 1] = 130
         overlay[..., 2] = 220
-        overlay[..., 3] = (mask * 80).astype(np.uint8)
+        np.multiply(mask, 80, out=overlay[..., 3], casting='unsafe')
         qimg = QImage(overlay.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
-        self._sel_pixmap = QPixmap.fromImage(qimg.copy())
+        self._sel_pixmap = QPixmap.fromImage(qimg)
         self.update()
 
     def set_drag_rect(self, rect: QRectF | None) -> None:
@@ -182,6 +244,9 @@ class CanvasView(_BASE_CLASS):
         self.update()
 
     def set_tool_cursor(self, tool_type: ToolType) -> None:
+        if tool_type == ToolType.GRADIENT:
+            self.setCursor(_gradient_cursor())
+            return
         shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
 
@@ -234,6 +299,22 @@ class CanvasView(_BASE_CLASS):
 
     def _blink_cursor(self) -> None:
         self._text_cursor_visible = not self._text_cursor_visible
+        self.update()
+
+    # ---- Gradient handle overlay API ----------------------------------------
+
+    def set_gradient_handles(
+        self,
+        start: tuple[int, int] | None,
+        end: tuple[int, int] | None,
+        stops: list,
+        visible: bool,
+    ) -> None:
+        """Set / clear the gradient control-line overlay (doc coords)."""
+        self._grad_start = start
+        self._grad_end = end
+        self._grad_stops = list(stops) if stops else []
+        self._grad_handles_visible = visible
         self.update()
 
     # ---- Brush cursor / live dab preview ------------------------------------
@@ -367,6 +448,10 @@ class CanvasView(_BASE_CLASS):
         # Brush cursor preview circle
         if self._brush_size > 0 and self._brush_cursor_visible:
             self._draw_brush_cursor(p)
+
+        # Gradient control line + stop handles
+        if self._grad_handles_visible:
+            self._draw_gradient_handles(p, dr)
 
         p.end()
 
@@ -502,6 +587,76 @@ class CanvasView(_BASE_CLASS):
         p.setPen(QPen(QColor(255, 255, 255, 200), 1.0))
         p.drawLine(QPointF(pos.x() - ch, pos.y()), QPointF(pos.x() + ch, pos.y()))
         p.drawLine(QPointF(pos.x(), pos.y() - ch), QPointF(pos.x(), pos.y() + ch))
+
+        p.restore()
+
+    # ---- Gradient handle overlay drawing ------------------------------------
+
+    def _draw_gradient_handles(self, p: QPainter, dr: QRectF) -> None:
+        """Draw the gradient control line with coloured stop circles."""
+        if not self._grad_start or not self._grad_end:
+            return
+        if self._doc_w == 0 or self._doc_h == 0:
+            return
+
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+
+        s = QPointF(dr.left() + self._grad_start[0] * sx,
+                     dr.top() + self._grad_start[1] * sy)
+        e = QPointF(dr.left() + self._grad_end[0] * sx,
+                     dr.top() + self._grad_end[1] * sy)
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # ---- Control line (dark shadow + bright inner) ----
+        pen_shadow = QPen(QColor(0, 0, 0, 100), 3.0)
+        pen_shadow.setCosmetic(True)
+        p.setPen(pen_shadow)
+        p.drawLine(s, e)
+
+        pen_line = QPen(QColor(255, 255, 255, 200), 1.4)
+        pen_line.setCosmetic(True)
+        p.setPen(pen_line)
+        p.drawLine(s, e)
+
+        # ---- Intermediate stop circles (small) ----
+        for stop in self._grad_stops:
+            if stop.position <= 0.0 or stop.position >= 1.0:
+                continue
+            cx = s.x() + (e.x() - s.x()) * stop.position
+            cy = s.y() + (e.y() - s.y()) * stop.position
+            r, g, b, a = stop.color.to_rgb8()
+            p.setPen(QPen(QColor(255, 255, 255, 220), 1.4))
+            p.setBrush(QColor(r, g, b, a))
+            p.drawEllipse(QPointF(cx, cy), 5.0, 5.0)
+
+        # ---- Start endpoint handle ----
+        if self._grad_stops:
+            r0, g0, b0, a0 = self._grad_stops[0].color.to_rgb8()
+        else:
+            r0, g0, b0, a0 = 0, 0, 0, 255
+        # Shadow ring
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 50))
+        p.drawEllipse(s, 10.0, 10.0)
+        # Fill + border
+        p.setPen(QPen(QColor(255, 255, 255), 2.0))
+        p.setBrush(QColor(r0, g0, b0, a0))
+        p.drawEllipse(s, 8.0, 8.0)
+
+        # ---- End endpoint handle ----
+        if self._grad_stops:
+            r1, g1, b1, a1 = self._grad_stops[-1].color.to_rgb8()
+        else:
+            r1, g1, b1, a1 = 255, 255, 255, 255
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 50))
+        p.drawEllipse(e, 10.0, 10.0)
+        p.setPen(QPen(QColor(255, 255, 255), 2.0))
+        p.setBrush(QColor(r1, g1, b1, a1))
+        p.drawEllipse(e, 8.0, 8.0)
 
         p.restore()
 
@@ -681,7 +836,12 @@ class CanvasView(_BASE_CLASS):
         if self._brush_size > 0:
             self._brush_cursor_pos = event.position()
             self._brush_cursor_visible = True
-            self.update()
+            # Only repaint the brush cursor area, not the whole widget.
+            # Full canvas repaint is triggered by set_image when the
+            # render pipeline finishes via _schedule_render.
+            radius = int((self._brush_size / 2) * self._zoom) + 4
+            cx, cy = int(event.position().x()), int(event.position().y())
+            self.update(cx - radius, cy - radius, radius * 2, radius * 2)
 
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.tool_moved.emit(dx, dy, 1.0)

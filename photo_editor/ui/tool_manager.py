@@ -20,6 +20,10 @@ from ..tools.text_tool import TextTool
 from ..tools.tool_base import Tool
 from ..tools.transform_tool import TransformTool
 from ..tools.move_tool import MoveTool
+from ..tools.zoom_tool import ZoomTool
+from ..tools.pan_tool import PanTool
+from ..tools.eyedropper import EyedropperTool
+from ..tools.crop_tool import CropTool
 
 
 class ToolManager:
@@ -41,6 +45,10 @@ class ToolManager:
             ToolType.TEXT: TextTool(),
             ToolType.SHAPE: ShapeTool(),
             ToolType.TRANSFORM: TransformTool(),
+            ToolType.ZOOM: ZoomTool(),
+            ToolType.PAN: PanTool(),
+            ToolType.EYEDROPPER: EyedropperTool(),
+            ToolType.CROP: CropTool(),
         }
         self._active_type = ToolType.BRUSH
 
@@ -101,6 +109,9 @@ class ToolManager:
             return {}
         # Text tool uses its own properties bar — skip generic introspection
         if self._active_type == ToolType.TEXT:
+            return {}
+        # Gradient tool uses its own specialised bar
+        if self._active_type == ToolType.GRADIENT:
             return {}
         defs: dict[str, tuple[float, float, float]] = {}
         _RANGES = {

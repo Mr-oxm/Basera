@@ -2,7 +2,6 @@
 
 import math
 
-import cv2
 import numpy as np
 
 from .tool_base import Tool
@@ -83,8 +82,9 @@ class TransformTool(Tool):
         self._start_x, self._start_y = x, y
         self._orig_pixels = layer.pixels.copy()
         h, w = layer.pixels.shape[:2]
-        self._center_x = w / 2.0
-        self._center_y = h / 2.0
+        lx, ly = layer.position
+        self._center_x = lx + w / 2.0
+        self._center_y = ly + h / 2.0
         self._dragging = True
 
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:

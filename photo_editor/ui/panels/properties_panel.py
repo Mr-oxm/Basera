@@ -3,6 +3,10 @@
 When the Text tool is active, the panel switches to a specialised
 layout with font picker, bold/italic/underline toggles, alignment,
 colour, and spacing controls.
+
+When the Gradient tool is active, the panel switches to a gradient
+properties bar with colour / gradient picker, type selector, opacity,
+and reverse.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..widgets.color_dropdown import ColorDropdown
+from ..widgets.gradient_editor import GradientEditor
 
 
 # ============================================================================
@@ -587,6 +592,150 @@ class TextPropertiesBar(QWidget):
 
 
 # ============================================================================
+# Gradient properties bar
+# ============================================================================
+
+_COMBO_STYLE = (
+    "QComboBox {"
+    "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
+    "  color: #ccc; font-size: 11px; padding: 2px 8px;"
+    "  min-height: 20px; max-height: 22px;"
+    "}"
+    "QComboBox:hover { border: 1px solid #5a8abf; }"
+    "QComboBox::drop-down { border: none; width: 16px; }"
+    "QComboBox::down-arrow { image: none; border: none; }"
+    "QComboBox QAbstractItemView {"
+    "  background: #333; border: 1px solid #484848; border-radius: 4px;"
+    "  color: #ccc; selection-background-color: #4a6fa5;"
+    "}"
+)
+
+
+class GradientPropertiesBar(QWidget):
+    """Horizontal bar with gradient-specific controls.
+
+    Signals
+    -------
+    property_changed(str, object)
+        Emitted as *(key, value)* for gradient type, opacity, reverse,
+        or gradient stop changes.
+    """
+
+    property_changed = Signal(str, object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+
+        # ---- Colour / gradient dropdown (defaults to Gradient tab) ----
+        self._color_dropdown = ColorDropdown(
+            label="Gradient:",
+            show_gradient=True,
+            show_wheel=True,
+            default_tab=2,  # open on gradient tab
+        )
+        self._color_dropdown.gradient_changed.connect(self._on_gradient_pick)
+        layout.addWidget(self._color_dropdown)
+
+        layout.addWidget(self._separator())
+
+        # ---- Type ----
+        lbl = QLabel("Type:")
+        lbl.setStyleSheet(_LABEL_STYLE)
+        layout.addWidget(lbl)
+
+        self._type_combo = QComboBox()
+        self._type_combo.addItems(["Linear", "Radial", "Conical", "Diamond"])
+        self._type_combo.setMaximumHeight(24)
+        self._type_combo.setFixedWidth(90)
+        self._type_combo.setStyleSheet(_COMBO_STYLE)
+        self._type_combo.currentTextChanged.connect(self._on_type_changed)
+        layout.addWidget(self._type_combo)
+
+        layout.addWidget(self._separator())
+
+        # ---- Opacity ----
+        lbl2 = QLabel("Opacity:")
+        lbl2.setStyleSheet(_LABEL_STYLE)
+        layout.addWidget(lbl2)
+
+        self._opacity_spin = QSpinBox()
+        self._opacity_spin.setRange(0, 100)
+        self._opacity_spin.setValue(100)
+        self._opacity_spin.setSuffix("%")
+        self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._opacity_spin.setMaximumWidth(60)
+        self._opacity_spin.setMaximumHeight(22)
+        self._opacity_spin.setStyleSheet(
+            "QSpinBox { font-size: 9pt; padding: 2px;"
+            " min-height: 20px; max-height: 22px; }"
+        )
+        self._opacity_spin.valueChanged.connect(self._on_opacity_changed)
+        layout.addWidget(self._opacity_spin)
+
+        layout.addWidget(self._separator())
+
+        # ---- Reverse ----
+        self._rev_btn = QPushButton("\u27F3 Reverse")
+        self._rev_btn.setFixedHeight(22)
+        self._rev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rev_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
+            "  color: #aaa; font-size: 11px; padding: 2px 8px;"
+            "}"
+            "QPushButton:hover { border: 1px solid #5a8abf; color: #ddd; }"
+            "QPushButton:pressed { background: #404040; }"
+        )
+        self._rev_btn.clicked.connect(self._on_reverse)
+        layout.addWidget(self._rev_btn)
+
+        layout.addStretch()
+
+    # ---- helpers ------------------------------------------------------------
+
+    @staticmethod
+    def _separator() -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #555;")
+        sep.setFixedWidth(2)
+        return sep
+
+    # ---- slots --------------------------------------------------------------
+
+    def _on_gradient_pick(self, fill) -> None:
+        self.property_changed.emit("gradient_fill", fill)
+
+    def _on_type_changed(self, text: str) -> None:
+        self.property_changed.emit("gradient_type", text.lower())
+
+    def _on_opacity_changed(self, val: int) -> None:
+        self.property_changed.emit("opacity", val / 100.0)
+
+    def _on_reverse(self) -> None:
+        self.property_changed.emit("reverse", True)
+
+    # ---- sync from tool state ----------------------------------------------
+
+    def sync_from_tool(self, tool) -> None:
+        """Update controls to reflect the gradient tool's current state."""
+        self.blockSignals(True)
+        try:
+            if hasattr(tool, "gradient_type"):
+                idx = {"linear": 0, "radial": 1, "conical": 2, "diamond": 3}.get(
+                    tool.gradient_type, 0
+                )
+                self._type_combo.setCurrentIndex(idx)
+            if hasattr(tool, "opacity"):
+                self._opacity_spin.setValue(int(tool.opacity * 100))
+        finally:
+            self.blockSignals(False)
+
+
+# ============================================================================
 # Main Properties Panel
 # ============================================================================
 
@@ -600,6 +749,8 @@ class PropertiesPanel(QWidget):
     value_changed = Signal(str, object)
     # Specialised text property signal
     text_property_changed = Signal(str, object)
+    # Gradient property signal
+    gradient_property_changed = Signal(str, object)
 
     _PANEL_BG = "#333333"
 
@@ -629,12 +780,20 @@ class PropertiesPanel(QWidget):
             lambda k, v: self.text_property_changed.emit(k, v))
         self._text_bar.hide()
         self._main_layout.addWidget(self._text_bar)
-        
+
+        # Gradient properties bar (hidden by default)
+        self._gradient_bar = GradientPropertiesBar()
+        self._gradient_bar.property_changed.connect(
+            lambda k, v: self.gradient_property_changed.emit(k, v))
+        self._gradient_bar.hide()
+        self._main_layout.addWidget(self._gradient_bar)
+
         self._main_layout.addStretch()
         
         self._widgets: dict[str, CompactPropertyWidget] = {}
         self._text_mode = False
-        
+        self._gradient_mode = False
+
         self.setFixedHeight(34)
 
     # ---- Mode switching ----
@@ -642,14 +801,30 @@ class PropertiesPanel(QWidget):
     def set_text_mode(self, enabled: bool, tool=None) -> None:
         """Switch between generic slider mode and text properties mode."""
         self._text_mode = enabled
-        self._props_container.setVisible(not enabled)
+        self._gradient_mode = False
+        self._props_container.setVisible(not enabled and not self._gradient_mode)
         self._text_bar.setVisible(enabled)
+        self._gradient_bar.setVisible(False)
         if enabled and tool is not None:
             self._text_bar.sync_from_tool(tool)
+
+    def set_gradient_mode(self, enabled: bool, tool=None) -> None:
+        """Switch to gradient properties mode."""
+        self._gradient_mode = enabled
+        self._text_mode = False
+        self._props_container.setVisible(not enabled)
+        self._text_bar.setVisible(False)
+        self._gradient_bar.setVisible(enabled)
+        if enabled and tool is not None:
+            self._gradient_bar.sync_from_tool(tool)
 
     @property
     def text_bar(self) -> TextPropertiesBar:
         return self._text_bar
+
+    @property
+    def gradient_bar(self) -> GradientPropertiesBar:
+        return self._gradient_bar
 
     # ---- Generic API (unchanged) ----
 

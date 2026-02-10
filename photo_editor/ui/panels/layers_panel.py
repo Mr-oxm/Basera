@@ -322,43 +322,58 @@ def _ico_settings():
 
 # ---- Thumbnail helper -------------------------------------------------------
 
+# Pre-built checkerboard tile for thumbnails (built once, reused)
+_THUMB_CHECKER: QPixmap | None = None
+
+
+def _thumb_checker(size: int = _THUMB_SIZE) -> QPixmap:
+    global _THUMB_CHECKER
+    if _THUMB_CHECKER is None or _THUMB_CHECKER.width() != size:
+        _THUMB_CHECKER = QPixmap(size, size)
+        _THUMB_CHECKER.fill(QColor(42, 42, 42))
+        tp = QPainter(_THUMB_CHECKER)
+        tp.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        cs = 4
+        light, dark = QColor(70, 70, 70), QColor(50, 50, 50)
+        for r in range(0, size, cs):
+            for c in range(0, size, cs):
+                tp.fillRect(c, r, cs, cs, light if (r // cs + c // cs) % 2 == 0 else dark)
+        tp.end()
+    return _THUMB_CHECKER
+
+
 def _make_thumbnail(layer, size: int = _THUMB_SIZE) -> QPixmap:
     """Generate a small QPixmap thumbnail for *layer*."""
-    pm = QPixmap(size, size)
-
-    # Draw a transparency checkerboard background
-    pm.fill(QColor(42, 42, 42))
-    tp = QPainter(pm)
-    tp.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-    cs = 4  # checker cell size
-    light, dark = QColor(70, 70, 70), QColor(50, 50, 50)
-    for r in range(0, size, cs):
-        for c in range(0, size, cs):
-            tp.fillRect(c, r, cs, cs, light if (r // cs + c // cs) % 2 == 0 else dark)
+    pm = QPixmap(_thumb_checker(size))  # copy pre-built checkerboard
 
     # Paint the layer pixels scaled into the square
     try:
         px = layer.pixels  # float32, (H, W, 4)
         if px is not None and px.size > 0:
             h, w = px.shape[:2]
-            rgb = np.clip(px[:, :, :3] * 255, 0, 255).astype(np.uint8)
-            alpha = np.clip(px[:, :, 3] * 255, 0, 255).astype(np.uint8)
-            buf = np.zeros((h, w, 4), dtype=np.uint8)
-            buf[:, :, 0] = rgb[:, :, 2]  # B
-            buf[:, :, 1] = rgb[:, :, 1]  # G
-            buf[:, :, 2] = rgb[:, :, 0]  # R
-            buf[:, :, 3] = alpha
+            # Downsample before conversion for large layers
+            if h > size * 4 or w > size * 4:
+                step_h = max(1, h // (size * 2))
+                step_w = max(1, w // (size * 2))
+                px = px[::step_h, ::step_w]
+                h, w = px.shape[:2]
+            buf = np.empty((h, w, 4), dtype=np.uint8)
+            np.multiply(px[:, :, 2:3], 255, out=buf[:, :, 0:1], casting='unsafe')  # B
+            np.multiply(px[:, :, 1:2], 255, out=buf[:, :, 1:2], casting='unsafe')  # G
+            np.multiply(px[:, :, 0:1], 255, out=buf[:, :, 2:3], casting='unsafe')  # R
+            np.multiply(px[:, :, 3:4], 255, out=buf[:, :, 3:4], casting='unsafe')  # A
+            np.clip(buf, 0, 255, out=buf)
             img = QImage(buf.data, w, h, w * 4, QImage.Format.Format_ARGB32)
-            # keep buf alive during drawImage
             scaled = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation)
+                                Qt.TransformationMode.FastTransformation)
+            tp = QPainter(pm)
             ox = (size - scaled.width()) // 2
             oy = (size - scaled.height()) // 2
             tp.drawImage(ox, oy, scaled)
+            tp.end()
     except Exception:
         pass
 
-    tp.end()
     return pm
 
 
@@ -472,6 +487,27 @@ class _LayerItemWidget(QWidget):
             lambda: self.visibility_clicked.emit(layer_id),
         )
         layout.addWidget(self._vis_btn)
+
+    # ---- State sync (no rebuild) --------------------------------------------
+
+    def update_state(self, visible: bool, locked: bool) -> None:
+        """Sync the eye / lock icons to match the current layer state."""
+        self._vis_btn.setIcon(_icon_eye(visible))
+        # Lock indicator: add or remove as needed
+        if locked and not hasattr(self, '_lock_icon'):
+            self._lock_icon = QLabel()
+            self._lock_icon.setPixmap(_icon_lock(True).pixmap(16, 16))
+            self._lock_icon.setFixedSize(20, 20)
+            self._lock_icon.setToolTip("Locked")
+            self._lock_icon.setStyleSheet("background: transparent;")
+            # Insert before the visibility button
+            lay = self.layout()
+            idx = lay.indexOf(self._vis_btn)
+            lay.insertWidget(idx, self._lock_icon)
+        elif not locked and hasattr(self, '_lock_icon'):
+            self._lock_icon.setParent(None)
+            self._lock_icon.deleteLater()
+            del self._lock_icon
 
     # ---- Inline rename -------------------------------------------------------
 
@@ -942,14 +978,35 @@ class LayersPanel(QWidget):
 
     # ---- Public API ---------------------------------------------------------
 
-    def refresh(self, document: Document) -> None:
+    def refresh(self, document: Document, *, thumbnails: bool = True) -> None:
+        """Rebuild the layer list.
+
+        Parameters
+        ----------
+        document : Document
+            The document whose layers to display.
+        thumbnails : bool
+            If *False*, skip expensive thumbnail regeneration (useful
+            during interactive operations like typing or dragging).
+        """
         self._doc = document
         self._refreshing = True
 
+        # --- Fast path: if the layer structure hasn't changed, just
+        # update the active-layer highlight and header controls.
+        display_order = self._build_display_order(document, self._collapsed_groups)
+        new_ids = [layer.id for layer, _ in display_order]
+        structure_changed = (new_ids != self._row_layer_ids)
+
+        if not structure_changed and not thumbnails:
+            # Structure identical — sync per-row state + highlight.
+            self._sync_row_states(document)
+            self._sync_active(document)
+            self._refreshing = False
+            return
+
         self._list.clear()
         self._row_layer_ids = []
-
-        display_order = self._build_display_order(document, self._collapsed_groups)
 
         for layer, indent in display_order:
             is_group = layer.layer_type == LayerType.GROUP
@@ -966,7 +1023,9 @@ class LayersPanel(QWidget):
             item.setData(_ROLE_PARENT_ID, layer.parent_id or "")
             item.setSizeHint(QSize(0, _ROW_HEIGHT))
 
-            thumbnail = _make_thumbnail(layer) if not is_group and not is_adjustment and not is_filter and not is_text else None
+            thumbnail = None
+            if thumbnails and not is_group and not is_adjustment and not is_filter and not is_text:
+                thumbnail = _make_thumbnail(layer)
 
             widget = _LayerItemWidget(
                 layer.id, layer.name, layer.visible, layer.locked,
@@ -985,7 +1044,33 @@ class LayersPanel(QWidget):
             self._list.setItemWidget(item, widget)
             self._row_layer_ids.append(layer.id)
 
-        # Highlight active layer
+        self._sync_active(document)
+        self._refreshing = False
+
+    def _sync_row_states(self, document: Document) -> None:
+        """Update per-row visibility / lock icons without rebuilding."""
+        layers_by_id = {layer.id: layer for layer in document.layers}
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if not item:
+                continue
+            lid = item.data(_ROLE_LAYER_ID)
+            layer = layers_by_id.get(lid)
+            if not layer:
+                continue
+            widget = self._list.itemWidget(item)
+            if isinstance(widget, _LayerItemWidget):
+                widget.update_state(layer.visible, layer.locked)
+
+    def refresh_controls_only(self, document: Document) -> None:
+        """Lightweight refresh — sync header controls without rebuilding the list."""
+        self._doc = document
+        self._refreshing = True
+        self._sync_active(document)
+        self._refreshing = False
+
+    def _sync_active(self, document: Document) -> None:
+        """Highlight the active layer and sync header controls."""
         active = document.layers.active_layer
         if active:
             for row in range(self._list.count()):
@@ -994,8 +1079,6 @@ class LayersPanel(QWidget):
                     self._list.setCurrentRow(row)
                     break
 
-        # Sync controls to active layer
-        if active:
             op_val = int(active.opacity * 100)
             self._opacity_spin.blockSignals(True)
             self._opacity_spin.setValue(op_val)
@@ -1008,10 +1091,7 @@ class LayersPanel(QWidget):
                 self._blend_combo.blockSignals(True)
                 self._blend_combo.setCurrentIndex(blend_idx)
                 self._blend_combo.blockSignals(False)
-            # Update header lock button to match active layer
             self._lock_btn.setIcon(_icon_lock(active.locked))
-
-        self._refreshing = False
 
     def selected_layer_ids(self) -> list[str]:
         ids: list[str] = []

@@ -69,3 +69,4 @@ class Tool(ABC):
         inv_mask = 1.0 - mask
         np.multiply(roi, inv_mask, out=roi)
         roi += color * mask
+        np.clip(roi, 0, 1, out=roi)

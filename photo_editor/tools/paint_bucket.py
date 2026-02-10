@@ -1,5 +1,6 @@
 """Paint Bucket tool — flood-fills a contiguous region with a solid colour."""
 
+import cv2
 import numpy as np
 
 from .tool_base import Tool
@@ -23,26 +24,22 @@ class PaintBucketTool(Tool):
     @staticmethod
     def _flood_fill_mask(pixels: np.ndarray, sx: int, sy: int,
                          tolerance: float) -> np.ndarray:
-        """Return a boolean mask of connected pixels similar to the seed colour."""
-        h, w = pixels.shape[:2]
-        seed_color = pixels[sy, sx].copy()
-        visited = np.zeros((h, w), dtype=np.bool_)
-        mask = np.zeros((h, w), dtype=np.bool_)
-        stack = [(sx, sy)]
-        tol = tolerance / 255.0  # normalise to [0, 1] colour space
+        """Return a boolean mask of connected pixels similar to the seed colour.
 
-        while stack:
-            cx, cy = stack.pop()
-            if cx < 0 or cx >= w or cy < 0 or cy >= h:
-                continue
-            if visited[cy, cx]:
-                continue
-            visited[cy, cx] = True
-            diff = np.abs(pixels[cy, cx] - seed_color).max()
-            if diff > tol:
-                continue
-            mask[cy, cx] = True
-            stack.extend([(cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)])
+        Uses cv2.floodFill for efficient C-level flood fill.
+        """
+        h, w = pixels.shape[:2]
+        # Convert to uint8 for cv2.floodFill
+        pixels_u8 = np.clip(pixels * 255, 0, 255).astype(np.uint8)
+        # cv2.floodFill needs a mask 2px larger than the image
+        ff_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+        lo_diff = (int(tolerance),) * pixels_u8.shape[2]
+        hi_diff = (int(tolerance),) * pixels_u8.shape[2]
+        cv2.floodFill(pixels_u8, ff_mask, (sx, sy), 255,
+                      loDiff=lo_diff, upDiff=hi_diff,
+                      flags=cv2.FLOODFILL_MASK_ONLY | (255 << 8))
+        # Extract the inner mask (strip the 1px border)
+        mask = ff_mask[1:-1, 1:-1].astype(np.bool_)
         return mask
 
     @staticmethod

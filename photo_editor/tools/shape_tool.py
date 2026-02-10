@@ -104,17 +104,20 @@ class ShapeTool(Tool):
         if layer is None or layer.locked:
             return
 
+        lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
         # Render shape into a BGRA uint8 buffer then convert to float RGBA
         buf = np.zeros((h, w, 4), dtype=np.uint8)
-        sx, sy = self._start_x, self._start_y
+        # Convert document coords to layer-local coords
+        sx, sy = self._start_x - lx, self._start_y - ly
+        ex, ey = x - lx, y - ly
         draw_fn = {
             "rect": self._draw_rect,
             "ellipse": self._draw_ellipse,
             "line": self._draw_line,
             "polygon": self._draw_polygon,
         }.get(self.shape_type, self._draw_rect)
-        draw_fn(buf, sx, sy, x, y)
+        draw_fn(buf, sx, sy, ex, ey)
 
         # Convert BGRA uint8 → RGBA float32
         shape_rgba = np.zeros_like(buf, dtype=np.float32)

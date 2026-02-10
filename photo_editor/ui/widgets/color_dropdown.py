@@ -199,6 +199,11 @@ class _ColorPopup(QWidget):
             self._wheel.set_color(c)
         self._updating = False
 
+    def set_active_tab(self, index: int) -> None:
+        """Programmatically switch to the tab at *index*."""
+        if 0 <= index < self._tabs.count():
+            self._tabs.setCurrentIndex(index)
+
     def _on_tab(self, idx: int) -> None:
         self._stack.setCurrentIndex(idx)
 
@@ -339,11 +344,13 @@ class ColorDropdown(QWidget):
         *,
         show_gradient: bool = True,
         show_wheel: bool = False,
+        default_tab: int = 0,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._show_gradient = show_gradient
         self._show_wheel = show_wheel
+        self._default_tab = default_tab
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -397,6 +404,9 @@ class ColorDropdown(QWidget):
             pos = self._btn.mapToGlobal(QPoint(0, self._btn.height() + 4))
             self._popup.move(pos)
             self._popup.show()
+            # Apply default tab on first open (or always for gradient mode)
+            if self._default_tab:
+                self._popup.set_active_tab(self._default_tab)
 
     def _on_live(self, c: Color) -> None:
         self._color = c

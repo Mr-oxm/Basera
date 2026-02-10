@@ -62,6 +62,14 @@ class MainWindow(QMainWindow):
         self._render_pending = False
         self._dragging = False
 
+        # Deferred panel refresh — coalesced to avoid rebuilding panels
+        # dozens of times per second during interactive operations.
+        self._panel_refresh_timer = QTimer(self)
+        self._panel_refresh_timer.setInterval(200)  # 5 fps panel updates
+        self._panel_refresh_timer.setSingleShot(True)
+        self._panel_refresh_timer.timeout.connect(self._do_deferred_panel_refresh)
+        self._panel_refresh_pending = False
+
         self._build_ui()
         self._wire_menus()
         self._wire_panels()
@@ -192,6 +200,7 @@ class MainWindow(QMainWindow):
         self._color_panel.fg_changed.connect(self._on_fg_color_changed)
         self._props_panel.value_changed.connect(self._on_prop_changed)
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
+        self._props_panel.gradient_property_changed.connect(self._on_gradient_prop_changed)
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -219,7 +228,7 @@ class MainWindow(QMainWindow):
         self._canvas.zoom_to_fit()
         self._status.set_document_info(self._doc.name, w, h)
 
-    def _refresh(self, invalidate: bool = True) -> None:
+    def _refresh(self, invalidate: bool = True, layer_id: str | None = None) -> None:
         """Full UI refresh.
 
         Parameters
@@ -229,11 +238,14 @@ class MainWindow(QMainWindow):
             composite is recomputed.  Pass *False* for operations that
             only change non-pixel state (layer selection, panel sync)
             to skip expensive recompositing.
+        layer_id : str | None
+            Optional layer that changed.  When set the engine can use
+            its incremental cache instead of a full rebuild.
         """
         if not self._doc:
             return
         if invalidate:
-            self._pipeline.invalidate()
+            self._pipeline.invalidate(layer_id)
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result, force=invalidate)
         self._layers_panel.refresh(self._doc)
@@ -245,9 +257,21 @@ class MainWindow(QMainWindow):
         """Re-render and update canvas only (skip panel updates)."""
         if not self._doc:
             return
-        self._pipeline.invalidate()
+        active = self._doc.layers.active_layer
+        self._pipeline.invalidate(active.id if active else None)
         result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result)
+        self._canvas.set_image(result, force=True)
+        self._update_transform_box()
+
+    def _refresh_lightweight(self) -> None:
+        """Re-render canvas + lightweight panel sync (no thumbnails)."""
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        self._pipeline.invalidate(active.id if active else None)
+        result = self._pipeline.execute_to_uint8(self._doc)
+        self._canvas.set_image(result, force=True)
+        self._layers_panel.refresh_controls_only(self._doc)
         self._update_transform_box()
 
     def _schedule_render(self) -> None:
@@ -260,6 +284,19 @@ class MainWindow(QMainWindow):
         """Timer callback — perform the actual canvas render."""
         self._render_pending = False
         self._refresh_canvas_only()
+
+    def _schedule_panel_refresh(self) -> None:
+        """Request a deferred panel refresh (throttled to ~5fps)."""
+        if not self._panel_refresh_pending:
+            self._panel_refresh_pending = True
+            self._panel_refresh_timer.start()
+
+    def _do_deferred_panel_refresh(self) -> None:
+        """Timer callback — perform the actual panel refresh."""
+        self._panel_refresh_pending = False
+        if self._doc:
+            self._layers_panel.refresh(self._doc, thumbnails=False)
+            self._history_panel.refresh(self._doc.history)
 
     def _update_selection_overlay(self) -> None:
         if self._doc and self._doc.selection._mask is not None:
@@ -508,7 +545,7 @@ class MainWindow(QMainWindow):
             if layer:
                 layer.visible = not layer.visible
                 self._refresh_canvas_only()
-                self._layers_panel.refresh(self._doc)
+                self._layers_panel.refresh(self._doc, thumbnails=False)
 
     def _on_toggle_lock(self, layer_id: str) -> None:
         if self._doc:
@@ -516,7 +553,7 @@ class MainWindow(QMainWindow):
             if layer:
                 layer.locked = not layer.locked
                 # Lock doesn't affect pixel data — skip invalidation
-                self._layers_panel.refresh(self._doc)
+                self._layers_panel.refresh_controls_only(self._doc)
                 self._update_transform_box()
 
     def _on_rename_layer(self, layer_id: str, new_name: str) -> None:
@@ -616,6 +653,42 @@ class MainWindow(QMainWindow):
         # Setup text tool callbacks
         if t == ToolType.TEXT:
             self._text_setup()
+        # Wire up gradient tool callbacks
+        if t == ToolType.GRADIENT:
+            self._gradient_setup()
+        # Wire up eyedropper colour callback
+        if t == ToolType.EYEDROPPER:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.set_color_callback(self._on_eyedropper_sample)
+        # Wire up zoom tool callback
+        if t == ToolType.ZOOM:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.set_zoom_callback(self._on_zoom_tool)
+        # Wire up pan tool callback
+        if t == ToolType.PAN:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.set_pan_callback(self._on_pan_tool)
+
+    def _on_eyedropper_sample(self, rgba) -> None:
+        """Called when the eyedropper samples a colour."""
+        from ..core.color import Color
+        self._tools.set_foreground_color(rgba)
+        if hasattr(self, "_color_panel"):
+            c = Color.from_array(rgba)
+            self._color_panel._mgr.foreground = c
+
+    def _on_zoom_tool(self, factor: float) -> None:
+        """Called when the zoom tool requests a zoom change."""
+        self._canvas.set_zoom(self._canvas.zoom * factor)
+
+    def _on_pan_tool(self, dx: int, dy: int) -> None:
+        """Called when the pan tool requests a pan delta."""
+        from PySide6.QtCore import QPointF
+        self._canvas._pan += QPointF(dx * self._canvas.zoom, dy * self._canvas.zoom)
+        self._canvas.update()
 
     def _on_canvas_hover(self, x: int, y: int) -> None:
         """Handle non-drag mouse movement for cursor updates."""
@@ -669,7 +742,8 @@ class MainWindow(QMainWindow):
         self._canvas.set_drag_rect(None)
         if hasattr(self, "_drag_start"):
             del self._drag_start
-        self._refresh()
+        active = self._doc.layers.active_layer if self._doc else None
+        self._refresh(layer_id=active.id if active else None)
         # Update text overlay after release (may have created a new text layer)
         if self._tools.active_type == ToolType.TEXT:
             self._text_update_overlay()
@@ -682,6 +756,7 @@ class MainWindow(QMainWindow):
         if tool is None:
             self._props_panel.clear()
             self._props_panel.set_text_mode(False)
+            self._props_panel.set_gradient_mode(False)
             return
 
         # Text tool uses its own specialised properties bar
@@ -690,7 +765,14 @@ class MainWindow(QMainWindow):
             self._props_panel.set_text_mode(True, tool)
             return
 
+        # Gradient tool uses its own specialised properties bar
+        if tool_type == ToolType.GRADIENT:
+            self._props_panel.clear()
+            self._props_panel.set_gradient_mode(True, tool)
+            return
+
         self._props_panel.set_text_mode(False)
+        self._props_panel.set_gradient_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -718,6 +800,57 @@ class MainWindow(QMainWindow):
             return
         tool.apply_property(key, value)
         self._text_update_overlay()
+
+    # ---- Gradient tool -------------------------------------------------------
+
+    def _gradient_setup(self) -> None:
+        """Wire callbacks for the gradient tool."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        tool.set_preview_callback(self._schedule_render)
+        tool.set_handles_callback(self._on_gradient_handles)
+
+    def _on_gradient_handles(self, start, end, stops, visible) -> None:
+        """Update the canvas gradient-handle overlay."""
+        self._canvas.set_gradient_handles(start, end, stops, visible)
+
+    def _on_gradient_prop_changed(self, key: str, value: object) -> None:
+        """Handle property changes from the gradient properties bar."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.GRADIENT:
+            return
+        if key == "gradient_type":
+            tool.gradient_type = str(value)
+            if tool.is_editing:
+                tool._reapply_gradient()
+                self._refresh()
+        elif key == "opacity":
+            tool.opacity = float(value)
+            if tool.is_editing:
+                tool._reapply_gradient()
+                self._refresh()
+        elif key == "reverse":
+            tool.reverse_gradient()
+            self._refresh()
+        elif key == "gradient_fill":
+            # Received a ColorFill from the gradient editor — extract stops
+            fill = value
+            if hasattr(fill, "stops"):
+                tool.stops = list(fill.stops)
+            # Map fill class → gradient_type string
+            from ..core.color import LinearGradient, RadialGradient
+            from ..core.color_engine import ConicalGradient, DiamondGradient
+            _cls_map = {
+                LinearGradient: "linear",
+                RadialGradient: "radial",
+                ConicalGradient: "conical",
+                DiamondGradient: "diamond",
+            }
+            gtype = _cls_map.get(type(fill))
+            if gtype:
+                tool.gradient_type = gtype
+            self._refresh()
 
     # ---- Brush cursor --------------------------------------------------------
 
@@ -758,7 +891,7 @@ class MainWindow(QMainWindow):
         else:
             self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result)
+        self._canvas.set_image(result, force=True)
 
     def _on_adjustment(self, name: str) -> None:
         if self._doc and run_adjustment(name, self._doc, self, preview_fn=self._preview_render):
@@ -941,12 +1074,13 @@ class MainWindow(QMainWindow):
                     self._refresh()
 
     def _text_on_refresh(self) -> None:
-        """Called by the text tool when it needs a visual refresh."""
-        self._pipeline.invalidate()
-        result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result)
-        self._history_panel.refresh(self._doc.history)
-        self._layers_panel.refresh(self._doc)
+        """Called by the text tool when it needs a visual refresh.
+
+        Uses the same 30fps throttle as other tools to avoid blocking
+        the event loop on every keystroke.
+        """
+        self._schedule_render()
+        self._schedule_panel_refresh()
         self._text_update_overlay()
 
     def _text_on_key(self, key: int, text: str, modifiers) -> bool:

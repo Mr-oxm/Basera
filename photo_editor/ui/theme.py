@@ -88,9 +88,11 @@ QSpinBox, QDoubleSpinBox {
 }
 QLabel { color: #cccccc; }
 QStatusBar {
-    background-color: #333333; color: #999999;
-    border-top: 1px solid #444444;
+    background-color: #2e2e2e; color: #999999;
+    border-top: 1px solid #3a3a3a;
+    padding: 0px;
 }
+QStatusBar::item { border: none; }
 QTabWidget::pane { border: 1px solid #444444; }
 QTabBar::tab {
     background-color: #383838; color: #aaaaaa;
