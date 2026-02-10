@@ -18,13 +18,15 @@ from uuid import uuid4
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QMouseEvent
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QSlider, QSpinBox,
     QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from ...core.color import Color
 from ...core.enums import BlendMode
+from ..widgets.color_dropdown import ColorDropdown
 from ...styles.bevel_emboss import BevelEmboss
 from ...styles.color_overlay import ColorOverlay
 from ...styles.drop_shadow import DropShadow
@@ -62,19 +64,24 @@ _LBL_STYLE = "font-size: 9pt; color: #ccc;"
 _HEADER_STYLE = "font-size: 10pt; font-weight: bold; color: #ddd; margin-bottom: 4px;"
 
 
-# ── Color swatch button ─────────────────────────────────────────────────
+# ── Color swatch button (wraps ColorDropdown) ───────────────────────────
 
-class _ColorButton(QPushButton):
-    """Small button that shows a colour swatch and opens a QColorDialog."""
+class _ColorButton(QWidget):
+    """Wrapper around ``ColorDropdown`` that speaks [r,g,b] float lists."""
 
     color_changed = Signal(list)  # [r, g, b] floats 0-1
 
     def __init__(self, color: list[float], parent=None) -> None:
         super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._dropdown = ColorDropdown(show_gradient=False, show_wheel=True)
+        lay.addWidget(self._dropdown)
         self._color = list(color)
-        self.setFixedSize(32, 22)
-        self.clicked.connect(self._pick)
-        self._apply_swatch()
+        self._dropdown.set_color(Color(color[0], color[1], color[2]))
+        self._dropdown.color_committed.connect(self._on_committed)
+        self._dropdown.color_changed.connect(self._on_live)
 
     @property
     def color(self) -> list[float]:
@@ -82,22 +89,15 @@ class _ColorButton(QPushButton):
 
     def set_color(self, color: list[float]) -> None:
         self._color = list(color)
-        self._apply_swatch()
+        self._dropdown.set_color(Color(color[0], color[1], color[2]))
 
-    def _apply_swatch(self) -> None:
-        r, g, b = (int(c * 255) for c in self._color[:3])
-        self.setStyleSheet(
-            f"background-color: rgb({r},{g},{b}); "
-            "border: 1px solid #888; border-radius: 2px;"
-        )
+    def _on_committed(self, c: Color) -> None:
+        self._color = [c.r, c.g, c.b]
+        self.color_changed.emit(self._color)
 
-    def _pick(self) -> None:
-        r, g, b = (int(c * 255) for c in self._color[:3])
-        c = QColorDialog.getColor(QColor(r, g, b), self, "Pick Color")
-        if c.isValid():
-            self._color = [c.redF(), c.greenF(), c.blueF()]
-            self._apply_swatch()
-            self.color_changed.emit(self._color)
+    def _on_live(self, c: Color) -> None:
+        self._color = [c.r, c.g, c.b]
+        self.color_changed.emit(self._color)
 
 
 # ── Angle dial widget ───────────────────────────────────────────────────

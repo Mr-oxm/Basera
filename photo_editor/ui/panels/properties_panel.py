@@ -10,10 +10,12 @@ from __future__ import annotations
 from PySide6.QtCore import Signal, Qt, QPoint, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QFont, QColor, QIcon
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDoubleSpinBox, QFontComboBox,
+    QComboBox, QDoubleSpinBox, QFontComboBox,
     QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox,
     QVBoxLayout, QWidget, QFrame,
 )
+
+from ..widgets.color_dropdown import ColorDropdown
 
 
 # ============================================================================
@@ -409,17 +411,14 @@ class TextPropertiesBar(QWidget):
 
         layout.addWidget(self._separator())
 
-        # ---- Color button ----
-        lbl2 = QLabel("Color:")
-        lbl2.setStyleSheet(_LABEL_STYLE)
-        layout.addWidget(lbl2)
-        self._color_btn = QPushButton()
-        self._color_btn.setFixedSize(26, 22)
-        self._color_btn.setStyleSheet(
-            "background-color: #000000; border: 1px solid #555; border-radius: 2px;")
-        self._color_btn.clicked.connect(self._pick_color)
-        self._current_color = QColor(0, 0, 0)
-        layout.addWidget(self._color_btn)
+        # ---- Color dropdown ----
+        self._color_dropdown = ColorDropdown(
+            label="Color:", show_gradient=True, show_wheel=True,
+        )
+        self._color_dropdown.color_committed.connect(self._on_color_committed)
+        self._color_dropdown.color_changed.connect(self._on_color_preview)
+        self._color_dropdown.gradient_changed.connect(self._on_gradient_pick)
+        layout.addWidget(self._color_dropdown)
 
         layout.addWidget(self._separator())
 
@@ -541,16 +540,16 @@ class TextPropertiesBar(QWidget):
         """Restore original size when hover ends."""
         self.property_changed.emit("_preview_font_size_end", None)
 
-    def _pick_color(self) -> None:
-        color = QColorDialog.getColor(self._current_color, self, "Text Color",
-                                      QColorDialog.ColorDialogOption.ShowAlphaChannel)
-        if color.isValid():
-            self._current_color = color
-            self._color_btn.setStyleSheet(
-                f"background-color: {color.name()}; border: 1px solid #555; border-radius: 2px;")
-            from ...core.color import Color, SolidFill
-            c = Color.from_rgb8(color.red(), color.green(), color.blue(), color.alpha())
-            self.property_changed.emit("fill_color", SolidFill(color=c))
+    def _on_color_committed(self, c) -> None:
+        from ...core.color import SolidFill
+        self.property_changed.emit("fill_color", SolidFill(color=c))
+
+    def _on_color_preview(self, c) -> None:
+        from ...core.color import SolidFill
+        self.property_changed.emit("_preview_fill_color", SolidFill(color=c))
+
+    def _on_gradient_pick(self, fill) -> None:
+        self.property_changed.emit("fill_color", fill)
 
     # ---- Sync from tool state ----
 
@@ -580,11 +579,9 @@ class TextPropertiesBar(QWidget):
                 self._para_spin.setValue(tool.paragraph_spacing)
             if hasattr(tool, "color"):
                 c = tool.color
-                self._current_color = QColor(int(c[0] * 255), int(c[1] * 255),
-                                             int(c[2] * 255), int(c[3] * 255))
-                self._color_btn.setStyleSheet(
-                    f"background-color: {self._current_color.name()}; "
-                    f"border: 1px solid #555; border-radius: 2px;")
+                from ...core.color import Color
+                col = Color(c[0], c[1], c[2], c[3] if len(c) > 3 else 1.0)
+                self._color_dropdown.set_color(col)
         finally:
             self.blockSignals(False)
 

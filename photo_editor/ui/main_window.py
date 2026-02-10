@@ -110,18 +110,21 @@ class MainWindow(QMainWindow):
         
         # Dock panels on the sides
         self._layers_panel = LayersPanel()
-        self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
+        self._layers_dock = self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
         self._history_panel = HistoryPanel()
         self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
         self._color_panel = ColorPanel()
-        self._dock(self._color_panel, "Color", Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._layers_dock, self._color_dock)
+        self._layers_dock.raise_()
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
 
-    def _dock(self, widget, title: str, area) -> None:
+    def _dock(self, widget, title: str, area) -> QDockWidget:
         d = QDockWidget(title, self)
         d.setWidget(widget)
         self.addDockWidget(area, d)
+        return d
 
     # ---- Wiring: menus ------------------------------------------------------
 
