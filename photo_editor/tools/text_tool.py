@@ -281,6 +281,7 @@ class TextTool(Tool):
             return True
 
         if key == Qt.Key.Key_Backspace:
+            self._flush_text_snapshot("Delete Text")
             if td.has_selection:
                 lo, hi = td.selection_range
                 td.delete_range(lo, hi)
@@ -289,11 +290,15 @@ class TextTool(Tool):
             elif td.cursor_pos > 0:
                 td.delete_range(td.cursor_pos - 1, td.cursor_pos)
                 td.cursor_pos -= 1
+            self._last_edit_action = "delete"
+            self._pending_text_changes = True
+            self._pending_action_label = "Delete Text"
             self._re_render_text()
             self._request_refresh()
             return True
 
         if key == Qt.Key.Key_Delete:
+            self._flush_text_snapshot("Delete Text")
             if td.has_selection:
                 lo, hi = td.selection_range
                 td.delete_range(lo, hi)
@@ -301,6 +306,9 @@ class TextTool(Tool):
                 td.selection_start = None
             elif td.cursor_pos < td.char_count:
                 td.delete_range(td.cursor_pos, td.cursor_pos + 1)
+            self._last_edit_action = "delete"
+            self._pending_text_changes = True
+            self._pending_action_label = "Delete Text"
             self._re_render_text()
             self._request_refresh()
             return True
@@ -375,26 +383,117 @@ class TextTool(Tool):
         if self._text_data is None:
             # Not a proper text layer — shouldn't happen
             return
+        # Absorb any scale / rotation that was applied via the Move tool
+        # so that the text bounding box and font sizes reflect the visual state.
+        self._absorb_layer_transform(layer)
         self._mode = _Mode.EDITING
         self._text_data.cursor_pos = self._text_data.char_count
         self._text_data.selection_start = None
         if doc is not None:
             doc.layers.active_index = doc.layers._layers.index(layer)
+            self._doc_ref = doc
+        # Save a snapshot that captures the state *before* any edits so that
+        # the first Ctrl-Z returns here.
+        d = doc or self._doc_ref
+        if d is not None:
+            d.save_snapshot("Edit Text Value")
+        self._last_edit_action: str = ""
+        self._pending_text_changes: bool = False
 
     def commit_editing(self, doc: Document | None = None) -> None:
         """Commit current edits and exit edit mode."""
         if self._editing_layer is not None and self._text_data is not None:
             self._re_render_text()
             self._text_data.selection_start = None
-            # Save history snapshot
+            # Flush any remaining unsaved typing changes
             d = doc or self._doc_ref
-            if d is not None and self._text_data.char_count > 0:
-                d.save_snapshot("Edit Text")
+            if d is not None and getattr(self, "_pending_text_changes", False):
+                label = getattr(self, "_pending_action_label", None) or "Edit Text"
+                d.save_snapshot(label)
+                self._pending_text_changes = False
+                self._pending_action_label = None
         self._mode = _Mode.IDLE
         self._editing_layer = None
         self._text_data = None
         self._drag_selecting = False
         self._request_refresh()
+
+    # ------------------------------------------------------------------
+    # Transform absorption (Move-tool scale / rotation → text properties)
+    # ------------------------------------------------------------------
+
+    def _absorb_layer_transform(self, layer: Layer) -> None:
+        """Fold any move-tool transform into the text data.
+
+        When the user resizes or rotates a text layer with the Move tool
+        and then re-enters text editing, the bounding box and font sizes
+        are updated to match the visual result so that the text does not
+        snap back to its original size.
+        """
+        td = self._text_data
+        if td is None:
+            return
+
+        has_rotation = (
+            layer.transform_angle != 0.0 and layer.transform_base_w > 0
+        )
+
+        # Determine the "logical" layer size (pre-rotation)
+        if has_rotation:
+            actual_w = layer.transform_base_w
+            actual_h = layer.transform_base_h
+        else:
+            actual_w = layer.width
+            actual_h = layer.height
+
+        # What the text renderer currently produces
+        rendered = td.render()
+        rh, rw = rendered.shape[:2]
+        expected_w = max(rw, td.box_width)
+        expected_h = max(rh, td.box_height)
+
+        sx = actual_w / max(expected_w, 1)
+        sy = actual_h / max(expected_h, 1)
+
+        scaled = abs(sx - 1.0) > 0.02 or abs(sy - 1.0) > 0.02
+        if not scaled and not has_rotation:
+            return  # nothing to absorb
+
+        # Remember the visual centre so we can reposition after re-render
+        old_cx = layer.position[0] + layer.width / 2.0
+        old_cy = layer.position[1] + layer.height / 2.0
+
+        # --- Apply scale to text metrics ---------------------------------
+        if scaled:
+            td.box_width = max(40, int(td.box_width * sx))
+            td.box_height = max(20, int(td.box_height * sy))
+            font_scale = (sx + sy) / 2.0
+            for run in td.runs:
+                run.fmt.font_size = round(run.fmt.font_size * font_scale, 1)
+                if run.fmt.letter_spacing != 0:
+                    run.fmt.letter_spacing = round(
+                        run.fmt.letter_spacing * font_scale, 1
+                    )
+            td.invalidate()
+
+        # --- Clear transform bookkeeping on the layer --------------------
+        layer.transform_angle = 0.0
+        layer.transform_base_w = 0
+        layer.transform_base_h = 0
+        layer._transform_original = None
+
+        # Re-render with the updated metrics
+        self._render_text_to_layer(layer, td)
+
+        # Keep the visual centre in the same place (important after rotation)
+        if has_rotation:
+            new_cx = layer.position[0] + layer.width / 2.0
+            new_cy = layer.position[1] + layer.height / 2.0
+            lx, ly = layer.position
+            layer.position = (
+                int(lx + old_cx - new_cx),
+                int(ly + old_cy - new_cy),
+            )
 
     # ------------------------------------------------------------------
     # Text layer creation
@@ -455,21 +554,44 @@ class TextTool(Tool):
         td = self._text_data
         if td is None:
             return
+        # If switching from a non-typing action, flush the old action first
+        if getattr(self, "_last_edit_action", "") not in ("", "type"):
+            self._flush_text_snapshot("Edit Text")
         if td.has_selection:
+            # Deleting a selection is its own undoable step
+            self._flush_text_snapshot("Delete Selection")
             lo, hi = td.selection_range
             td.delete_range(lo, hi)
             td.cursor_pos = lo
             td.selection_start = None
         td.insert_text(td.cursor_pos, text)
         td.cursor_pos += len(text)
+        self._last_edit_action = "type"
+        self._pending_text_changes = True
+        self._pending_action_label = "Type Text"
+        # Save a snapshot at word boundaries (space, newline, punctuation)
+        if text in (" ", "\n") or (len(text) == 1 and not text.isalnum()):
+            self._flush_text_snapshot("Type Text")
         self._re_render_text()
         self._request_refresh()
+
+    def _flush_text_snapshot(self, action: str | None = None) -> None:
+        """Save a history snapshot if there are pending text changes."""
+        if getattr(self, "_pending_text_changes", False):
+            d = self._doc_ref
+            if d is not None:
+                label = action or getattr(self, "_pending_action_label", "Edit Text")
+                d.save_snapshot(label)
+            self._pending_text_changes = False
+            self._pending_action_label = None
 
     def _toggle_format(self, attr: str) -> None:
         """Toggle a boolean format attribute on the selection or at cursor."""
         td = self._text_data
         if td is None:
             return
+        label = attr.replace("_", " ").title()  # e.g. "bold" → "Bold"
+        self._flush_text_snapshot(label)
         if td.has_selection:
             lo, hi = td.selection_range
             current = getattr(td.format_at(lo), attr, False)
@@ -477,6 +599,9 @@ class TextTool(Tool):
         else:
             # Toggle for future typing
             setattr(self, attr, not getattr(self, attr))
+        self._last_edit_action = f"format:{attr}"
+        self._pending_text_changes = True
+        self._pending_action_label = label
         self._re_render_text()
         self._request_refresh()
 
@@ -667,6 +792,31 @@ class TextTool(Tool):
         elif key == "_preview_font_end":
             self._end_font_preview()
             return
+        elif key == "_preview_font_size":
+            self._start_size_preview(value)
+            return
+        elif key == "_preview_font_size_end":
+            self._end_size_preview()
+            return
+
+        # Human-readable labels for each property key
+        _PROP_LABELS = {
+            "font_family": "Font",
+            "font_size": "Font Size",
+            "bold": "Bold",
+            "italic": "Italic",
+            "underline": "Underline",
+            "strikethrough": "Strikethrough",
+            "letter_spacing": "Letter Spacing",
+            "alignment": "Alignment",
+            "line_height": "Line Height",
+            "paragraph_spacing": "Paragraph Spacing",
+            "fill_color": "Color",
+        }
+        label = _PROP_LABELS.get(key, key.replace("_", " ").title())
+
+        # Flush any pending edits before applying a property change
+        self._flush_text_snapshot(label)
 
         # Map property keys to actions
         if key == "font_family":
@@ -710,6 +860,11 @@ class TextTool(Tool):
                 setattr(self, key, value)
             return
 
+        self._last_edit_action = f"property:{key}"
+        self._pending_text_changes = True
+        self._pending_action_label = label
+        # Property panel changes are discrete actions — flush immediately
+        self._flush_text_snapshot(label)
         self._re_render_text()
         self._request_refresh()
 
@@ -794,3 +949,32 @@ class TextTool(Tool):
         # Clear preview state
         self._preview_active = False
         self._preview_original_font = None
+
+    def _start_size_preview(self, size: int) -> None:
+        """Start a temporary font-size preview (during hover)."""
+        if self._text_data is None:
+            return
+        if not self._preview_active:
+            # Capture original sizes per-run so we can restore exactly
+            self._preview_original_sizes = [
+                run.fmt.font_size for run in self._text_data.runs
+            ]
+            self._preview_active = True
+        self._apply_char_attr("font_size", float(size))
+        self._re_render_text()
+        self._request_refresh()
+
+    def _end_size_preview(self) -> None:
+        """End font-size preview and restore original sizes."""
+        if not self._preview_active or self._text_data is None:
+            return
+        orig = getattr(self, "_preview_original_sizes", None)
+        if orig is not None:
+            # Restore per-run sizes
+            for run, orig_size in zip(self._text_data.runs, orig):
+                run.fmt.font_size = orig_size
+            self._text_data.invalidate()
+            self._re_render_text()
+            self._request_refresh()
+        self._preview_active = False
+        self._preview_original_sizes = None

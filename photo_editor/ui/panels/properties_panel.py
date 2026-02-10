@@ -91,6 +91,41 @@ class FontComboBoxWithPreview(QFontComboBox):
 
 
 # ============================================================================
+# Size ComboBox with Hover Preview
+# ============================================================================
+
+class SizeComboBoxWithPreview(QComboBox):
+    """Editable QComboBox with real-time hover preview for font sizes."""
+
+    size_hovered = Signal(int)   # Emitted when hovering over a size
+    hover_ended = Signal()       # Emitted when hover ends or popup closes
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hover_connected = False
+
+    def showPopup(self):
+        super().showPopup()
+        view = self.view()
+        if view and not self._hover_connected:
+            view.setMouseTracking(True)
+            view.entered.connect(self._on_item_hovered)
+            self._hover_connected = True
+
+    def hidePopup(self):
+        self.hover_ended.emit()
+        super().hidePopup()
+
+    def _on_item_hovered(self, index):
+        if index.isValid():
+            text = self.itemText(index.row())
+            try:
+                self.size_hovered.emit(int(text))
+            except ValueError:
+                pass
+
+
+# ============================================================================
 # Property Dropdown (floating slider)
 # ============================================================================
 
@@ -278,35 +313,75 @@ class TextPropertiesBar(QWidget):
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
 
+        _COMBO_ARROW_STYLE = """
+            {widget}::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 20px;
+                border-left: 1px solid #555;
+                background: #3a3a3a;
+            }}
+            {widget}::drop-down:hover {{
+                background: #4a4a4a;
+            }}
+            {widget}::down-arrow {{
+                image: none;
+                width: 0px; height: 0px;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ccc;
+            }}
+        """
+
         # ---- Font family ----
         lbl = QLabel("Font:")
         lbl.setStyleSheet(_LABEL_STYLE)
         layout.addWidget(lbl)
 
         self._font_combo = FontComboBoxWithPreview()
-        self._font_combo.setMaximumWidth(160)
+        self._font_combo.setMinimumWidth(160)
+        self._font_combo.setMaximumWidth(200)
         self._font_combo.setMaximumHeight(24)
-        self._font_combo.setStyleSheet("font-size: 9pt;")
-        
+        self._font_combo.setStyleSheet(
+            "QFontComboBox { font-size: 9pt; padding: 2px 4px; }"
+            + _COMBO_ARROW_STYLE.format(widget="QFontComboBox")
+        )
+
         # Connect font change (when user clicks to select)
         self._font_combo.currentFontChanged.connect(self._on_font_selected)
-        
+
         # Connect hover preview signals
         self._font_combo.font_hovered.connect(self._on_font_hover_preview)
         self._font_combo.hover_ended.connect(self._on_font_hover_end)
-        
+
         layout.addWidget(self._font_combo)
 
-        # ---- Font size ----
-        self._size_spin = QSpinBox()
-        self._size_spin.setRange(6, 500)
-        self._size_spin.setValue(36)
-        self._size_spin.setSuffix("px")
-        self._size_spin.setStyleSheet(_SPIN_STYLE)
-        self._size_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._size_spin.valueChanged.connect(
-            lambda v: self.property_changed.emit("font_size", v))
-        layout.addWidget(self._size_spin)
+        # ---- Font size (editable dropdown with common sizes + hover preview) ----
+        self._size_combo = SizeComboBoxWithPreview()
+        self._size_combo.setEditable(True)
+        _COMMON_SIZES = [
+            "6", "7", "8", "9", "10", "11", "12", "14", "16", "18",
+            "20", "22", "24", "26", "28", "30", "32", "36", "40",
+            "44", "48", "54", "60", "72", "80", "96", "100",
+            "120", "144", "200", "300", "400", "500",
+        ]
+        self._size_combo.addItems(_COMMON_SIZES)
+        self._size_combo.setCurrentText("36")
+        self._size_combo.setMinimumWidth(80)
+        self._size_combo.setMaximumWidth(90)
+        self._size_combo.setMaximumHeight(24)
+        # Only accept integers in the editable field
+        from PySide6.QtGui import QIntValidator
+        self._size_combo.setValidator(QIntValidator(1, 2000))
+        self._size_combo.setStyleSheet(
+            "QComboBox { font-size: 9pt; padding: 2px 4px; "
+            "min-height: 20px; max-height: 22px; }"
+            + _COMBO_ARROW_STYLE.format(widget="QComboBox")
+        )
+        self._size_combo.currentTextChanged.connect(self._on_size_changed)
+        self._size_combo.size_hovered.connect(self._on_size_hover_preview)
+        self._size_combo.hover_ended.connect(self._on_size_hover_end)
+        layout.addWidget(self._size_combo)
 
         # ---- Separator ----
         layout.addWidget(self._separator())
@@ -438,21 +513,34 @@ class TextPropertiesBar(QWidget):
 
     def _on_font_selected(self, font: QFont) -> None:
         """Handle font selection (when user clicks to select)"""
-        # Normalize font family name for PIL compatibility
-        # Convert to lowercase and remove spaces
-        family = font.family().lower().replace(" ", "")
+        family = font.family()
         self.property_changed.emit("font_family", family)
     
     def _on_font_hover_preview(self, font_family: str) -> None:
         """Handle font hover for preview (temporary change)"""
-        # Normalize font family name
-        family = font_family.lower().replace(" ", "")
-        self.property_changed.emit("_preview_font_family", family)
+        self.property_changed.emit("_preview_font_family", font_family)
     
     def _on_font_hover_end(self) -> None:
         """Handle end of font hover (restore original)"""
         self.property_changed.emit("_preview_font_end", None)
-    
+
+    def _on_size_changed(self, text: str) -> None:
+        """Handle font size change from the editable combo box."""
+        try:
+            val = int(text)
+            if 1 <= val <= 2000:
+                self.property_changed.emit("font_size", val)
+        except ValueError:
+            pass
+
+    def _on_size_hover_preview(self, size: int) -> None:
+        """Handle size hover for live preview."""
+        self.property_changed.emit("_preview_font_size", size)
+
+    def _on_size_hover_end(self) -> None:
+        """Restore original size when hover ends."""
+        self.property_changed.emit("_preview_font_size_end", None)
+
     def _pick_color(self) -> None:
         color = QColorDialog.getColor(self._current_color, self, "Text Color",
                                       QColorDialog.ColorDialogOption.ShowAlphaChannel)
@@ -473,7 +561,7 @@ class TextPropertiesBar(QWidget):
             if hasattr(tool, "font_family"):
                 self._font_combo.setCurrentFont(QFont(tool.font_family))
             if hasattr(tool, "font_size"):
-                self._size_spin.setValue(int(tool.font_size))
+                self._size_combo.setCurrentText(str(int(tool.font_size)))
             if hasattr(tool, "bold"):
                 self._bold_btn.setChecked(tool.bold)
             if hasattr(tool, "italic"):

@@ -545,8 +545,19 @@ class MainWindow(QMainWindow):
         if self._tools.active_type == ToolType.TEXT:
             self._text_update_hover_cursor(x, y)
 
+    # Tools that require rasterization of text / non-raster layers
+    _PAINTING_TOOLS = {
+        ToolType.BRUSH, ToolType.ERASER, ToolType.CLONE_STAMP,
+        ToolType.HEALING_BRUSH, ToolType.GRADIENT, ToolType.PAINT_BUCKET,
+    }
+
     def _on_canvas_press(self, x: int, y: int, pressure: float) -> None:
         self._dragging = True
+        # Block painting tools on text layers unless rasterized
+        if self._doc and self._needs_rasterize_warning():
+            if not self._ask_rasterize():
+                self._dragging = False
+                return
         self._tools.on_press(self._doc, x, y, pressure)
         tool_type = self._tools.active_type
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
@@ -703,7 +714,12 @@ class MainWindow(QMainWindow):
     # ---- Text tool management -----------------------------------------------
 
     def _text_setup(self) -> None:
-        """Configure the text tool with callbacks."""
+        """Configure the text tool with callbacks.
+
+        If the active layer is already a text layer, automatically enter
+        editing mode so the user doesn't have to click on it again after
+        switching from Move (or any other tool).
+        """
         tool = self._tools.active_tool
         if tool is None:
             return
@@ -711,11 +727,23 @@ class MainWindow(QMainWindow):
         tool.set_overlay_callback(self._text_update_overlay)
         self._canvas.set_key_handler(self._text_on_key)
 
+        # Auto-enter editing on the active text layer
+        if self._doc and not tool.is_editing:
+            layer = self._doc.layers.active_layer
+            if layer is not None and layer.layer_type == LayerType.TEXT:
+                td = getattr(layer, "_text_data", None)
+                if td is not None:
+                    tool._start_editing(layer, self._doc)
+                    self._text_update_overlay()
+                    self._refresh()
+
     def _text_on_refresh(self) -> None:
         """Called by the text tool when it needs a visual refresh."""
         self._pipeline.invalidate()
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result)
+        self._history_panel.refresh(self._doc.history)
+        self._layers_panel.refresh(self._doc)
         self._text_update_overlay()
 
     def _text_on_key(self, key: int, text: str, modifiers) -> bool:
@@ -829,6 +857,51 @@ class MainWindow(QMainWindow):
         self._canvas.set_text_draw_rect(None)
         self._canvas.set_text_selection_rects([])
         self._canvas.set_key_handler(None)
+
+    # ---- Rasterize text layer ------------------------------------------------
+
+    def _needs_rasterize_warning(self) -> bool:
+        """Return True if the active tool would paint on a text layer."""
+        if self._tools.active_type not in self._PAINTING_TOOLS:
+            return False
+        layer = self._doc.layers.active_layer
+        return layer is not None and layer.layer_type == LayerType.TEXT
+
+    def _ask_rasterize(self) -> bool:
+        """Show a rasterization dialog.  Return True if user accepted."""
+        reply = QMessageBox.warning(
+            self,
+            "Rasterize Text Layer",
+            "This type layer must be rasterized before it can be modified "
+            "with this tool.  Once rasterized, the text will no longer be "
+            "editable.\n\nRasterize the layer?",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Ok:
+            self._rasterize_active_layer()
+            return True
+        return False
+
+    def _rasterize_active_layer(self) -> None:
+        """Convert the active text layer into a plain raster layer."""
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            return
+        self._doc.save_snapshot("Rasterize Text")
+        layer.layer_type = LayerType.RASTER
+        # Discard text data — the current pixels are kept as-is
+        if hasattr(layer, "_text_data"):
+            try:
+                del layer._text_data
+            except AttributeError:
+                layer._text_data = None
+        # Clear any lingering transform bookkeeping
+        layer.transform_angle = 0.0
+        layer.transform_base_w = 0
+        layer.transform_base_h = 0
+        layer._transform_original = None
+        self._refresh()
 
     # ---- Zoom ---------------------------------------------------------------
 

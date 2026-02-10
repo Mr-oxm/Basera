@@ -612,7 +612,13 @@ _system_font_map: dict[str, str] | None = None  # lowercase name → full path
 
 
 def _build_system_font_map() -> dict[str, str]:
-    """Scan the system fonts directory and build a name→path mapping."""
+    """Scan the system fonts directory and build a name→path mapping.
+
+    Keys include both filename stems (e.g. ``arialbd``) and the font's
+    internal family name read via PIL (e.g. ``timesnewroman``), all
+    lower-cased with spaces removed so that QFont display names
+    resolve correctly.
+    """
     import os
     import sys
     font_dirs: list[str] = []
@@ -632,6 +638,9 @@ def _build_system_font_map() -> dict[str, str]:
                           os.path.expanduser("~/.local/share/fonts")])
 
     mapping: dict[str, str] = {}
+
+    # ---- Pass 1: index by filename stem / extension ----
+    all_paths: list[str] = []
     for d in font_dirs:
         if not os.path.isdir(d):
             continue
@@ -640,11 +649,35 @@ def _build_system_font_map() -> dict[str, str]:
                 low = f.lower()
                 if low.endswith((".ttf", ".otf", ".ttc")):
                     full = os.path.join(root, f)
-                    # Map by filename without extension
                     stem = low.rsplit(".", 1)[0]
                     mapping[stem] = full
-                    # Also map with extension
                     mapping[low] = full
+                    all_paths.append(full)
+
+    # ---- Pass 2: index by internal family name (via PIL) ----
+    try:
+        from PIL import ImageFont
+        for path in all_paths:
+            if path.lower().endswith(".ttc"):
+                continue  # skip collections — PIL can't getname() them
+            try:
+                font = ImageFont.truetype(path, 12)
+                family_name = font.getname()[0]
+                key = family_name.lower().replace(" ", "")
+                # Only add if not already mapped (prefer first hit)
+                if key not in mapping:
+                    mapping[key] = path
+                # Also add with style suffix stripped for common variants
+                style_name = font.getname()[1].lower().replace(" ", "")
+                if style_name and style_name != "regular":
+                    styled_key = f"{key}{style_name}"
+                    if styled_key not in mapping:
+                        mapping[styled_key] = path
+            except Exception:
+                pass
+    except ImportError:
+        pass
+
     return mapping
 
 
