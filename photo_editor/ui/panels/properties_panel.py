@@ -604,9 +604,17 @@ class PropertiesPanel(QWidget):
     # Specialised text property signal
     text_property_changed = Signal(str, object)
 
+    _PANEL_BG = "#333333"
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        
+        self.setStyleSheet(f"""
+            PropertiesPanel, PropertiesPanel > QWidget {{
+                background-color: {self._PANEL_BG};
+            }}
+            QLabel {{ background: transparent; }}
+        """)
+
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(4, 2, 4, 2)
         self._main_layout.setSpacing(8)

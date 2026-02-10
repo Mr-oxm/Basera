@@ -19,6 +19,7 @@ from ..utils.image_io import load_image, save_image
 from .canvas_view import CanvasView
 from .dialogs.layer_styles_dialog import LayerStylesDialog
 from .dialogs.new_document import NewDocumentDialog
+from .file_tab_bar import FileTabBar
 from .filter_runner import _adj_map, _filter_name_map, run_adjustment, run_filter
 from .menus import EditorMenuBar
 from .panels.color_panel import ColorPanel
@@ -47,6 +48,9 @@ class MainWindow(QMainWindow):
         self._pipeline = RenderPipeline()
         self._tools = ToolManager()
 
+        # Multi-document tracking: list of (Document, str|None) pairs
+        self._open_docs: list[tuple[Document, str | None]] = []
+
         # Blend-mode hover preview state
         self._blend_preview_original: BlendMode | None = None
 
@@ -62,31 +66,43 @@ class MainWindow(QMainWindow):
         self._wire_menus()
         self._wire_panels()
         self._wire_canvas()
+        self._wire_file_tabs()
         self._new_document(1920, 1080)
 
     # ---- UI assembly --------------------------------------------------------
 
     def _build_ui(self) -> None:
-        from PySide6.QtWidgets import QWidget, QVBoxLayout
+        from PySide6.QtWidgets import QWidget, QVBoxLayout, QToolBar
         
         self._menu = EditorMenuBar(self)
         self.setMenuBar(self._menu)
+
+        # Properties panel as a toolbar directly under the menu bar
+        self._props_panel = PropertiesPanel()
+        self._props_toolbar = QToolBar("Properties", self)
+        self._props_toolbar.setMovable(False)
+        self._props_toolbar.setFloatable(False)
+        self._props_toolbar.addWidget(self._props_panel)
+        self._props_toolbar.setStyleSheet(
+            "QToolBar { background: #333333; border: none; border-bottom: 1px solid #444; spacing: 0; padding: 0; }"
+            "QToolBar > QWidget { background: #333333; }"
+        )
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._props_toolbar)
+
         self._toolbar = EditorToolbar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._toolbar)
         
-        # Create horizontal properties panel (not docked)
-        self._props_panel = PropertiesPanel()
-        
-        # Create a central widget with vertical layout: properties panel + canvas
+        # Central widget: file tabs + canvas
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         
-        # Add properties panel at top
-        central_layout.addWidget(self._props_panel)
+        # File tab bar at the top of the central area
+        self._file_tabs = FileTabBar()
+        central_layout.addWidget(self._file_tabs)
         
-        # Add canvas below
+        # Canvas below the tabs
         self._canvas = CanvasView(self)
         central_layout.addWidget(self._canvas)
         
@@ -174,6 +190,12 @@ class MainWindow(QMainWindow):
         self._props_panel.value_changed.connect(self._on_prop_changed)
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
 
+    # ---- Wiring: file tabs --------------------------------------------------
+
+    def _wire_file_tabs(self) -> None:
+        self._file_tabs.tab_selected.connect(self._on_tab_selected)
+        self._file_tabs.tab_close_requested.connect(self._on_tab_close)
+
     # ---- Wiring: canvas -----------------------------------------------------
 
     def _wire_canvas(self) -> None:
@@ -188,6 +210,8 @@ class MainWindow(QMainWindow):
     def _new_document(self, w: int, h: int, dpi: int = 72) -> None:
         self._doc = Document(w, h)
         self._doc.dpi = dpi
+        self._open_docs.append((self._doc, None))
+        self._file_tabs.add_tab(self._doc.name)
         self._refresh()
         self._canvas.zoom_to_fit()
         self._status.set_document_info(self._doc.name, w, h)
@@ -320,6 +344,8 @@ class MainWindow(QMainWindow):
         # First history entry captures the loaded image so undo never
         # goes back to a blank canvas.
         self._doc.save_snapshot("Open Image")
+        self._open_docs.append((self._doc, path))
+        self._file_tabs.add_tab(Path(path).name, tooltip=path)
         self._refresh()
         self._canvas.zoom_to_fit()
         self._status.set_document_info(self._doc.name, w, h)
@@ -352,6 +378,39 @@ class MainWindow(QMainWindow):
             save_image(self._pipeline.execute(self._doc), path)
             self._doc.mark_clean()
             self.setWindowTitle(f"Photo Editor — {Path(path).name}")
+            # Update the tab text and stored path
+            idx = self._file_tabs.current_index()
+            if 0 <= idx < len(self._open_docs):
+                self._open_docs[idx] = (self._doc, path)
+                self._file_tabs.set_tab_text(idx, Path(path).name)
+
+    # ---- Tab management -----------------------------------------------------
+
+    def _on_tab_selected(self, index: int) -> None:
+        """Switch to the document at the given tab index."""
+        if index < 0 or index >= len(self._open_docs):
+            return
+        doc, path = self._open_docs[index]
+        self._doc = doc
+        self._refresh()
+        self._canvas.zoom_to_fit()
+        name = Path(path).name if path else doc.name
+        self._status.set_document_info(name, doc.width, doc.height)
+        self.setWindowTitle(f"Photo Editor — {name}")
+
+    def _on_tab_close(self, index: int) -> None:
+        """Close the document at the given tab index."""
+        if index < 0 or index >= len(self._open_docs):
+            return
+        # Don't close the last tab — keep at least one document open
+        if self._file_tabs.count() <= 1:
+            return
+        self._open_docs.pop(index)
+        self._file_tabs.remove_tab(index)
+        # Switch to whatever tab is now current
+        new_idx = self._file_tabs.current_index()
+        if 0 <= new_idx < len(self._open_docs):
+            self._on_tab_selected(new_idx)
 
     # ---- History ------------------------------------------------------------
 
