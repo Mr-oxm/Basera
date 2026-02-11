@@ -1,6 +1,6 @@
 # Photo Editor
 
-> **v0.1.0-alpha** — Early experimental release. Expect bugs, missing features, and breaking changes.
+> **v0.2.0-alpha** — Early experimental release. Expect bugs, missing features, and breaking changes.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
