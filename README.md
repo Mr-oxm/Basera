@@ -1,6 +1,6 @@
 # Photo Editor
 
-> **v0.2.0-alpha** — Early experimental release. Expect bugs, missing features, and breaking changes.
+> **v0.2.0-alpha** — Text layers, adjustment layers, layer styles, and major UI improvements. Still experimental—expect bugs.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
@@ -9,6 +9,54 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 <img width="1919" height="992" alt="image" src="https://github.com/user-attachments/assets/0b87d5d4-9866-4eff-b81a-6ad657589609" />
 
+---
+
+## What's New in v0.2.0
+
+### Text Layers
+- **Full text properties support**: font family, size, bold, italic, underline, alignment, color, letter spacing, line height
+- Rich text editing with real-time preview
+- Text layer manipulation and transformation
+
+### Redesigned Color System
+- **Color wheel picker** for intuitive color selection
+- HSV/RGB/Hex input modes
+- Live color preview and history
+- Improved color panel with swatches
+
+### Layers Panel Overhaul
+- **Editable adjustment layers** — non-destructive color grading directly in the layer stack
+- **Filter layers** — apply filters as stackable, editable layers
+- **Layer effects/styles** — Color Overlay, Stroke, Drop Shadow, Glow, and more
+- **Group layers** with proper nested compositing
+- **Lock layers** to prevent accidental edits
+- Drag-and-drop layer reordering
+
+### Real-Time Previews
+- **Blending modes** — hover to preview before applying
+- **Brush and Eraser** — see stroke preview as you paint
+- **Layer styles** — live preview of effects as you adjust parameters
+
+### Multi-Project Support
+- Open and switch between **multiple documents** in the same session
+- **Projects bar** for quick navigation between open files
+- Per-project undo/redo stacks
+
+### UI Improvements
+- **Properties bar** (formerly Properties panel) — streamlined, context-aware controls
+- **Improved toolbar** with tool grouping and new icons
+- **Enhanced color panel** with color wheel
+- Better spacing, alignment, and visual hierarchy across all panels
+
+### Working Tools
+- **Gradient tool** with real-time manipulation and live preview
+- **Eyedropper tool** now fully functional
+
+### Still Not Working
+- Healing Brush and Clone Stamp (source point selection broken)
+- Shape tool (drawing primitives not implemented)
+- Crop tool (selection → crop pipeline incomplete)
+- Advanced selection tools (Lasso, Magic Wand, etc.) — only Move tool is functional
 
 ---
 
@@ -51,10 +99,12 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 ## Features
 
 ### Layer System
-- Raster, Text, Shape, Adjustment, Group, Smart Object (architecture-ready)
+- **Raster, Text, Shape, Adjustment, Group, Smart Object** (architecture-ready)
+- **Text layers** with full typography controls (font, bold, italic, alignment, spacing, color)
 - Opacity, visibility, locking, reordering, clipping masks
 - Layer masks with feather, grow, shrink, refine
 - Layer groups with nested compositing
+- **Layer styles** — Color Overlay, Stroke, Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Bevel & Emboss, Satin, Gradient Overlay, Pattern Overlay
 
 ### Blending Modes (28)
 Normal · Dissolve · Darken · Multiply · Color Burn · Linear Burn · Darker Color · Lighten · Screen · Color Dodge · Linear Dodge · Lighter Color · Overlay · Soft Light · Hard Light · Vivid Light · Linear Light · Pin Light · Hard Mix · Difference · Exclusion · Subtract · Divide · Hue · Saturation · Color · Luminosity
@@ -87,16 +137,18 @@ Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturatio
 - Opening an image creates an "Open Image" base state — undo never goes back to a blank canvas
 
 ### Drawing Tools (14)
-Brush · Eraser · Clone Stamp · Healing Brush · Gradient · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · Text · Shape · Move (with integrated Transform)
+Brush · Eraser · Clone Stamp · Healing Brush · **Gradient** · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · **Text** · Shape · **Move** (with integrated Transform) · **Eyedropper**
 
 ### Layer Styles (10)
-Drop Shadow · Inner Shadow · Outer Glow · Inner Glow · Bevel & Emboss · Satin · Color Overlay · Gradient Overlay · Pattern Overlay · Stroke
+Drop Shadow · Inner Shadow · Outer Glow · Inner Glow · Bevel & Emboss · Satin · **Color Overlay** · Gradient Overlay · Pattern Overlay · **Stroke**
 
 ### Layers Panel
 - Dedicated **eye icon** button to toggle layer visibility
 - Dedicated **lock icon** button to toggle layer locking
+- **Layer effects/styles** indicators and editing
 - Icons update in real time; buttons positioned to the right of the layer name
 - Click to select, add, duplicate, delete layers
+- Drag-and-drop reordering
 
 ### Selection System
 Rectangle · Ellipse · Lasso · Magic Wand · Feather · Grow/Shrink · Invert
@@ -106,7 +158,8 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ### UI
 - Professional dark theme
-- Dockable panels (Layers, History, Adjustments, Properties, Color)
+- Dockable panels (Layers, History, Adjustments, **Properties Bar**, Color)
+- **Projects bar** for multi-document navigation
 - Full menu bar with keyboard shortcuts
 - Zoomable canvas with pan (middle-click) and scroll-wheel zoom
 - Transparency checkerboard
@@ -114,6 +167,8 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 - Drag & drop image loading
 - New Document dialog with presets
 - **Real-time blend mode preview** — hover over blend modes in the dropdown to see a live preview on the canvas before committing
+- **Real-time brush/eraser preview** — see stroke as you paint
+- **Real-time layer style preview** — adjust parameters and see results instantly
 
 ---
 
@@ -241,7 +296,7 @@ photo_editor/
 │   ├── distort/
 │   ├── stylize/
 │   └── render/
-├── tools/                   # 13 interactive tools (Move w/ integrated transform)
+├── tools/                   # Interactive tools (Move, Brush, Gradient, Eyedropper, Text)
 ├── styles/                  # 10 layer styles + engine
 ├── effects/                 # Effect pipeline
 ├── masks/                   # Mask manager & operations
@@ -257,8 +312,9 @@ photo_editor/
 │   │   ├── layers_panel.py
 │   │   ├── history_panel.py
 │   │   ├── adjustments_panel.py
-│   │   ├── properties_panel.py
-│   │   └── color_panel.py
+│   │   ├── properties_bar.py
+│   │   ├── color_panel.py
+│   │   └── projects_bar.py
 │   └── dialogs/
 │       ├── new_document.py
 │       ├── filter_dialog.py
@@ -297,7 +353,7 @@ This is an early alpha — the following are known problems that need to be addr
 
 ### Layers
 - [ ] Layer groups do not composite correctly in all cases
-- [ ] Dragging layers to reorder can be unreliable
+- [ ] Dragging layers to reorder can be unreliable in some edge cases
 - [ ] Clipping masks may not update visually in real time
 - [x] ~~Deleting layers sometimes leaves stale render artifacts~~ (fixed — full structural undo rebuilds the stack)
 
@@ -308,11 +364,15 @@ This is an early alpha — the following are known problems that need to be addr
 
 ### Tools
 - [x] ~~**Move tool** is not working — cannot drag layers on the canvas~~ (fixed — full move/resize/rotate via bounding box)
-- [ ] **Selection tools** have no visible selection box / marching ants indicator
-- [ ] Clone Stamp and Healing Brush source point is not visualized
+- [ ] **Clone Stamp and Healing Brush** are not functional — source point selection broken
+- [ ] **Shape tool** not implemented
+- [ ] **Crop tool** incomplete — selection-to-crop pipeline missing
+- [ ] **Selection tools** (Lasso, Magic Wand, etc.) have no visible selection box / marching ants indicator
 - [ ] Text tool has limited editing — no in-canvas text reflow
 - [ ] Brush engine lacks pressure sensitivity and dynamics
 - [x] ~~Transform handles are not rendered on the canvas~~ (fixed — bounding box with 8 handles, rotates with content)
+- [x] ~~**Gradient tool** not functional~~ (fixed — real-time manipulation and preview)
+- [x] ~~**Eyedropper tool** not working~~ (fixed)
 
 ### General
 - [ ] Keyboard shortcuts may conflict or not work on all platforms
@@ -338,7 +398,7 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] Batch processing
 - [ ] HDR tone mapping
 - [ ] Color management (ICC profiles)
-- [ ] Multi-document tabs
+- [x] ~~Multi-document tabs~~ (implemented as Projects bar in v0.2.0)
 - [ ] Pen tablet pressure sensitivity
 
 ---
