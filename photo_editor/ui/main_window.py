@@ -206,6 +206,7 @@ class MainWindow(QMainWindow):
         self._props_panel.value_changed.connect(self._on_prop_changed)
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
         self._props_panel.gradient_property_changed.connect(self._on_gradient_prop_changed)
+        self._props_panel.align_requested.connect(self._on_align_requested)
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -815,6 +816,13 @@ class MainWindow(QMainWindow):
             self._props_panel.clear()
             self._props_panel.set_text_mode(False)
             self._props_panel.set_gradient_mode(False)
+            self._props_panel.set_move_mode(False)
+            return
+
+        # Move tool uses its own alignment properties bar
+        if tool_type == ToolType.MOVE:
+            self._props_panel.clear()
+            self._props_panel.set_move_mode(True)
             return
 
         # Text tool uses its own specialised properties bar
@@ -831,6 +839,7 @@ class MainWindow(QMainWindow):
 
         self._props_panel.set_text_mode(False)
         self._props_panel.set_gradient_mode(False)
+        self._props_panel.set_move_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -858,6 +867,16 @@ class MainWindow(QMainWindow):
             return
         tool.apply_property(key, value)
         self._text_update_overlay()
+
+    def _on_align_requested(self, action: str) -> None:
+        """Handle alignment/distribution requests from the Move properties bar."""
+        from ..tools.move_tool import MoveTool
+        if self._doc is None:
+            return
+        method = getattr(MoveTool, action, None)
+        if method is not None:
+            method(self._doc)
+            self._refresh()
 
     # ---- Gradient tool -------------------------------------------------------
 

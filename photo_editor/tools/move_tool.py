@@ -5,6 +5,9 @@ operations modify transform parameters (``transform_scale_x/y``,
 ``transform_angle``) and recompute display pixels from the stored
 original source, so quality is never lost regardless of how many times
 the user transforms the layer (Affinity-style).
+
+Alignment helpers align the active layer to the canvas (document)
+boundaries: left, center-h, right, top, middle-v, bottom.
 """
 
 from __future__ import annotations
@@ -628,3 +631,67 @@ class MoveTool(Tool):
                 int(gcx + new_dx - rw / 2),
                 int(gcy + new_dy - rh / 2),
             )
+
+    # ------------------------------------------------------------------
+    # Alignment helpers (relative to canvas)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def align_left(doc: Document) -> None:
+        """Align active layer's left edge to the canvas left edge."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Left")
+        _, ly = layer.position
+        layer.position = (0, ly)
+
+    @staticmethod
+    def align_center_h(doc: Document) -> None:
+        """Horizontally centre the active layer on the canvas."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Center H")
+        _, ly = layer.position
+        layer.position = ((doc.width - layer.width) // 2, ly)
+
+    @staticmethod
+    def align_right(doc: Document) -> None:
+        """Align active layer's right edge to the canvas right edge."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Right")
+        _, ly = layer.position
+        layer.position = (doc.width - layer.width, ly)
+
+    @staticmethod
+    def align_top(doc: Document) -> None:
+        """Align active layer's top edge to the canvas top edge."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Top")
+        lx, _ = layer.position
+        layer.position = (lx, 0)
+
+    @staticmethod
+    def align_middle_v(doc: Document) -> None:
+        """Vertically centre the active layer on the canvas."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Middle V")
+        lx, _ = layer.position
+        layer.position = (lx, (doc.height - layer.height) // 2)
+
+    @staticmethod
+    def align_bottom(doc: Document) -> None:
+        """Align active layer's bottom edge to the canvas bottom edge."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Align Bottom")
+        lx, _ = layer.position
+        layer.position = (lx, doc.height - layer.height)

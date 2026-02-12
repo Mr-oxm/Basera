@@ -182,46 +182,62 @@ class CompactPropertyWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         
-        name_label = QLabel(label + ":")
-        name_label.setMinimumWidth(50)
-        name_label.setMaximumWidth(80)
-        name_label.setStyleSheet("font-size: 9pt; color: #aaa;")
+        name_label = QLabel(label)
+        name_label.setMinimumWidth(40)
+        name_label.setMaximumWidth(70)
+        name_label.setStyleSheet("font-size: 10px; color: #888; letter-spacing: 0.5px;")
         layout.addWidget(name_label)
         
         self.value_spin = QDoubleSpinBox()
         self.value_spin.setRange(min_val, max_val)
         self.value_spin.setSingleStep(step)
         self.value_spin.setValue(value)
-        self.value_spin.setMaximumWidth(65)
+        self.value_spin.setMaximumWidth(60)
         self.value_spin.setMinimumHeight(22)
         self.value_spin.setMaximumHeight(22)
         self.value_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.value_spin.setStyleSheet("font-size: 9pt; padding: 2px;")
+        self.value_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                font-size: 11px; padding: 2px 4px;
+                background: #383838; color: #ccc;
+                border: 1px solid transparent; border-radius: 3px;
+            }
+            QDoubleSpinBox:focus {
+                border: 1px solid #4a6fa5;
+            }
+        """)
         self.value_spin.valueChanged.connect(self._on_value_changed)
         layout.addWidget(self.value_spin)
         
-        self.expand_btn = QPushButton("▼")
-        self.expand_btn.setFixedSize(20, 20)
-        self.expand_btn.setToolTip(f"Show/hide {label} slider")
+        self.expand_btn = QPushButton("▾")
+        self.expand_btn.setFixedSize(18, 18)
+        self.expand_btn.setToolTip(f"Adjust {label}")
         self.expand_btn.setCheckable(True)
         self.expand_btn.clicked.connect(self._toggle_dropdown)
         self.expand_btn.setStyleSheet("""
             QPushButton {
-                font-size: 10pt; padding: 0px;
-                border: 1px solid #555; border-radius: 2px;
-                background-color: #3a3a3a;
+                font-size: 10px; padding: 0px;
+                background: transparent; border: none;
+                border-radius: 3px; color: #777;
             }
-            QPushButton:hover { background-color: #4a4a4a; }
-            QPushButton:checked { background-color: #505050; }
+            QPushButton:hover { background: rgba(255,255,255,0.07); color: #bbb; }
+            QPushButton:checked { color: #4a6fa5; }
         """)
         layout.addWidget(self.expand_btn)
         
         self.dropdown = None
         self.slider = None
-    
+
     def _create_dropdown(self):
         if self.dropdown is None:
             self.dropdown = PropertyDropdown(self.window())
+            self.dropdown.setStyleSheet("""
+                PropertyDropdown {
+                    background-color: #2a2a2a;
+                    border: 1px solid #3a3a3a;
+                    border-radius: 6px;
+                }
+            """)
             self.slider = self.dropdown.slider
             if self.step == 1.0:
                 self.slider.setRange(int(self.min_val), int(self.max_val))
@@ -251,11 +267,11 @@ class CompactPropertyWidget(QWidget):
             global_pos = self.mapToGlobal(QPoint(0, self.height()))
             self.dropdown.move(global_pos)
             self.dropdown.show()
-            self.expand_btn.setText("▲")
+            self.expand_btn.setText("▴")
         else:
             if self.dropdown:
                 self.dropdown.hide()
-            self.expand_btn.setText("▼")
+            self.expand_btn.setText("▾")
     
     def set_value(self, value: float):
         self.value_spin.blockSignals(True)
@@ -273,39 +289,246 @@ class CompactPropertyWidget(QWidget):
 
 
 # ============================================================================
-# Text properties bar
+# Move properties bar — alignment
 # ============================================================================
 
-_TOGGLE_STYLE = """
-    QPushButton {{
-        font-size: {font_size}pt; padding: 2px 6px;
-        border: 1px solid #555; border-radius: 2px;
-        background-color: #3a3a3a; color: #ccc;
-        min-width: 24px; min-height: 22px;
-    }}
-    QPushButton:hover {{ background-color: #4a4a4a; }}
-    QPushButton:checked {{ background-color: #0078d4; color: white; border-color: #0078d4; }}
-"""
-
-_ALIGN_STYLE = """
+_MOVE_BTN_STYLE = """
     QPushButton {
-        font-size: 9pt; padding: 2px 4px;
-        border: 1px solid #555; border-radius: 2px;
-        background-color: #3a3a3a; color: #ccc;
-        min-width: 22px; min-height: 22px;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        padding: 3px;
+        min-width: 26px; min-height: 26px;
+        max-width: 26px; max-height: 26px;
     }
-    QPushButton:hover { background-color: #4a4a4a; }
-    QPushButton:checked { background-color: #0078d4; color: white; border-color: #0078d4; }
+    QPushButton:hover { background-color: rgba(255, 255, 255, 0.08); }
+    QPushButton:pressed { background-color: rgba(74, 111, 165, 0.5); }
 """
 
-_LABEL_STYLE = "font-size: 9pt; color: #aaa;"
+_MOVE_SEP_STYLE = "color: #444; background: #444; max-width: 1px; margin: 4px 2px;"
 
-_SPIN_STYLE = """
-    QSpinBox, QDoubleSpinBox {
-        font-size: 9pt; padding: 2px; max-width: 55px;
-        min-height: 22px; max-height: 22px;
-    }
+
+def _icon_from_painter(paint_func, size: int = 20):
+    """Create a QIcon by painting with a callable ``paint_func(painter, rect)``."""
+    from PySide6.QtGui import QPixmap, QPainter, QPen, QColor as QC
+    pix = QPixmap(size, size)
+    pix.fill(QC(0, 0, 0, 0))
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    paint_func(p, size)
+    p.end()
+    return QIcon(pix)
+
+
+def _make_align_icons():
+    """Return a dict of action-name → QIcon for the alignment buttons."""
+    from PySide6.QtGui import QPen, QColor as QC
+    from PySide6.QtCore import QRectF
+
+    icons = {}
+    line_c = QC("#888888")
+    bar_c = QC("#cccccc")
+
+    def _pen(color, w=1.5):
+        pen = QPen(color, w)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        return pen
+
+    def align_left(p, s):
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(4, 3, 4, s - 3)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(6, 5, 10, 3), 1, 1)
+        p.drawRoundedRect(QRectF(6, 12, 7, 3), 1, 1)
+
+    def align_center_h(p, s):
+        cx = s / 2
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(int(cx), 3, int(cx), s - 3)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(cx - 5, 5, 10, 3), 1, 1)
+        p.drawRoundedRect(QRectF(cx - 3.5, 12, 7, 3), 1, 1)
+
+    def align_right(p, s):
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(s - 4, 3, s - 4, s - 3)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(s - 14, 5, 10, 3), 1, 1)
+        p.drawRoundedRect(QRectF(s - 11, 12, 7, 3), 1, 1)
+
+    def align_top(p, s):
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(3, 4, s - 3, 4)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(5, 6, 3, 10), 1, 1)
+        p.drawRoundedRect(QRectF(12, 6, 3, 7), 1, 1)
+
+    def align_middle_v(p, s):
+        cy = s / 2
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(3, int(cy), s - 3, int(cy))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(5, cy - 5, 3, 10), 1, 1)
+        p.drawRoundedRect(QRectF(12, cy - 3.5, 3, 7), 1, 1)
+
+    def align_bottom(p, s):
+        p.setPen(_pen(bar_c, 1.5))
+        p.drawLine(3, s - 4, s - 3, s - 4)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(line_c)
+        p.drawRoundedRect(QRectF(5, s - 14, 3, 10), 1, 1)
+        p.drawRoundedRect(QRectF(12, s - 11, 3, 7), 1, 1)
+
+    for name, fn in [
+        ("align_left", align_left), ("align_center_h", align_center_h),
+        ("align_right", align_right), ("align_top", align_top),
+        ("align_middle_v", align_middle_v), ("align_bottom", align_bottom),
+    ]:
+        icons[name] = _icon_from_painter(fn)
+    return icons
+
+
+class MovePropertiesBar(QWidget):
+    """Horizontal bar with layer alignment buttons — clean, icon-only design."""
+
+    align_requested = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 0, 0)
+        layout.setSpacing(1)
+
+        icons = _make_align_icons()
+
+        self._btns: list[QPushButton] = []
+        for action in ("align_left", "align_center_h", "align_right"):
+            self._btns.append(self._make_btn(icons[action], action))
+            layout.addWidget(self._btns[-1])
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFixedHeight(18)
+        sep.setStyleSheet(_MOVE_SEP_STYLE)
+        layout.addWidget(sep)
+
+        for action in ("align_top", "align_middle_v", "align_bottom"):
+            self._btns.append(self._make_btn(icons[action], action))
+            layout.addWidget(self._btns[-1])
+
+        layout.addStretch()
+
+    def _make_btn(self, icon: QIcon, action: str) -> QPushButton:
+        btn = QPushButton()
+        btn.setIcon(icon)
+        btn.setIconSize(btn.minimumSize())
+        from PySide6.QtCore import QSize
+        btn.setIconSize(QSize(20, 20))
+        # Tooltip: turn action name into nice label
+        tip = action.replace("_", " ").replace("align ", "Align ").replace("h", "Horizontally").replace("v", "Vertically")
+        if "center" in action:
+            tip = "Align Center Horizontally"
+        elif "middle" in action:
+            tip = "Align Center Vertically"
+        else:
+            tip = action.replace("_", " ").title()
+        btn.setToolTip(tip)
+        btn.setStyleSheet(_MOVE_BTN_STYLE)
+        btn.clicked.connect(lambda checked=False, a=action: self.align_requested.emit(a))
+        return btn
+
+
+# ============================================================================
+# Shared modern style constants
+# ============================================================================
+
+# Accent colour used for checked/active states throughout all bars.
+_ACCENT = "#4a6fa5"
+_ACCENT_HOVER = "#5a8abf"
+
+_LABEL = "font-size: 10px; color: #777; letter-spacing: 0.5px; background: transparent;"
+
+_SEPARATOR = "color: #3a3a3a; background: #3a3a3a; max-width: 1px; margin: 4px 1px;"
+
+_TOGGLE = """
+    QPushButton {{
+        font-size: {font_size}px; padding: 2px 5px;
+        background: transparent; border: none; border-radius: 4px;
+        color: #999; min-width: 24px; min-height: 24px;
+    }}
+    QPushButton:hover {{ background: rgba(255,255,255,0.07); color: #ccc; }}
+    QPushButton:checked {{ background: rgba(74,111,165,0.35); color: #ddeeff; }}
 """
+
+_ALIGN_BTN = """
+    QPushButton {
+        font-size: 10px; padding: 2px 4px;
+        background: transparent; border: none; border-radius: 4px;
+        color: #999; min-width: 24px; min-height: 24px;
+    }
+    QPushButton:hover { background: rgba(255,255,255,0.07); color: #ccc; }
+    QPushButton:checked { background: rgba(74,111,165,0.35); color: #ddeeff; }
+"""
+
+_SPIN = """
+    QSpinBox, QDoubleSpinBox {{
+        font-size: 11px; padding: 2px 4px;
+        background: #383838; color: #ccc;
+        border: 1px solid transparent; border-radius: 3px;
+        max-width: {max_w}px; min-height: 22px; max-height: 22px;
+    }}
+    QSpinBox:focus, QDoubleSpinBox:focus {{
+        border: 1px solid {accent};
+    }}
+"""
+
+_COMBO = """
+    {widget} {{
+        background: #383838; border: 1px solid transparent; border-radius: 3px;
+        color: #ccc; font-size: 11px; padding: 2px 6px;
+        min-height: 20px; max-height: 22px;
+    }}
+    {widget}:hover {{ border: 1px solid #4a4a4a; }}
+    {widget}:focus {{ border: 1px solid {accent}; }}
+    {widget}::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        width: 16px; border: none; background: transparent;
+    }}
+    {widget}::down-arrow {{
+        image: none; width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid #888;
+    }}
+    {widget} QAbstractItemView {{
+        background: #2e2e2e; border: 1px solid #3a3a3a; border-radius: 4px;
+        color: #ccc; selection-background-color: {accent};
+    }}
+"""
+
+_FLAT_BTN = """
+    QPushButton {{
+        background: transparent; border: none; border-radius: 4px;
+        color: #999; font-size: 11px; padding: 2px 8px;
+        min-height: 24px;
+    }}
+    QPushButton:hover {{ background: rgba(255,255,255,0.07); color: #ccc; }}
+    QPushButton:pressed {{ background: rgba(74,111,165,0.35); }}
+"""
+
+
+def _make_separator(height: int = 18) -> QFrame:
+    """Return a thin vertical separator matching the modern theme."""
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.VLine)
+    sep.setFixedHeight(height)
+    sep.setStyleSheet(_SEPARATOR)
+    return sep
 
 
 class TextPropertiesBar(QWidget):
@@ -317,53 +540,27 @@ class TextPropertiesBar(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(6)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
 
-        _COMBO_ARROW_STYLE = """
-            {widget}::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 20px;
-                border-left: 1px solid #555;
-                background: #3a3a3a;
-            }}
-            {widget}::drop-down:hover {{
-                background: #4a4a4a;
-            }}
-            {widget}::down-arrow {{
-                image: none;
-                width: 0px; height: 0px;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #ccc;
-            }}
-        """
+        _spin_css = _SPIN.format(max_w=70, accent=_ACCENT)
 
         # ---- Font family ----
-        lbl = QLabel("Font:")
-        lbl.setStyleSheet(_LABEL_STYLE)
+        lbl = QLabel("Font")
+        lbl.setStyleSheet(_LABEL)
         layout.addWidget(lbl)
 
         self._font_combo = FontComboBoxWithPreview()
         self._font_combo.setMinimumWidth(160)
         self._font_combo.setMaximumWidth(200)
         self._font_combo.setMaximumHeight(24)
-        self._font_combo.setStyleSheet(
-            "QFontComboBox { font-size: 9pt; padding: 2px 4px; }"
-            + _COMBO_ARROW_STYLE.format(widget="QFontComboBox")
-        )
-
-        # Connect font change (when user clicks to select)
+        self._font_combo.setStyleSheet(_COMBO.format(widget="QFontComboBox", accent=_ACCENT))
         self._font_combo.currentFontChanged.connect(self._on_font_selected)
-
-        # Connect hover preview signals
         self._font_combo.font_hovered.connect(self._on_font_hover_preview)
         self._font_combo.hover_ended.connect(self._on_font_hover_end)
-
         layout.addWidget(self._font_combo)
 
-        # ---- Font size (editable dropdown with common sizes + hover preview) ----
+        # ---- Font size ----
         self._size_combo = SizeComboBoxWithPreview()
         self._size_combo.setEditable(True)
         _COMMON_SIZES = [
@@ -377,21 +574,15 @@ class TextPropertiesBar(QWidget):
         self._size_combo.setMinimumWidth(80)
         self._size_combo.setMaximumWidth(90)
         self._size_combo.setMaximumHeight(24)
-        # Only accept integers in the editable field
         from PySide6.QtGui import QIntValidator
         self._size_combo.setValidator(QIntValidator(1, 2000))
-        self._size_combo.setStyleSheet(
-            "QComboBox { font-size: 9pt; padding: 2px 4px; "
-            "min-height: 20px; max-height: 22px; }"
-            + _COMBO_ARROW_STYLE.format(widget="QComboBox")
-        )
+        self._size_combo.setStyleSheet(_COMBO.format(widget="QComboBox", accent=_ACCENT))
         self._size_combo.currentTextChanged.connect(self._on_size_changed)
         self._size_combo.size_hovered.connect(self._on_size_hover_preview)
         self._size_combo.hover_ended.connect(self._on_size_hover_end)
         layout.addWidget(self._size_combo)
 
-        # ---- Separator ----
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Bold / Italic / Underline / Strikethrough ----
         self._bold_btn = self._toggle_btn("B", "bold", bold=True)
@@ -403,18 +594,18 @@ class TextPropertiesBar(QWidget):
         self._strike_btn = self._toggle_btn("S", "strikethrough", strike=True)
         layout.addWidget(self._strike_btn)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Alignment ----
-        self._align_left = self._align_btn("≡L", "left")
-        self._align_center = self._align_btn("≡C", "center")
-        self._align_right = self._align_btn("≡R", "right")
+        self._align_left = self._align_btn("\u2261L", "left")
+        self._align_center = self._align_btn("\u2261C", "center")
+        self._align_right = self._align_btn("\u2261R", "right")
         self._align_left.setChecked(True)
         layout.addWidget(self._align_left)
         layout.addWidget(self._align_center)
         layout.addWidget(self._align_right)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Color dropdown ----
         self._color_dropdown = ColorDropdown(
@@ -425,45 +616,45 @@ class TextPropertiesBar(QWidget):
         self._color_dropdown.gradient_changed.connect(self._on_gradient_pick)
         layout.addWidget(self._color_dropdown)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Letter spacing ----
-        lbl3 = QLabel("Tracking:")
-        lbl3.setStyleSheet(_LABEL_STYLE)
+        lbl3 = QLabel("Tracking")
+        lbl3.setStyleSheet(_LABEL)
         layout.addWidget(lbl3)
         self._tracking_spin = QDoubleSpinBox()
         self._tracking_spin.setRange(-20.0, 100.0)
         self._tracking_spin.setValue(0.0)
         self._tracking_spin.setSingleStep(0.5)
-        self._tracking_spin.setStyleSheet(_SPIN_STYLE)
+        self._tracking_spin.setStyleSheet(_spin_css)
         self._tracking_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._tracking_spin.valueChanged.connect(
             lambda v: self.property_changed.emit("letter_spacing", v))
         layout.addWidget(self._tracking_spin)
 
         # ---- Line height ----
-        lbl4 = QLabel("Leading:")
-        lbl4.setStyleSheet(_LABEL_STYLE)
+        lbl4 = QLabel("Leading")
+        lbl4.setStyleSheet(_LABEL)
         layout.addWidget(lbl4)
         self._leading_spin = QDoubleSpinBox()
         self._leading_spin.setRange(0.5, 5.0)
         self._leading_spin.setValue(1.2)
         self._leading_spin.setSingleStep(0.1)
-        self._leading_spin.setStyleSheet(_SPIN_STYLE)
+        self._leading_spin.setStyleSheet(_spin_css)
         self._leading_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._leading_spin.valueChanged.connect(
             lambda v: self.property_changed.emit("line_height", v))
         layout.addWidget(self._leading_spin)
 
         # ---- Paragraph spacing ----
-        lbl5 = QLabel("Para:")
-        lbl5.setStyleSheet(_LABEL_STYLE)
+        lbl5 = QLabel("Para")
+        lbl5.setStyleSheet(_LABEL)
         layout.addWidget(lbl5)
         self._para_spin = QDoubleSpinBox()
         self._para_spin.setRange(0.0, 200.0)
         self._para_spin.setValue(0.0)
         self._para_spin.setSingleStep(1.0)
-        self._para_spin.setStyleSheet(_SPIN_STYLE)
+        self._para_spin.setStyleSheet(_spin_css)
         self._para_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self._para_spin.valueChanged.connect(
             lambda v: self.property_changed.emit("paragraph_spacing", v))
@@ -472,13 +663,6 @@ class TextPropertiesBar(QWidget):
         layout.addStretch()
 
     # ---- Helpers ----
-
-    def _separator(self) -> QFrame:
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #555;")
-        sep.setFixedWidth(2)
-        return sep
 
     def _toggle_btn(self, label: str, key: str,
                     bold: bool = False, italic: bool = False,
@@ -495,14 +679,14 @@ class TextPropertiesBar(QWidget):
         if strike:
             font.setStrikeOut(True)
         btn.setFont(font)
-        btn.setStyleSheet(_TOGGLE_STYLE.format(font_size=10))
+        btn.setStyleSheet(_TOGGLE.format(font_size=10))
         btn.toggled.connect(lambda checked: self.property_changed.emit(key, checked))
         return btn
 
     def _align_btn(self, label: str, alignment: str) -> QPushButton:
         btn = QPushButton(label)
         btn.setCheckable(True)
-        btn.setStyleSheet(_ALIGN_STYLE)
+        btn.setStyleSheet(_ALIGN_BTN)
         btn.clicked.connect(lambda: self._on_align(alignment))
         return btn
 
@@ -595,22 +779,6 @@ class TextPropertiesBar(QWidget):
 # Gradient properties bar
 # ============================================================================
 
-_COMBO_STYLE = (
-    "QComboBox {"
-    "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-    "  color: #ccc; font-size: 11px; padding: 2px 8px;"
-    "  min-height: 20px; max-height: 22px;"
-    "}"
-    "QComboBox:hover { border: 1px solid #5a8abf; }"
-    "QComboBox::drop-down { border: none; width: 16px; }"
-    "QComboBox::down-arrow { image: none; border: none; }"
-    "QComboBox QAbstractItemView {"
-    "  background: #333; border: 1px solid #484848; border-radius: 4px;"
-    "  color: #ccc; selection-background-color: #4a6fa5;"
-    "}"
-)
-
-
 class GradientPropertiesBar(QWidget):
     """Horizontal bar with gradient-specific controls.
 
@@ -626,39 +794,39 @@ class GradientPropertiesBar(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(6)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
 
-        # ---- Colour / gradient dropdown (defaults to Gradient tab) ----
+        # ---- Colour / gradient dropdown ----
         self._color_dropdown = ColorDropdown(
             label="Gradient:",
             show_gradient=True,
             show_wheel=True,
-            default_tab=2,  # open on gradient tab
+            default_tab=2,
         )
         self._color_dropdown.gradient_changed.connect(self._on_gradient_pick)
         layout.addWidget(self._color_dropdown)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Type ----
-        lbl = QLabel("Type:")
-        lbl.setStyleSheet(_LABEL_STYLE)
+        lbl = QLabel("Type")
+        lbl.setStyleSheet(_LABEL)
         layout.addWidget(lbl)
 
         self._type_combo = QComboBox()
         self._type_combo.addItems(["Linear", "Radial", "Conical", "Diamond"])
         self._type_combo.setMaximumHeight(24)
         self._type_combo.setFixedWidth(90)
-        self._type_combo.setStyleSheet(_COMBO_STYLE)
+        self._type_combo.setStyleSheet(_COMBO.format(widget="QComboBox", accent=_ACCENT))
         self._type_combo.currentTextChanged.connect(self._on_type_changed)
         layout.addWidget(self._type_combo)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Opacity ----
-        lbl2 = QLabel("Opacity:")
-        lbl2.setStyleSheet(_LABEL_STYLE)
+        lbl2 = QLabel("Opacity")
+        lbl2.setStyleSheet(_LABEL)
         layout.addWidget(lbl2)
 
         self._opacity_spin = QSpinBox()
@@ -668,41 +836,21 @@ class GradientPropertiesBar(QWidget):
         self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._opacity_spin.setMaximumWidth(60)
         self._opacity_spin.setMaximumHeight(22)
-        self._opacity_spin.setStyleSheet(
-            "QSpinBox { font-size: 9pt; padding: 2px;"
-            " min-height: 20px; max-height: 22px; }"
-        )
+        self._opacity_spin.setStyleSheet(_SPIN.format(max_w=60, accent=_ACCENT))
         self._opacity_spin.valueChanged.connect(self._on_opacity_changed)
         layout.addWidget(self._opacity_spin)
 
-        layout.addWidget(self._separator())
+        layout.addWidget(_make_separator())
 
         # ---- Reverse ----
         self._rev_btn = QPushButton("\u27F3 Reverse")
-        self._rev_btn.setFixedHeight(22)
+        self._rev_btn.setFixedHeight(24)
         self._rev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._rev_btn.setStyleSheet(
-            "QPushButton {"
-            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #aaa; font-size: 11px; padding: 2px 8px;"
-            "}"
-            "QPushButton:hover { border: 1px solid #5a8abf; color: #ddd; }"
-            "QPushButton:pressed { background: #404040; }"
-        )
+        self._rev_btn.setStyleSheet(_FLAT_BTN.format())
         self._rev_btn.clicked.connect(self._on_reverse)
         layout.addWidget(self._rev_btn)
 
         layout.addStretch()
-
-    # ---- helpers ------------------------------------------------------------
-
-    @staticmethod
-    def _separator() -> QFrame:
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #555;")
-        sep.setFixedWidth(2)
-        return sep
 
     # ---- slots --------------------------------------------------------------
 
@@ -751,8 +899,10 @@ class PropertiesPanel(QWidget):
     text_property_changed = Signal(str, object)
     # Gradient property signal
     gradient_property_changed = Signal(str, object)
+    # Move-tool alignment signal — carries the action name
+    align_requested = Signal(str)
 
-    _PANEL_BG = "#333333"
+    _PANEL_BG = "#2e2e2e"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -764,8 +914,8 @@ class PropertiesPanel(QWidget):
         """)
 
         self._main_layout = QHBoxLayout(self)
-        self._main_layout.setContentsMargins(4, 2, 4, 2)
-        self._main_layout.setSpacing(8)
+        self._main_layout.setContentsMargins(8, 0, 8, 0)
+        self._main_layout.setSpacing(6)
         
         # Generic slider container
         self._props_container = QWidget()
@@ -788,11 +938,19 @@ class PropertiesPanel(QWidget):
         self._gradient_bar.hide()
         self._main_layout.addWidget(self._gradient_bar)
 
+        # Move-tool alignment bar (hidden by default)
+        self._move_bar = MovePropertiesBar()
+        self._move_bar.align_requested.connect(
+            lambda action: self.align_requested.emit(action))
+        self._move_bar.hide()
+        self._main_layout.addWidget(self._move_bar)
+
         self._main_layout.addStretch()
         
         self._widgets: dict[str, CompactPropertyWidget] = {}
         self._text_mode = False
         self._gradient_mode = False
+        self._move_mode = False
 
         self.setFixedHeight(34)
 
@@ -802,9 +960,11 @@ class PropertiesPanel(QWidget):
         """Switch between generic slider mode and text properties mode."""
         self._text_mode = enabled
         self._gradient_mode = False
-        self._props_container.setVisible(not enabled and not self._gradient_mode)
+        self._move_mode = False
+        self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(enabled)
         self._gradient_bar.setVisible(False)
+        self._move_bar.setVisible(False)
         if enabled and tool is not None:
             self._text_bar.sync_from_tool(tool)
 
@@ -812,11 +972,23 @@ class PropertiesPanel(QWidget):
         """Switch to gradient properties mode."""
         self._gradient_mode = enabled
         self._text_mode = False
+        self._move_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(enabled)
+        self._move_bar.setVisible(False)
         if enabled and tool is not None:
             self._gradient_bar.sync_from_tool(tool)
+
+    def set_move_mode(self, enabled: bool) -> None:
+        """Switch to move-tool alignment bar."""
+        self._move_mode = enabled
+        self._text_mode = False
+        self._gradient_mode = False
+        self._props_container.setVisible(not enabled)
+        self._text_bar.setVisible(False)
+        self._gradient_bar.setVisible(False)
+        self._move_bar.setVisible(enabled)
 
     @property
     def text_bar(self) -> TextPropertiesBar:
@@ -825,6 +997,10 @@ class PropertiesPanel(QWidget):
     @property
     def gradient_bar(self) -> GradientPropertiesBar:
         return self._gradient_bar
+
+    @property
+    def move_bar(self) -> MovePropertiesBar:
+        return self._move_bar
 
     # ---- Generic API (unchanged) ----
 
