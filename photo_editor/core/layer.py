@@ -163,9 +163,9 @@ class Layer:
                 mask_3d = TransformEngine.rotate(mask_3d, ang, expand=True)
                 mask_result = mask_3d[..., 0]
 
-        self._pixels = result.astype(np.float32) if result.dtype != np.float32 else result
+        self._pixels = np.clip(result, 0.0, 1.0).astype(np.float32) if result.dtype != np.float32 else np.clip(result, 0.0, 1.0)
         if mask_result is not None:
-            self._mask = mask_result
+            self._mask = np.clip(mask_result, 0.0, 1.0)
         self.height, self.width = result.shape[:2]
         self._pixels_dirty = False
 

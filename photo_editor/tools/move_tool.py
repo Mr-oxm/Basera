@@ -78,6 +78,13 @@ class MoveTool(Tool):
         self._is_rotated_resize: bool = False
         # Non-destructive transform: angle at the start of the drag
         self._base_angle: float = 0.0
+        # Auto-select: when True, clicking outside the active layer
+        # picks the topmost visible layer whose opaque pixels are
+        # under the cursor.
+        self.auto_select: bool = True
+        # Callback set by MainWindow to handle layer selection changes.
+        # Signature: (layer_index: int) -> None
+        self.on_layer_auto_selected: callable | None = None
         # Group support: track children and their original state
         self._group_children: list = []
         self._group_child_positions: dict[str, tuple[int, int]] = {}
@@ -197,15 +204,96 @@ class MoveTool(Tool):
         return _Mode.ROTATE, _Handle.NONE
 
     # ------------------------------------------------------------------
+    # Auto-select helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _point_on_layer(layer, x: int, y: int, alpha_threshold: float = 0.01) -> bool:
+        """Return True if (x, y) doc-coords hits a non-transparent pixel on *layer*.
+
+        For text layers the hit-test uses the text bounding box instead of
+        alpha, so clicking anywhere inside the text area selects it.
+        """
+        import math
+        lx, ly = layer.position
+
+        # --- Text layers: bounding-box hit-test (including rotation) ---
+        if layer.layer_type == LayerType.TEXT:
+            td = getattr(layer, "_text_data", None)
+            if td is not None:
+                angle = layer.transform_angle
+                bw, bh = td.box_width, td.box_height
+                if angle != 0.0:
+                    cx = lx + bw / 2
+                    cy = ly + bh / 2
+                    rad = math.radians(angle)
+                    dx, dy = x - cx, y - cy
+                    rx = dx * math.cos(rad) + dy * math.sin(rad)
+                    ry = -dx * math.sin(rad) + dy * math.cos(rad)
+                    return abs(rx) <= bw / 2 and abs(ry) <= bh / 2
+                return lx <= x <= lx + bw and ly <= y <= ly + bh
+
+        # --- Normal alpha hit-test for raster / shape layers ---
+        px, py = x - lx, y - ly
+        h, w = layer.pixels.shape[:2]
+        if px < 0 or px >= w or py < 0 or py >= h:
+            return False
+        return float(layer.pixels[py, px, 3]) >= alpha_threshold
+
+    @staticmethod
+    def _find_layer_at(doc: Document, x: int, y: int,
+                       exclude_id: str | None = None,
+                       alpha_threshold: float = 0.01) -> int | None:
+        """Return the *stack index* of the topmost visible layer hit at (x, y).
+
+        Iterates from top to bottom (highest index first) and returns
+        the first layer whose non-transparent pixel is under the cursor.
+        Groups and adjustment layers are skipped.
+        """
+        for i in range(len(doc.layers) - 1, -1, -1):
+            layer = doc.layers.layers[i]
+            if not layer.visible or layer.locked:
+                continue
+            if layer.layer_type in (LayerType.GROUP, LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            if exclude_id is not None and layer.id == exclude_id:
+                continue
+            if MoveTool._point_on_layer(layer, x, y, alpha_threshold):
+                return i
+        return None
+
+    # ------------------------------------------------------------------
     # Tool interface
     # ------------------------------------------------------------------
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         layer = doc.layers.active_layer
+
+        # --- Auto-select: always pick the topmost visible layer at the
+        #     click point.  If it differs from the current active layer,
+        #     switch to it before doing anything else.  This ensures you
+        #     always interact with what you visually click on. -------------
+        if self.auto_select:
+            topmost_idx = self._find_layer_at(doc, x, y)
+            if topmost_idx is not None:
+                topmost = doc.layers.layers[topmost_idx]
+                if layer is None or topmost.id != layer.id:
+                    doc.layers.active_index = topmost_idx
+                    if self.on_layer_auto_selected:
+                        self.on_layer_auto_selected(topmost_idx)
+                    layer = doc.layers.active_layer
+
         if layer is None or layer.locked:
             return
 
         self._mode, self._handle = self._hit_test(doc, x, y)
+
+        # If the click lands in the ROTATE zone of the newly-selected
+        # layer, default to MOVE so the user can immediately drag it.
+        if self.auto_select and self._mode == _Mode.ROTATE:
+            self._mode = _Mode.MOVE
+            self._handle = _Handle.NONE
+
         if self._mode == _Mode.NONE:
             return
 

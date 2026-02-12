@@ -48,6 +48,11 @@ class MainWindow(QMainWindow):
         self._pipeline = RenderPipeline()
         self._tools = ToolManager()
 
+        # Wire up Move tool auto-select callback
+        move_tool = self._tools._tools.get(ToolType.MOVE)
+        if move_tool is not None:
+            move_tool.on_layer_auto_selected = self._on_move_auto_select
+
         # Multi-document tracking: list of (Document, str|None) pairs
         self._open_docs: list[tuple[Document, str | None]] = []
 
@@ -508,6 +513,14 @@ class MainWindow(QMainWindow):
         if self._doc:
             self._doc.layers.active_index = stack_index
             self._update_transform_box()
+
+    def _on_move_auto_select(self, stack_index: int) -> None:
+        """Called by MoveTool when it auto-selects a different layer."""
+        if not self._doc:
+            return
+        # Sync the layers panel highlight and transform box
+        self._layers_panel.refresh(self._doc)
+        self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:
         if self._doc and self._doc.layers.active_layer:

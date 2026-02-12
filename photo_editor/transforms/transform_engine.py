@@ -11,11 +11,26 @@ class TransformEngine:
     def scale(image: np.ndarray, sx: float, sy: float) -> np.ndarray:
         h, w = image.shape[:2]
         nw, nh = max(1, int(w * sx)), max(1, int(h * sy))
-        # INTER_AREA for downscaling (anti-aliased), INTER_LANCZOS4 for upscaling
+        # INTER_AREA for downscaling (anti-aliased), INTER_CUBIC for upscaling
+        # (INTER_LANCZOS4 produces ringing artifacts on RGBA data)
         if nw < w or nh < h:
             interp = cv2.INTER_AREA
         else:
-            interp = cv2.INTER_LANCZOS4
+            interp = cv2.INTER_CUBIC
+
+        # Premultiply alpha before resizing to prevent colour fringing
+        # at semi-transparent edges, then un-premultiply afterwards.
+        if image.ndim == 3 and image.shape[2] == 4:
+            alpha = image[..., 3:4]
+            rgb = image[..., :3] * alpha          # premultiply
+            premul = np.concatenate([rgb, alpha], axis=-1)
+            scaled = cv2.resize(premul, (nw, nh), interpolation=interp)
+            a = scaled[..., 3:4]
+            safe_a = np.where(a > 1e-6, a, 1.0)  # avoid division by zero
+            scaled[..., :3] /= safe_a             # un-premultiply
+            scaled[..., :3] = np.where(a > 1e-6, scaled[..., :3], 0.0)
+            return scaled
+
         return cv2.resize(image, (nw, nh), interpolation=interp)
 
     @staticmethod
@@ -23,6 +38,13 @@ class TransformEngine:
         h, w = image.shape[:2]
         cx, cy = w / 2, h / 2
         M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+
+        # Premultiply-alpha path for clean transparent-edge rotation
+        has_alpha = image.ndim == 3 and image.shape[2] == 4
+        if has_alpha:
+            alpha = image[..., 3:4]
+            rgb = image[..., :3] * alpha
+            image = np.concatenate([rgb, alpha], axis=-1)
         if expand:
             cos, sin = abs(M[0, 0]), abs(M[0, 1])
             nw = int(h * sin + w * cos)
@@ -31,7 +53,16 @@ class TransformEngine:
             M[1, 2] += (nh - h) / 2
         else:
             nw, nh = w, h
-        return cv2.warpAffine(image, M, (nw, nh), borderMode=cv2.BORDER_TRANSPARENT)
+        result = cv2.warpAffine(image, M, (nw, nh), borderMode=cv2.BORDER_TRANSPARENT)
+
+        # Un-premultiply alpha if we premultiplied above
+        if has_alpha:
+            a = result[..., 3:4]
+            safe_a = np.where(a > 1e-6, a, 1.0)
+            result[..., :3] /= safe_a
+            result[..., :3] = np.where(a > 1e-6, result[..., :3], 0.0)
+
+        return result
 
     @staticmethod
     def skew(image: np.ndarray, sx: float = 0.0, sy: float = 0.0) -> np.ndarray:
