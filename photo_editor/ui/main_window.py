@@ -8,7 +8,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
-    QDockWidget, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
+    QApplication, QDockWidget, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
 )
 
 from ..core.document import Document
@@ -644,12 +644,23 @@ class MainWindow(QMainWindow):
         # Commit any in-progress text editing when switching away
         if self._tools.active_type == ToolType.TEXT and t != ToolType.TEXT:
             self._text_exit_editing()
+        # Clear clone/heal source overlay when switching away
+        if (self._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)
+                and t not in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
+            self._canvas.set_source_position(None)
+            self._canvas.set_source_drawing(False)
+            self._canvas.set_clone_preview(None)
         self._tools.select(t)
         self._status.set_tool(t.name.replace("_", " ").title())
         self._canvas.set_tool_cursor(t)
         self._update_properties_panel()
         self._update_transform_box()
         self._update_brush_cursor()
+        # Restore source overlay if switching to clone/heal with a source set
+        if t in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+            tool = self._tools.active_tool
+            if tool is not None and tool.source_set:
+                self._canvas.set_source_position((tool.source_x, tool.source_y))
         # Setup text tool callbacks
         if t == ToolType.TEXT:
             self._text_setup()
@@ -694,6 +705,17 @@ class MainWindow(QMainWindow):
         """Handle non-drag mouse movement for cursor updates."""
         if self._tools.active_type == ToolType.TEXT:
             self._text_update_hover_cursor(x, y)
+        elif self._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+            tool = self._tools.active_tool
+            if tool is not None and tool.source_set:
+                # Compute where sampling would happen if user clicked here
+                if tool._offset_locked:
+                    ox, oy = tool._offset_x, tool._offset_y
+                else:
+                    ox = tool.source_x - x
+                    oy = tool.source_y - y
+                self._canvas.set_source_offset((ox, oy))
+            self._update_clone_preview(x, y)
 
     # Tools that require rasterization of text / non-raster layers
     _PAINTING_TOOLS = {
@@ -703,6 +725,20 @@ class MainWindow(QMainWindow):
 
     def _on_canvas_press(self, x: int, y: int, pressure: float) -> None:
         self._dragging = True
+
+        # Alt+click sets the clone / heal source point
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            tool_type = self._tools.active_type
+            if tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+                tool = self._tools.active_tool
+                if tool is not None:
+                    tool.set_source(x, y)
+                    self._canvas.set_source_position((x, y))
+                    self._status.showMessage(f"Source set at ({x}, {y})", 2000)
+                self._dragging = False
+                return
+
         # Block painting tools on text layers unless rasterized
         if self._doc and self._needs_rasterize_warning():
             if not self._ask_rasterize():
@@ -714,6 +750,11 @@ class MainWindow(QMainWindow):
             self._drag_start = (x, y)
         elif tool_type == ToolType.TEXT:
             self._text_update_overlay()
+        elif tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+            tool = self._tools.active_tool
+            if tool is not None and tool.source_set:
+                self._canvas.set_source_offset((tool._offset_x, tool._offset_y))
+                self._canvas.set_source_drawing(True)
 
     def _on_canvas_move(self, x: int, y: int, pressure: float) -> None:
         tool_type = self._tools.active_type
@@ -738,14 +779,18 @@ class MainWindow(QMainWindow):
 
     def _on_canvas_release(self, x: int, y: int) -> None:
         self._dragging = False
+        tool_type = self._tools.active_type
         self._tools.on_release(self._doc, x, y)
         self._canvas.set_drag_rect(None)
         if hasattr(self, "_drag_start"):
             del self._drag_start
+        # End clone/heal drawing state
+        if tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+            self._canvas.set_source_drawing(False)
         active = self._doc.layers.active_layer if self._doc else None
         self._refresh(layer_id=active.id if active else None)
         # Update text overlay after release (may have created a new text layer)
-        if self._tools.active_type == ToolType.TEXT:
+        if tool_type == ToolType.TEXT:
             self._text_update_overlay()
 
     # ---- Properties panel ---------------------------------------------------
@@ -873,6 +918,73 @@ class MainWindow(QMainWindow):
             self._canvas.setCursor(Qt.CursorShape.BlankCursor)
         else:
             self._canvas.hide_brush_preview()
+
+    # ---- Clone/Heal live preview --------------------------------------------
+
+    def _update_clone_preview(self, cursor_x: int, cursor_y: int) -> None:
+        """Generate a live preview patch of what clone/heal would paint at (cursor_x, cursor_y).
+
+        This samples pixels from the source area and shows them translucently
+        at the cursor position before the user clicks.
+        """
+        tool = self._tools.active_tool
+        if tool is None or not getattr(tool, "source_set", False):
+            self._canvas.set_clone_preview(None)
+            return
+        if self._doc is None:
+            return
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            self._canvas.set_clone_preview(None)
+            return
+
+        lx, ly = layer.position
+        pixels = layer.pixels  # float32 RGBA
+        h, w = pixels.shape[:2]
+        radius = max(1, tool.size // 2)
+
+        # Compute source center (using existing offset if locked, else from source point)
+        if tool._offset_locked:
+            ox, oy = tool._offset_x, tool._offset_y
+        else:
+            ox = tool.source_x - cursor_x
+            oy = tool.source_y - cursor_y
+
+        cx_doc = cursor_x - lx
+        cy_doc = cursor_y - ly
+        sx_doc = cx_doc + ox
+        sy_doc = cy_doc + oy
+
+        # Build circular preview patch from source area
+        d = radius * 2 + 1
+        preview = np.zeros((d, d, 4), dtype=np.uint8)
+        # Source region bounds
+        y0s = sy_doc - radius
+        x0s = sx_doc - radius
+        # Clip to valid
+        cy0 = max(0, -y0s)
+        cx0 = max(0, -x0s)
+        cy1 = min(d, h - y0s)
+        cx1 = min(d, w - x0s)
+        if cy1 <= cy0 or cx1 <= cx0:
+            self._canvas.set_clone_preview(None)
+            return
+
+        src = pixels[y0s + cy0:y0s + cy1, x0s + cx0:x0s + cx1]
+        patch = np.clip(src * 255, 0, 255).astype(np.uint8)
+
+        # Circular mask
+        yy, xx = np.mgrid[cy0:cy1, cx0:cx1]
+        dist = np.sqrt((xx - radius) ** 2 + (yy - radius) ** 2).astype(np.float32)
+        mask = np.clip(1.0 - dist / max(radius, 1), 0, 1)
+        hardness = getattr(tool, "hardness", 0.7)
+        mask = mask ** (1.0 / max(hardness, 0.01))
+        mask[dist > radius] = 0.0
+
+        preview[cy0:cy1, cx0:cx1, :3] = patch[..., :3]
+        preview[cy0:cy1, cx0:cx1, 3] = np.clip(mask * 200, 0, 255).astype(np.uint8)
+
+        self._canvas.set_clone_preview(preview)
 
     def _on_fg_color_changed(self, color) -> None:
         """Forward foreground colour to tools and update brush preview."""

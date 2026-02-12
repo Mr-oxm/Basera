@@ -16,7 +16,7 @@ from PySide6.QtGui import (
     QColor, QCursor, QImage, QKeyEvent, QLinearGradient, QMouseEvent,
     QPainter, QPainterPath, QPen, QPixmap, QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 try:
     from PySide6.QtOpenGLWidgets import QOpenGLWidget
@@ -193,6 +193,14 @@ class CanvasView(_BASE_CLASS):
         self._grad_stops: list = []                        # GradientStop list
         self._grad_handles_visible: bool = False
 
+        # Clone / Heal source overlay state
+        self._current_tool_type: ToolType | None = None
+        self._source_pos: tuple[int, int] | None = None    # doc coords of source
+        self._source_offset: tuple[int, int] | None = None  # (ox, oy) offset locked
+        self._source_drawing: bool = False                  # True while painting
+        self._clone_preview_pixmap: QPixmap | None = None   # live preview of source patch
+        self._alt_held: bool = False                         # Alt modifier is held
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(200, 200)
@@ -244,11 +252,41 @@ class CanvasView(_BASE_CLASS):
         self.update()
 
     def set_tool_cursor(self, tool_type: ToolType) -> None:
+        self._current_tool_type = tool_type
         if tool_type == ToolType.GRADIENT:
             self.setCursor(_gradient_cursor())
             return
         shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
+
+    # ---- Clone / Heal source overlay API ------------------------------------
+
+    def set_source_position(self, pos: tuple[int, int] | None) -> None:
+        """Set/clear the clone/heal source position (doc coords)."""
+        self._source_pos = pos
+        self.update()
+
+    def set_source_offset(self, offset: tuple[int, int] | None) -> None:
+        """Set the locked source offset (ox, oy) during a paint stroke."""
+        self._source_offset = offset
+
+    def set_source_drawing(self, drawing: bool) -> None:
+        """Toggle whether a clone/heal stroke is in progress."""
+        self._source_drawing = drawing
+        if not drawing:
+            self._clone_preview_pixmap = None
+
+    def set_clone_preview(self, preview_rgba: np.ndarray | None) -> None:
+        """Set the live clone/heal preview patch (RGBA uint8)."""
+        if preview_rgba is None or preview_rgba.size == 0:
+            self._clone_preview_pixmap = None
+            self.update()
+            return
+        h, w = preview_rgba.shape[:2]
+        qimg = QImage(preview_rgba.data, w, h, w * 4,
+                      QImage.Format.Format_RGBA8888)
+        self._clone_preview_pixmap = QPixmap.fromImage(qimg.copy())
+        self.update()
 
     # ---- Text editing overlay API -------------------------------------------
 
@@ -449,6 +487,11 @@ class CanvasView(_BASE_CLASS):
         if self._brush_size > 0 and self._brush_cursor_visible:
             self._draw_brush_cursor(p)
 
+        # Clone / Heal source crosshair and live preview
+        if (self._source_pos is not None
+                and self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
+            self._draw_source_overlay(p, dr)
+
         # Gradient control line + stop handles
         if self._grad_handles_visible:
             self._draw_gradient_handles(p, dr)
@@ -587,6 +630,78 @@ class CanvasView(_BASE_CLASS):
         p.setPen(QPen(QColor(255, 255, 255, 200), 1.0))
         p.drawLine(QPointF(pos.x() - ch, pos.y()), QPointF(pos.x() + ch, pos.y()))
         p.drawLine(QPointF(pos.x(), pos.y() - ch), QPointF(pos.x(), pos.y() + ch))
+
+        # ---- Live clone/heal preview (translucent source patch) ----
+        if self._clone_preview_pixmap is not None:
+            p.setOpacity(1.0)
+            p.drawPixmap(target.toAlignedRect(), self._clone_preview_pixmap)
+            p.setOpacity(1.0)
+
+        p.restore()
+
+    # ---- Clone / Heal source overlay drawing --------------------------------
+
+    def _draw_source_overlay(self, p: QPainter, dr: QRectF) -> None:
+        """Draw a crosshair at the clone/heal source position.
+
+        The source crosshair always tracks the cursor with the offset so the
+        user can see exactly which region will be sampled.
+        """
+        if self._source_pos is None or self._doc_w == 0 or self._doc_h == 0:
+            return
+
+        sx_scale = dr.width() / self._doc_w
+        sy_scale = dr.height() / self._doc_h
+
+        # Always compute source position relative to the current cursor
+        if self._source_offset is not None and self._brush_cursor_visible:
+            doc_pos = self._canvas_to_doc(self._brush_cursor_pos)
+            src_x = doc_pos[0] + self._source_offset[0]
+            src_y = doc_pos[1] + self._source_offset[1]
+        else:
+            src_x, src_y = self._source_pos
+
+        # Convert to widget coords
+        wx = dr.left() + src_x * sx_scale
+        wy = dr.top() + src_y * sy_scale
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        arm = 12.0
+        gap = 4.0
+
+        # Outer black crosshair
+        pen_outer = QPen(QColor(0, 0, 0, 200), 1.6)
+        pen_outer.setCosmetic(True)
+        p.setPen(pen_outer)
+        p.drawLine(QPointF(wx, wy - arm), QPointF(wx, wy - gap))
+        p.drawLine(QPointF(wx, wy + gap), QPointF(wx, wy + arm))
+        p.drawLine(QPointF(wx - arm, wy), QPointF(wx - gap, wy))
+        p.drawLine(QPointF(wx + arm, wy), QPointF(wx + gap, wy))
+
+        # Inner coloured crosshair (cyan for visibility)
+        pen_inner = QPen(QColor(0, 220, 255, 230), 1.0)
+        pen_inner.setCosmetic(True)
+        p.setPen(pen_inner)
+        p.drawLine(QPointF(wx, wy - arm), QPointF(wx, wy - gap))
+        p.drawLine(QPointF(wx, wy + gap), QPointF(wx, wy + arm))
+        p.drawLine(QPointF(wx - arm, wy), QPointF(wx - gap, wy))
+        p.drawLine(QPointF(wx + arm, wy), QPointF(wx + gap, wy))
+
+        # Small circle at center
+        p.setPen(QPen(QColor(0, 220, 255, 200), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(wx, wy), 3.0, 3.0)
+
+        # If brush size is known, also draw the source circle outline
+        if self._brush_size > 0:
+            src_radius = (self._brush_size / 2) * self._zoom
+            pen_src = QPen(QColor(0, 220, 255, 120), 1.0)
+            pen_src.setCosmetic(True)
+            pen_src.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen_src)
+            p.drawEllipse(QPointF(wx, wy), src_radius, src_radius)
 
         p.restore()
 
@@ -794,9 +909,16 @@ class CanvasView(_BASE_CLASS):
                                   rw * sx, rh * sy))
         p.restore()
 
-    # ---- Key events (text editing) ------------------------------------------
+    # ---- Key events (text editing + Alt source mode) -----------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Alt held → switch to source-selection cursor for clone/heal tools
+        if event.key() == Qt.Key.Key_Alt:
+            if self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+                self._alt_held = True
+                self.setCursor(self._make_source_cursor())
+                event.accept()
+                return
         if self._key_handler is not None and self._text_editing:
             consumed = self._key_handler(
                 event.key(), event.text(), event.modifiers())
@@ -804,6 +926,65 @@ class CanvasView(_BASE_CLASS):
                 event.accept()
                 return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Alt and self._alt_held:
+            self._alt_held = False
+            # Restore blank cursor when brush preview is active
+            if self._brush_size > 0:
+                self.setCursor(Qt.CursorShape.BlankCursor)
+            else:
+                shape = _CURSORS.get(self._current_tool_type, Qt.CursorShape.ArrowCursor)
+                self.setCursor(QCursor(shape))
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    @staticmethod
+    def _make_source_cursor() -> QCursor:
+        """Build a distinctive target/bullseye cursor for source selection."""
+        size = 32
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx, cy = size // 2, size // 2
+
+        # Outer circle
+        pen = QPen(QColor(0, 0, 0, 180), 1.6)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(cx - 10, cy - 10, 20, 20)
+        pen2 = QPen(QColor(0, 220, 255, 240), 1.0)
+        pen2.setCosmetic(True)
+        p.setPen(pen2)
+        p.drawEllipse(cx - 10, cy - 10, 20, 20)
+
+        # Inner circle
+        p.drawEllipse(cx - 4, cy - 4, 8, 8)
+
+        # Crosshair lines
+        gap = 5
+        arm = 12
+        p.setPen(QPen(QColor(0, 0, 0, 180), 1.4))
+        p.drawLine(cx, cy - arm, cx, cy - gap)
+        p.drawLine(cx, cy + gap, cx, cy + arm)
+        p.drawLine(cx - arm, cy, cx - gap, cy)
+        p.drawLine(cx + arm, cy, cx + gap, cy)
+        p.setPen(QPen(QColor(0, 220, 255, 240), 1.0))
+        p.drawLine(cx, cy - arm, cx, cy - gap)
+        p.drawLine(cx, cy + gap, cx, cy + arm)
+        p.drawLine(cx - arm, cy, cx - gap, cy)
+        p.drawLine(cx + arm, cy, cx + gap, cy)
+
+        # Center dot
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 220, 255, 220))
+        p.drawEllipse(cx - 1, cy - 1, 3, 3)
+
+        p.end()
+        return QCursor(pm, cx, cy)
 
     # ---- Mouse events -------------------------------------------------------
 
@@ -836,12 +1017,15 @@ class CanvasView(_BASE_CLASS):
         if self._brush_size > 0:
             self._brush_cursor_pos = event.position()
             self._brush_cursor_visible = True
-            # Only repaint the brush cursor area, not the whole widget.
-            # Full canvas repaint is triggered by set_image when the
-            # render pipeline finishes via _schedule_render.
-            radius = int((self._brush_size / 2) * self._zoom) + 4
-            cx, cy = int(event.position().x()), int(event.position().y())
-            self.update(cx - radius, cy - radius, radius * 2, radius * 2)
+            # If source overlay is active, do a full repaint so the source
+            # crosshair tracks the cursor; otherwise just repaint brush area.
+            if (self._source_pos is not None
+                    and self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
+                self.update()
+            else:
+                radius = int((self._brush_size / 2) * self._zoom) + 4
+                cx, cy = int(event.position().x()), int(event.position().y())
+                self.update(cx - radius, cy - radius, radius * 2, radius * 2)
 
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.tool_moved.emit(dx, dy, 1.0)

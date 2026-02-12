@@ -40,6 +40,28 @@ class CloneStampTool(Tool):
         self._offset_locked = False
 
     # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def generate_preview_dab(self) -> np.ndarray | None:
+        """Return an RGBA uint8 dab showing the clone stamp brush circle."""
+        d = max(self.size, 1)
+        r = d / 2.0
+        center = r - 0.5
+        dab = np.zeros((d, d, 4), dtype=np.uint8)
+        yy, xx = np.mgrid[0:d, 0:d]
+        dist = np.sqrt((xx - center) ** 2 + (yy - center) ** 2).astype(np.float32)
+        mask = np.clip(1.0 - dist / max(r, 1), 0, 1)
+        mask = mask ** (1.0 / max(self.hardness, 0.01))
+        mask *= self.opacity
+        # Neutral grey preview so the cursor is visible on any background
+        dab[..., 0] = 128
+        dab[..., 1] = 128
+        dab[..., 2] = 128
+        dab[..., 3] = np.clip(mask * 100, 0, 255).astype(np.uint8)
+        return dab
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 

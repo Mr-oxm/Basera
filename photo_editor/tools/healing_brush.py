@@ -13,6 +13,9 @@ class HealingBrushTool(Tool):
     def __init__(self) -> None:
         super().__init__("Healing Brush")
         self.size: int = 30
+        self.hardness: float = 0.7
+        self.opacity: float = 1.0
+        self.spacing: float = 0.25
 
         # Source (set via alt-click, same workflow as CloneStamp)
         self.source_x: int = 0
@@ -35,6 +38,30 @@ class HealingBrushTool(Tool):
         self.source_y = y
         self.source_set = True
         self._offset_locked = False
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def generate_preview_dab(self) -> np.ndarray | None:
+        """Return an RGBA uint8 dab showing the healing brush circle."""
+        d = max(self.size, 1)
+        r = d / 2.0
+        center = r - 0.5
+        dab = np.zeros((d, d, 4), dtype=np.uint8)
+        yy, xx = np.mgrid[0:d, 0:d]
+        dist = np.sqrt((xx - center) ** 2 + (yy - center) ** 2).astype(np.float32)
+        mask = np.clip(1.0 - dist / max(r, 1), 0, 1)
+        mask = mask ** (1.0 / max(self.hardness, 0.01))
+        # Hard circular clip — zero outside the circle radius
+        mask[dist > r] = 0.0
+        mask *= self.opacity
+        # Neutral grey preview at moderate opacity
+        dab[..., 0] = 128
+        dab[..., 1] = 128
+        dab[..., 2] = 128
+        dab[..., 3] = np.clip(mask * 100, 0, 255).astype(np.uint8)
+        return dab
 
     # ------------------------------------------------------------------
     # Helpers
@@ -84,17 +111,21 @@ class HealingBrushTool(Tool):
         # Keep destination alpha
         healed[..., 3] = dst_patch[..., 3]
 
-        # Circular falloff mask
+        # Circular falloff mask (same as clone stamp for consistency)
         yy, xx = np.mgrid[y0d:y0d + ph, x0d:x0d + pw]
         dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2).astype(np.float32)
         mask = np.clip(1.0 - dist / max(radius, 1), 0, 1)
-        mask = mask[..., np.newaxis]
+        mask = mask ** (1.0 / max(self.hardness, 0.01))
+        # Hard circular clip — zero outside the radius
+        mask[dist > radius] = 0.0
 
-        # Blend with Poisson-like smooth falloff (Gaussian on mask)
-        ksize = max(3, (radius // 2) * 2 + 1)
-        mask_2d = mask[..., 0]
-        mask_2d = cv2.GaussianBlur(mask_2d, (ksize, ksize), radius / 3.0)
-        mask = mask_2d[..., np.newaxis]
+        # Smooth the falloff edge with a modest Gaussian (don't expand)
+        ksize = max(3, (radius // 4) * 2 + 1)
+        mask = cv2.GaussianBlur(mask, (ksize, ksize), radius / 6.0)
+        # Re-apply hard clip after blur to prevent square bleeding
+        mask[dist > radius] = 0.0
+        mask *= self.opacity
+        mask = mask[..., np.newaxis]
 
         target[y0d:y0d + ph, x0d:x0d + pw] = (
             dst_patch * (1 - mask) + healed * mask
