@@ -233,6 +233,7 @@ class GradientTool(Tool):
         layer = doc.layers.active_layer
         if layer is None or layer.locked:
             return
+        self._rasterize_if_needed(doc)
 
         # If already editing, check for handle grab first
         if self._editing:

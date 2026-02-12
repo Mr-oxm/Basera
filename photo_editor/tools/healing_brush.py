@@ -157,6 +157,7 @@ class HealingBrushTool(Tool):
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         if not self.source_set:
             return
+        self._rasterize_if_needed(doc)
         doc.save_snapshot("Healing Brush")
         if not self._offset_locked:
             self._offset_x = self.source_x - x

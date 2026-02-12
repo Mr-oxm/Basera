@@ -477,10 +477,7 @@ class TextTool(Tool):
             td.invalidate()
 
         # --- Clear transform bookkeeping on the layer --------------------
-        layer.transform_angle = 0.0
-        layer.transform_base_w = 0
-        layer.transform_base_h = 0
-        layer._transform_original = None
+        layer.rasterize_transform()
 
         # Re-render with the updated metrics
         self._render_text_to_layer(layer, td)

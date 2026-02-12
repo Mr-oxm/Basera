@@ -1,4 +1,11 @@
-"""Move tool — select, move, resize, and rotate the active layer via bounding-box handles."""
+"""Move tool — select, move, resize, and rotate the active layer via bounding-box handles.
+
+Uses the Layer's non-destructive transform system: resize and rotate
+operations modify transform parameters (``transform_scale_x/y``,
+``transform_angle``) and recompute display pixels from the stored
+original source, so quality is never lost regardless of how many times
+the user transforms the layer (Affinity-style).
+"""
 
 from __future__ import annotations
 
@@ -69,6 +76,8 @@ class MoveTool(Tool):
         self._anchor_screen: tuple[float, float] = (0.0, 0.0)
         self._anchor_sign: tuple[int, int] = (0, 0)
         self._is_rotated_resize: bool = False
+        # Non-destructive transform: angle at the start of the drag
+        self._base_angle: float = 0.0
         # Group support: track children and their original state
         self._group_children: list = []
         self._group_child_positions: dict[str, tuple[int, int]] = {}
@@ -208,6 +217,8 @@ class MoveTool(Tool):
         self._dragging = True
         self._active_layer = layer
         self._is_rotated_resize = False
+        self._current_angle = 0.0
+        self._base_angle = layer.transform_angle
 
         # -- Group setup ---------------------------------------------------
         self._group_children = []
@@ -232,34 +243,31 @@ class MoveTool(Tool):
             self._orig_pixels = None  # not used for groups
             return  # skip single-layer setup below
 
-        # -- Single-layer setup --------------------------------------------
-        self._orig_pixels = layer.pixels.copy()
-        self._orig_width = layer.width
-        self._orig_height = layer.height
+        # -- Single-layer non-destructive setup ----------------------------
+        # Initialise ND source (idempotent — only snapshots on first call)
+        layer.init_non_destructive()
 
         if self._mode == _Mode.ROTATE:
-            if layer.transform_base_w == 0:
-                layer.transform_base_w = layer.width
-                layer.transform_base_h = layer.height
-                layer._transform_original = layer.pixels.copy()
-            else:
-                if layer._transform_original is not None:
-                    self._orig_pixels = layer._transform_original.copy()
+            # Dimensions for center computation: current display size
+            self._orig_width = layer.width
+            self._orig_height = layer.height
+            # orig_pixels not needed — recompute goes through source
 
         elif self._mode == _Mode.RESIZE:
-            if (layer.transform_angle != 0.0
-                    and layer.transform_base_w > 0
-                    and layer._transform_original is not None):
+            if layer.transform_angle != 0.0 and layer.transform_base_w > 0:
+                # Rotated resize: visible unrotated dims from base
                 self._is_rotated_resize = True
-                self._orig_pixels = layer._transform_original.copy()
                 self._orig_width = layer.transform_base_w
                 self._orig_height = layer.transform_base_h
                 self._setup_resize_anchor(layer)
             else:
-                layer.transform_angle = 0.0
-                layer.transform_base_w = 0
-                layer.transform_base_h = 0
-                layer._transform_original = None
+                # Non-rotated resize: visible dims = current pixel dims
+                self._orig_width = layer.width
+                self._orig_height = layer.height
+
+        else:  # MOVE — nothing extra needed
+            self._orig_width = layer.width
+            self._orig_height = layer.height
 
     def _setup_resize_anchor(self, layer) -> None:
         """Pre-compute the anchor screen position for a rotated resize."""
@@ -316,12 +324,15 @@ class MoveTool(Tool):
     def on_release(self, doc: Document, x: int, y: int) -> None:
         if self._mode == _Mode.ROTATE and self._active_layer is not None:
             if self._active_layer.layer_type != LayerType.GROUP:
+                # ND system: angle already committed during drag via
+                # compute_display; _current_angle is 0 — no-op addition.
                 self._active_layer.transform_angle += self._current_angle
         self._dragging = False
         self._orig_pixels = None
         self._mode = _Mode.NONE
         self._handle = _Handle.NONE
         self._current_angle = 0.0
+        self._base_angle = 0.0
         self._active_layer = None
         self._is_rotated_resize = False
         self._group_children = []
@@ -334,7 +345,8 @@ class MoveTool(Tool):
     # ------------------------------------------------------------------
 
     def _apply_resize(self, layer, dx: int, dy: int) -> None:
-        if self._orig_pixels is None:
+        """Non-destructive resize: update scale params and recompute from source."""
+        if layer._source_pixels is None:
             return
 
         angle = layer.transform_angle
@@ -367,15 +379,16 @@ class MoveTool(Tool):
         elif h in (_Handle.BL, _Handle.B, _Handle.BR):
             new_h = max(4.0, oh + ldy)
 
-        sx = new_w / max(ow, 1)
-        sy = new_h / max(oh, 1)
-        scaled = TransformEngine.scale(self._orig_pixels, sx, sy)
+        # Compute scale relative to the original source data
+        new_sx = new_w / max(layer.source_width, 1)
+        new_sy = new_h / max(layer.source_height, 1)
+
+        # Commit scale and recompute display from source
+        layer.transform_scale_x = new_sx
+        layer.transform_scale_y = new_sy
+        layer.compute_display()
 
         if is_rot:
-            # Re-apply rotation to the scaled original
-            rotated = TransformEngine.rotate(scaled, angle, expand=True)
-            rh, rw = rotated.shape[:2]
-
             # Position via anchor constraint: the anchor must stay fixed
             asx, asy = self._anchor_sign
             new_anchor_lx = asx * (new_w / 2.0)
@@ -386,11 +399,8 @@ class MoveTool(Tool):
             new_cx = self._anchor_screen[0] - new_anchor_sx
             new_cy = self._anchor_screen[1] - new_anchor_sy
 
-            layer.pixels = rotated
-            layer.position = (int(new_cx - rw / 2), int(new_cy - rh / 2))
-            layer.transform_base_w = max(4, int(new_w))
-            layer.transform_base_h = max(4, int(new_h))
-            layer._transform_original = scaled
+            layer.position = (int(new_cx - layer.width / 2),
+                              int(new_cy - layer.height / 2))
         else:
             # Non-rotated: classic top-left positioning
             ox, oy = self._orig_position
@@ -401,7 +411,6 @@ class MoveTool(Tool):
             if h in (_Handle.TL, _Handle.T, _Handle.TR):
                 new_y = oy + (oh - new_h)
 
-            layer.pixels = scaled
             layer.position = (int(new_x), int(new_y))
 
     # ------------------------------------------------------------------
@@ -409,7 +418,8 @@ class MoveTool(Tool):
     # ------------------------------------------------------------------
 
     def _apply_rotate(self, layer, x: int, y: int) -> None:
-        if self._orig_pixels is None:
+        """Non-destructive rotate: update angle and recompute from source."""
+        if layer._source_pixels is None:
             return
 
         ox, oy = self._orig_position
@@ -421,20 +431,23 @@ class MoveTool(Tool):
         a1 = math.atan2(y - cy, x - cx)
         # Negate: screen coords are y-down, so atan2 gives the
         # opposite sign from the visual rotation direction.
-        angle_deg = -math.degrees(a1 - a0)
-        self._current_angle = angle_deg
+        delta_deg = -math.degrees(a1 - a0)
 
-        # When pre-rotation pixels exist, rotate from them with the
-        # total angle for better quality (avoids compounding rotations).
-        if layer._transform_original is not None:
-            total = layer.transform_angle + angle_deg
-            rotated = TransformEngine.rotate(layer._transform_original, total, expand=True)
-        else:
-            rotated = TransformEngine.rotate(self._orig_pixels, angle_deg, expand=True)
+        # Total angle = committed base + current drag delta
+        total_angle = self._base_angle + delta_deg
 
-        rh, rw = rotated.shape[:2]
-        layer.pixels = rotated
-        layer.position = (int(cx - rw / 2), int(cy - rh / 2))
+        # Commit angle and recompute display from source
+        layer.transform_angle = total_angle
+        layer.compute_display()
+
+        # Reposition so the center stays fixed
+        layer.position = (int(cx - layer.width / 2),
+                          int(cy - layer.height / 2))
+
+        # _current_angle = 0 because the angle is already committed
+        # on the layer.  rotation_info_for / _hit_test read
+        # layer.transform_angle directly.
+        self._current_angle = 0.0
 
     # ------------------------------------------------------------------
     # Group resize

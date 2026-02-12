@@ -89,6 +89,7 @@ class ShapeTool(Tool):
     # ------------------------------------------------------------------
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
+        self._rasterize_if_needed(doc)
         doc.save_snapshot("Draw Shape")
         self._start_x, self._start_y = x, y
         self._dragging = True

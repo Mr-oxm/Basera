@@ -80,6 +80,7 @@ class BrushTool(Tool):
     # ------------------------------------------------------------------
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
+        self._rasterize_if_needed(doc)
         doc.save_snapshot("Brush Stroke")
         self._drawing = True
         self._last_x, self._last_y = x, y

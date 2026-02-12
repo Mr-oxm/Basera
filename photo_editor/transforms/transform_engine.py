@@ -11,7 +11,12 @@ class TransformEngine:
     def scale(image: np.ndarray, sx: float, sy: float) -> np.ndarray:
         h, w = image.shape[:2]
         nw, nh = max(1, int(w * sx)), max(1, int(h * sy))
-        return cv2.resize(image, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        # INTER_AREA for downscaling (anti-aliased), INTER_LANCZOS4 for upscaling
+        if nw < w or nh < h:
+            interp = cv2.INTER_AREA
+        else:
+            interp = cv2.INTER_LANCZOS4
+        return cv2.resize(image, (nw, nh), interpolation=interp)
 
     @staticmethod
     def rotate(image: np.ndarray, angle: float, expand: bool = True) -> np.ndarray:

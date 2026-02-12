@@ -134,8 +134,10 @@ class Document:
         # Save pixel data and mask data for every layer
         for layer in self.layers:
             state.layer_data[layer.id] = layer.pixels.copy()
-            if layer._transform_original is not None:
-                state.layer_data[f"_orig_{layer.id}"] = layer._transform_original.copy()
+            if layer._source_pixels is not None:
+                state.layer_data[f"_src_{layer.id}"] = layer._source_pixels.copy()
+            if layer._source_mask is not None:
+                state.layer_data[f"_srcmask_{layer.id}"] = layer._source_mask.copy()
             if layer._mask is not None:
                 state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
         # Save the full layer structure so add/remove can be undone
@@ -157,6 +159,8 @@ class Document:
                 "parent_id": layer.parent_id,
                 "children": list(layer.children),
                 "transform_angle": layer.transform_angle,
+                "transform_scale_x": layer.transform_scale_x,
+                "transform_scale_y": layer.transform_scale_y,
                 "transform_base_w": layer.transform_base_w,
                 "transform_base_h": layer.transform_base_h,
             }
@@ -199,6 +203,8 @@ class Document:
                     clipping_mask=meta["clipping_mask"],
                     parent_id=meta["parent_id"],
                     transform_angle=meta.get("transform_angle", 0.0),
+                    transform_scale_x=meta.get("transform_scale_x", 1.0),
+                    transform_scale_y=meta.get("transform_scale_y", 1.0),
                     transform_base_w=meta.get("transform_base_w", 0),
                     transform_base_h=meta.get("transform_base_h", 0),
                 )
@@ -207,9 +213,12 @@ class Document:
                 # Restore pixel data
                 if lid in state.layer_data:
                     layer.pixels = state.layer_data[lid].copy()
-                orig_key = f"_orig_{lid}"
-                if orig_key in state.layer_data:
-                    layer._transform_original = state.layer_data[orig_key].copy()
+                src_key = f"_src_{lid}"
+                if src_key in state.layer_data:
+                    layer._source_pixels = state.layer_data[src_key].copy()
+                srcmask_key = f"_srcmask_{lid}"
+                if srcmask_key in state.layer_data:
+                    layer._source_mask = state.layer_data[srcmask_key].copy()
                 # Restore mask data
                 mask_key = f"_mask_{lid}"
                 if mask_key in state.layer_data:

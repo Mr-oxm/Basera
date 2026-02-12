@@ -1,4 +1,16 @@
-"""Layer data model — the atomic unit of the compositing stack."""
+"""Layer data model — the atomic unit of the compositing stack.
+
+Non-destructive transforms (Affinity-style)
+--------------------------------------------
+Raster layers store the *original* source pixel data alongside current
+transform parameters (scale, rotation).  Display pixels are always
+re-derived from the source, so no matter how many times you resize or
+rotate, the full-resolution original is preserved.
+
+Destructive tools (brush, eraser, etc.) automatically *rasterize* the
+transform before modifying pixels, baking the current transform into
+the source.
+"""
 
 from __future__ import annotations
 
@@ -27,9 +39,10 @@ class Layer:
     mask_enabled: bool = True
     clipping_mask: bool = False
     parent_id: str | None = None
-    # Persistent rotation tracking — lets the bounding box stay rotated
-    # across tool / layer switches.
+    # Persistent transform tracking
     transform_angle: float = 0.0
+    transform_scale_x: float = 1.0
+    transform_scale_y: float = 1.0
     transform_base_w: int = 0
     transform_base_h: int = 0
 
@@ -40,20 +53,153 @@ class Layer:
         self._adjustment: object | None = None
         self._adjustment_params: dict = {}
         self.children: list[str] = []
-        # Pre-rotation pixel data (set on first rotate so resize can
-        # scale the original and re-apply the rotation).
-        self._transform_original: np.ndarray | None = None
+        # --- Non-destructive transform state ---
+        # Original full-quality pixel data (None = no ND transform active)
+        self._source_pixels: np.ndarray | None = None
+        self._source_mask: np.ndarray | None = None
+        self._pixels_dirty: bool = False
 
     # ---- Pixel data ---------------------------------------------------------
 
     @property
     def pixels(self) -> np.ndarray:
+        if self._pixels_dirty:
+            self._recompute_from_source()
         return self._pixels
 
     @pixels.setter
     def pixels(self, value: np.ndarray) -> None:
         self._pixels = value.astype(np.float32) if value.dtype != np.float32 else value
         self.height, self.width = value.shape[:2]
+
+    # ---- Non-destructive transform API --------------------------------------
+
+    @property
+    def source_pixels(self) -> np.ndarray:
+        """Original untransformed pixel data, or current pixels if no ND transform."""
+        if self._source_pixels is not None:
+            return self._source_pixels
+        return self._pixels
+
+    @property
+    def source_width(self) -> int:
+        """Width of the original source data."""
+        if self._source_pixels is not None:
+            return self._source_pixels.shape[1]
+        return self.width
+
+    @property
+    def source_height(self) -> int:
+        """Height of the original source data."""
+        if self._source_pixels is not None:
+            return self._source_pixels.shape[0]
+        return self.height
+
+    @property
+    def has_transform(self) -> bool:
+        """True when a non-destructive transform is active."""
+        return self._source_pixels is not None and (
+            self.transform_scale_x != 1.0
+            or self.transform_scale_y != 1.0
+            or self.transform_angle != 0.0
+        )
+
+    def init_non_destructive(self) -> None:
+        """Snapshot current pixels as source for non-destructive transforms.
+
+        Idempotent — only captures on first call.  Subsequent transforms
+        keep reusing the same high-quality source.
+        """
+        if self._source_pixels is None:
+            self._source_pixels = self._pixels.copy()
+            if self._mask is not None:
+                self._source_mask = self._mask.copy()
+            # Ensure base dimensions are initialised
+            if self.transform_base_w == 0:
+                self.transform_base_w = self.width
+                self.transform_base_h = self.height
+
+    def compute_display(
+        self,
+        scale_x: float | None = None,
+        scale_y: float | None = None,
+        angle: float | None = None,
+    ) -> None:
+        """Eagerly recompute display pixels from source + transform params.
+
+        Pass explicit values to override stored params (useful during a
+        drag where the param hasn't been committed yet).  ``None`` means
+        "use the stored value".
+        """
+        if self._source_pixels is None:
+            return
+
+        from ..transforms.transform_engine import TransformEngine
+        import cv2
+
+        sx = scale_x if scale_x is not None else self.transform_scale_x
+        sy = scale_y if scale_y is not None else self.transform_scale_y
+        ang = angle if angle is not None else self.transform_angle
+
+        result = self._source_pixels
+        mask_result = self._source_mask
+
+        if sx != 1.0 or sy != 1.0:
+            result = TransformEngine.scale(result, sx, sy)
+            if mask_result is not None:
+                sh, sw = result.shape[:2]
+                mask_result = cv2.resize(
+                    mask_result, (sw, sh), interpolation=cv2.INTER_LINEAR
+                )
+
+        # Update unrotated display dimensions
+        self.transform_base_w = result.shape[1]
+        self.transform_base_h = result.shape[0]
+
+        if ang != 0.0:
+            result = TransformEngine.rotate(result, ang, expand=True)
+            if mask_result is not None:
+                mask_3d = np.stack([mask_result] * 4, axis=-1)
+                mask_3d = TransformEngine.rotate(mask_3d, ang, expand=True)
+                mask_result = mask_3d[..., 0]
+
+        self._pixels = result.astype(np.float32) if result.dtype != np.float32 else result
+        if mask_result is not None:
+            self._mask = mask_result
+        self.height, self.width = result.shape[:2]
+        self._pixels_dirty = False
+
+    def invalidate_transform(self) -> None:
+        """Mark display pixels as needing lazy recompute from source."""
+        if self._source_pixels is not None:
+            self._pixels_dirty = True
+
+    def rasterize_transform(self) -> None:
+        """Bake current transforms into pixels, discarding the source.
+
+        Called automatically before destructive operations (painting)
+        and explicitly via *Layer > Rasterize*.
+        """
+        if self._source_pixels is not None:
+            if self._pixels_dirty:
+                self._recompute_from_source()
+            # Current _pixels/mask are the baked result — adopt them
+            self._source_pixels = None
+            self._source_mask = None
+        self.transform_scale_x = 1.0
+        self.transform_scale_y = 1.0
+        self.transform_angle = 0.0
+        self.transform_base_w = 0
+        self.transform_base_h = 0
+        self._pixels_dirty = False
+
+    def _recompute_from_source(self) -> None:
+        """Internal lazy recompute triggered by the ``pixels`` getter."""
+        if self._source_pixels is None:
+            self._pixels_dirty = False
+            return
+        # Delegate to compute_display with stored params
+        self.compute_display()
 
     # ---- Mask ---------------------------------------------------------------
 
@@ -107,6 +253,8 @@ class Layer:
             visible=self.visible,
             position=self.position,
             transform_angle=self.transform_angle,
+            transform_scale_x=self.transform_scale_x,
+            transform_scale_y=self.transform_scale_y,
             transform_base_w=self.transform_base_w,
             transform_base_h=self.transform_base_h,
         )
@@ -114,8 +262,11 @@ class Layer:
         if self._mask is not None:
             new._mask = self._mask.copy()
         new._styles = list(self._styles)
-        if self._transform_original is not None:
-            new._transform_original = self._transform_original.copy()
+        # Copy non-destructive source data
+        if self._source_pixels is not None:
+            new._source_pixels = self._source_pixels.copy()
+        if self._source_mask is not None:
+            new._source_mask = self._source_mask.copy()
         # Copy adjustment layer data
         if self._adjustment is not None:
             new._adjustment = self._adjustment

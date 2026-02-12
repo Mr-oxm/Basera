@@ -1345,11 +1345,8 @@ class MainWindow(QMainWindow):
                 del layer._text_data
             except AttributeError:
                 layer._text_data = None
-        # Clear any lingering transform bookkeeping
-        layer.transform_angle = 0.0
-        layer.transform_base_w = 0
-        layer.transform_base_h = 0
-        layer._transform_original = None
+        # Bake any non-destructive transforms and clear bookkeeping
+        layer.rasterize_transform()
         self._refresh()
 
     # ---- Layer Styles -------------------------------------------------------

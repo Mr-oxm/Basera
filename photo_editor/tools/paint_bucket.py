@@ -55,6 +55,7 @@ class PaintBucketTool(Tool):
     # ------------------------------------------------------------------
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
+        self._rasterize_if_needed(doc)
         layer = doc.layers.active_layer
         if layer is None or layer.locked:
             return

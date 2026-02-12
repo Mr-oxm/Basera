@@ -36,6 +36,17 @@ class Tool(ABC):
     def on_release(self, doc: Document, x: int, y: int) -> None:
         ...
 
+    @staticmethod
+    def _rasterize_if_needed(doc: Document) -> None:
+        """If the active layer has a non-destructive transform, bake it.
+
+        Destructive tools (brush, eraser, paint bucket, …) must call
+        this before modifying pixel data so that the source is consistent.
+        """
+        layer = doc.layers.active_layer
+        if layer is not None and layer._source_pixels is not None:
+            layer.rasterize_transform()
+
     def generate_preview_dab(self) -> np.ndarray | None:
         """Return an RGBA uint8 array showing what a single dab looks like.
 
