@@ -207,6 +207,9 @@ class MainWindow(QMainWindow):
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
         self._props_panel.gradient_property_changed.connect(self._on_gradient_prop_changed)
         self._props_panel.align_requested.connect(self._on_align_requested)
+        self._props_panel.crop_property_changed.connect(self._on_crop_prop_changed)
+        self._props_panel.crop_apply.connect(self._on_crop_apply)
+        self._props_panel.crop_cancel.connect(self._on_crop_cancel)
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -696,6 +699,9 @@ class MainWindow(QMainWindow):
             tool = self._tools.active_tool
             if tool is not None:
                 tool.set_pan_callback(self._on_pan_tool)
+        # Wire up crop tool callbacks
+        if t == ToolType.CROP:
+            self._crop_setup()
 
     def _on_eyedropper_sample(self, rgba) -> None:
         """Called when the eyedropper samples a colour."""
@@ -825,6 +831,12 @@ class MainWindow(QMainWindow):
             self._props_panel.set_move_mode(True)
             return
 
+        # Crop tool uses its own specialised properties bar
+        if tool_type == ToolType.CROP:
+            self._props_panel.clear()
+            self._props_panel.set_crop_mode(True, tool)
+            return
+
         # Text tool uses its own specialised properties bar
         if tool_type == ToolType.TEXT:
             self._props_panel.clear()
@@ -840,6 +852,7 @@ class MainWindow(QMainWindow):
         self._props_panel.set_text_mode(False)
         self._props_panel.set_gradient_mode(False)
         self._props_panel.set_move_mode(False)
+        self._props_panel.set_crop_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -928,6 +941,132 @@ class MainWindow(QMainWindow):
             if gtype:
                 tool.gradient_type = gtype
             self._refresh()
+
+    # ---- Crop tool ------------------------------------------------------------
+
+    def _crop_setup(self) -> None:
+        """Wire callbacks for the crop tool."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        tool.set_overlay_callback(self._on_crop_overlay)
+        tool.set_crop_callback(self._on_crop_execute)
+        tool.set_cancel_callback(lambda: self._canvas.set_crop_box(None))
+        # Auto-create a bounding box around the active layer
+        if self._doc is not None:
+            tool.auto_box_for_layer(self._doc)
+            self._props_panel.crop_bar.sync_from_tool(tool)
+
+    def _on_crop_overlay(self, box) -> None:
+        """Update the canvas crop box overlay and the properties bar dimensions."""
+        self._canvas.set_crop_box(box)
+        if box is not None:
+            self._props_panel.crop_bar.set_dimensions(*box)
+        else:
+            self._props_panel.crop_bar.clear_dimensions()
+
+    def _on_crop_prop_changed(self, key: str, value: object) -> None:
+        """Handle property changes from the crop properties bar."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.CROP:
+            return
+        if key == "crop_mode":
+            from ..tools.crop_tool import CropMode
+            tool.mode = CropMode.CANVAS if value == "canvas" else CropMode.LAYER
+
+    def _on_crop_apply(self) -> None:
+        """Commit the current crop box."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.CROP:
+            return
+        if self._doc is None:
+            return
+        tool.apply(self._doc)
+
+    def _on_crop_cancel(self) -> None:
+        """Discard the crop box."""
+        tool = self._tools.active_tool
+        if tool is None or self._tools.active_type != ToolType.CROP:
+            return
+        tool.cancel()
+
+    def _on_crop_execute(self, x: int, y: int, w: int, h: int, mode) -> None:
+        """Execute the actual crop operation."""
+        from ..tools.crop_tool import CropMode
+        if self._doc is None:
+            return
+
+        if mode == CropMode.CANVAS:
+            self._crop_canvas(x, y, w, h)
+        else:
+            self._crop_layer(x, y, w, h)
+
+    def _crop_canvas(self, x: int, y: int, w: int, h: int) -> None:
+        """Crop the canvas — only adjusts document size and layer offsets.
+
+        Layer pixel data is NOT modified.  Layers that extend beyond the
+        new canvas simply overflow (their pixels are preserved intact).
+        """
+        doc = self._doc
+        if doc is None:
+            return
+        doc.save_snapshot("Crop Canvas")
+        for layer in doc.layers:
+            px, py = layer.position
+            layer.position = (px - x, py - y)
+        doc.resize(w, h)
+        self._refresh()
+
+    def _crop_layer(self, x: int, y: int, w: int, h: int) -> None:
+        """Crop only the active layer's pixel data.
+
+        Only raster layers can be cropped directly.  Non-raster layers
+        (text, adjustment, etc.) require rasterization first.
+        """
+        doc = self._doc
+        if doc is None:
+            return
+        layer = doc.layers.active_layer
+        if layer is None:
+            return
+        # Non-raster layers must be rasterized before cropping
+        if layer.layer_type != LayerType.RASTER:
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.warning(
+                self,
+                "Rasterize Layer",
+                "This layer must be rasterized before it can be cropped.\n"
+                "Once rasterized the layer will no longer be editable "
+                "in its original form.\n\nRasterize the layer?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Ok:
+                return
+            # Rasterize
+            doc.save_snapshot(f"Rasterize {layer.name}")
+            layer.layer_type = LayerType.RASTER
+            if hasattr(layer, "_text_data"):
+                try:
+                    del layer._text_data
+                except AttributeError:
+                    layer._text_data = None
+            layer.rasterize_transform()
+        doc.save_snapshot("Crop Layer")
+        px, py = layer.position
+        lh, lw = layer.pixels.shape[:2]
+        # Source region in the layer's pixel array
+        sy0 = max(0, y - py)
+        sx0 = max(0, x - px)
+        sy1 = min(lh, y + h - py)
+        sx1 = min(lw, x + w - px)
+        if sy1 > sy0 and sx1 > sx0:
+            cropped = layer.pixels[sy0:sy1, sx0:sx1].copy()
+        else:
+            cropped = np.zeros((max(1, h), max(1, w), 4), dtype=np.float32)
+        layer.pixels = cropped
+        layer.position = (x, y)
+        self._refresh()
 
     # ---- Brush cursor --------------------------------------------------------
 

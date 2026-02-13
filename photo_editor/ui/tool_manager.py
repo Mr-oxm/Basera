@@ -113,6 +113,9 @@ class ToolManager:
         # Gradient tool uses its own specialised bar
         if self._active_type == ToolType.GRADIENT:
             return {}
+        # Crop tool uses its own specialised bar
+        if self._active_type == ToolType.CROP:
+            return {}
         defs: dict[str, tuple[float, float, float]] = {}
         _RANGES = {
             "size": (1, 500), "hardness": (0, 1), "opacity": (0, 1),

@@ -176,6 +176,8 @@ class Document:
         state.metadata["_layer_order"] = [l.id for l in self.layers]
         state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
         state.metadata["_active_index"] = self.layers.active_index
+        state.metadata["_doc_width"] = self.width
+        state.metadata["_doc_height"] = self.height
         self.history.push(state)
 
     def _restore(self, state: HistoryState) -> None:
@@ -251,6 +253,13 @@ class Document:
                 pos_key = f"pos_{layer.id}"
                 if pos_key in state.metadata:
                     layer.position = state.metadata[pos_key]
+        # Restore document dimensions (canvas crop undo)
+        saved_w = state.metadata.get("_doc_width")
+        saved_h = state.metadata.get("_doc_height")
+        if saved_w is not None and saved_h is not None:
+            self.width = saved_w
+            self.height = saved_h
+            self.selection.resize(saved_w, saved_h)
         self._dirty = True
 
     # ---- Canvas ops ---------------------------------------------------------

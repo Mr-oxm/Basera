@@ -884,6 +884,151 @@ class GradientPropertiesBar(QWidget):
 
 
 # ============================================================================
+# Crop properties bar
+# ============================================================================
+
+class CropPropertiesBar(QWidget):
+    """Horizontal bar with crop-specific controls: mode selector, dimensions,
+    Apply / Cancel buttons."""
+
+    property_changed = Signal(str, object)
+    apply_requested = Signal()       # user wants to commit the crop
+    cancel_requested = Signal()      # user wants to discard the crop box
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
+
+        _spin_css = _SPIN.format(max_w=70, accent=_ACCENT)
+
+        # ---- Mode selector ----
+        lbl = QLabel("Mode")
+        lbl.setStyleSheet(_LABEL)
+        layout.addWidget(lbl)
+
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItems(["Canvas Crop", "Layer Crop"])
+        self._mode_combo.setMaximumHeight(24)
+        self._mode_combo.setFixedWidth(110)
+        self._mode_combo.setStyleSheet(_COMBO.format(widget="QComboBox", accent=_ACCENT))
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        layout.addWidget(self._mode_combo)
+
+        layout.addWidget(_make_separator())
+
+        # ---- Crop dimensions (read-only display, updated live) ----
+        lbl_x = QLabel("X")
+        lbl_x.setStyleSheet(_LABEL)
+        layout.addWidget(lbl_x)
+        self._x_spin = QSpinBox()
+        self._x_spin.setRange(0, 99999)
+        self._x_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._x_spin.setReadOnly(True)
+        self._x_spin.setMaximumWidth(55)
+        self._x_spin.setMaximumHeight(22)
+        self._x_spin.setStyleSheet(_spin_css)
+        layout.addWidget(self._x_spin)
+
+        lbl_y = QLabel("Y")
+        lbl_y.setStyleSheet(_LABEL)
+        layout.addWidget(lbl_y)
+        self._y_spin = QSpinBox()
+        self._y_spin.setRange(0, 99999)
+        self._y_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._y_spin.setReadOnly(True)
+        self._y_spin.setMaximumWidth(55)
+        self._y_spin.setMaximumHeight(22)
+        self._y_spin.setStyleSheet(_spin_css)
+        layout.addWidget(self._y_spin)
+
+        lbl_w = QLabel("W")
+        lbl_w.setStyleSheet(_LABEL)
+        layout.addWidget(lbl_w)
+        self._w_spin = QSpinBox()
+        self._w_spin.setRange(0, 99999)
+        self._w_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._w_spin.setReadOnly(True)
+        self._w_spin.setMaximumWidth(55)
+        self._w_spin.setMaximumHeight(22)
+        self._w_spin.setStyleSheet(_spin_css)
+        layout.addWidget(self._w_spin)
+
+        lbl_h = QLabel("H")
+        lbl_h.setStyleSheet(_LABEL)
+        layout.addWidget(lbl_h)
+        self._h_spin = QSpinBox()
+        self._h_spin.setRange(0, 99999)
+        self._h_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._h_spin.setReadOnly(True)
+        self._h_spin.setMaximumWidth(55)
+        self._h_spin.setMaximumHeight(22)
+        self._h_spin.setStyleSheet(_spin_css)
+        layout.addWidget(self._h_spin)
+
+        layout.addWidget(_make_separator())
+
+        # ---- Apply / Cancel ----
+        self._apply_btn = QPushButton("✓ Apply")
+        self._apply_btn.setFixedHeight(24)
+        self._apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._apply_btn.setStyleSheet(
+            _FLAT_BTN.format() + """
+            QPushButton { color: #88cc88; font-weight: bold; }
+            QPushButton:hover { color: #aaffaa; }
+        """)
+        self._apply_btn.clicked.connect(self.apply_requested.emit)
+        layout.addWidget(self._apply_btn)
+
+        self._cancel_btn = QPushButton("✗ Cancel")
+        self._cancel_btn.setFixedHeight(24)
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(
+            _FLAT_BTN.format() + """
+            QPushButton { color: #cc8888; }
+            QPushButton:hover { color: #ffaaaa; }
+        """)
+        self._cancel_btn.clicked.connect(self.cancel_requested.emit)
+        layout.addWidget(self._cancel_btn)
+
+        layout.addStretch()
+
+    # ---- Slots --------------------------------------------------------------
+
+    def _on_mode_changed(self, index: int) -> None:
+        mode_name = "canvas" if index == 0 else "layer"
+        self.property_changed.emit("crop_mode", mode_name)
+
+    # ---- Public helpers -----------------------------------------------------
+
+    def set_dimensions(self, x: int, y: int, w: int, h: int) -> None:
+        """Update the displayed crop rectangle dimensions."""
+        self._x_spin.setValue(x)
+        self._y_spin.setValue(y)
+        self._w_spin.setValue(w)
+        self._h_spin.setValue(h)
+
+    def clear_dimensions(self) -> None:
+        for sp in (self._x_spin, self._y_spin, self._w_spin, self._h_spin):
+            sp.setValue(0)
+
+    def sync_from_tool(self, tool) -> None:
+        """Update controls to match the crop tool state."""
+        self.blockSignals(True)
+        try:
+            from ...tools.crop_tool import CropMode
+            idx = 0 if tool.mode == CropMode.CANVAS else 1
+            self._mode_combo.setCurrentIndex(idx)
+            if tool.box is not None:
+                self.set_dimensions(*tool.box)
+            else:
+                self.clear_dimensions()
+        finally:
+            self.blockSignals(False)
+
+
+# ============================================================================
 # Main Properties Panel
 # ============================================================================
 
@@ -901,6 +1046,10 @@ class PropertiesPanel(QWidget):
     gradient_property_changed = Signal(str, object)
     # Move-tool alignment signal — carries the action name
     align_requested = Signal(str)
+    # Crop signals
+    crop_property_changed = Signal(str, object)
+    crop_apply = Signal()
+    crop_cancel = Signal()
 
     _PANEL_BG = "#2e2e2e"
 
@@ -945,12 +1094,22 @@ class PropertiesPanel(QWidget):
         self._move_bar.hide()
         self._main_layout.addWidget(self._move_bar)
 
+        # Crop properties bar (hidden by default)
+        self._crop_bar = CropPropertiesBar()
+        self._crop_bar.property_changed.connect(
+            lambda k, v: self.crop_property_changed.emit(k, v))
+        self._crop_bar.apply_requested.connect(self.crop_apply.emit)
+        self._crop_bar.cancel_requested.connect(self.crop_cancel.emit)
+        self._crop_bar.hide()
+        self._main_layout.addWidget(self._crop_bar)
+
         self._main_layout.addStretch()
         
         self._widgets: dict[str, CompactPropertyWidget] = {}
         self._text_mode = False
         self._gradient_mode = False
         self._move_mode = False
+        self._crop_mode = False
 
         self.setFixedHeight(34)
 
@@ -961,10 +1120,12 @@ class PropertiesPanel(QWidget):
         self._text_mode = enabled
         self._gradient_mode = False
         self._move_mode = False
+        self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(enabled)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(False)
+        self._crop_bar.setVisible(False)
         if enabled and tool is not None:
             self._text_bar.sync_from_tool(tool)
 
@@ -973,10 +1134,12 @@ class PropertiesPanel(QWidget):
         self._gradient_mode = enabled
         self._text_mode = False
         self._move_mode = False
+        self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(enabled)
         self._move_bar.setVisible(False)
+        self._crop_bar.setVisible(False)
         if enabled and tool is not None:
             self._gradient_bar.sync_from_tool(tool)
 
@@ -985,10 +1148,26 @@ class PropertiesPanel(QWidget):
         self._move_mode = enabled
         self._text_mode = False
         self._gradient_mode = False
+        self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(enabled)
+        self._crop_bar.setVisible(False)
+
+    def set_crop_mode(self, enabled: bool, tool=None) -> None:
+        """Switch to crop properties bar."""
+        self._crop_mode = enabled
+        self._text_mode = False
+        self._gradient_mode = False
+        self._move_mode = False
+        self._props_container.setVisible(not enabled)
+        self._text_bar.setVisible(False)
+        self._gradient_bar.setVisible(False)
+        self._move_bar.setVisible(False)
+        self._crop_bar.setVisible(enabled)
+        if enabled and tool is not None:
+            self._crop_bar.sync_from_tool(tool)
 
     @property
     def text_bar(self) -> TextPropertiesBar:
@@ -1001,6 +1180,10 @@ class PropertiesPanel(QWidget):
     @property
     def move_bar(self) -> MovePropertiesBar:
         return self._move_bar
+
+    @property
+    def crop_bar(self) -> CropPropertiesBar:
+        return self._crop_bar
 
     # ---- Generic API (unchanged) ----
 

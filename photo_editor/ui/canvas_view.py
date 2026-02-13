@@ -201,6 +201,9 @@ class CanvasView(_BASE_CLASS):
         self._clone_preview_pixmap: QPixmap | None = None   # live preview of source patch
         self._alt_held: bool = False                         # Alt modifier is held
 
+        # Crop bounding box overlay state
+        self._crop_box: tuple[int, int, int, int] | None = None  # (x, y, w, h) doc coords
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(200, 200)
@@ -258,6 +261,13 @@ class CanvasView(_BASE_CLASS):
             return
         shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
+
+    # ---- Crop bounding box overlay API ------------------------------------
+
+    def set_crop_box(self, box: tuple[int, int, int, int] | None) -> None:
+        """Set / clear the crop bounding box overlay (doc coords: x, y, w, h)."""
+        self._crop_box = box
+        self.update()
 
     # ---- Clone / Heal source overlay API ------------------------------------
 
@@ -492,11 +502,76 @@ class CanvasView(_BASE_CLASS):
                 and self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
             self._draw_source_overlay(p, dr)
 
+        # Crop bounding box with dimmed surround
+        if self._crop_box is not None:
+            self._draw_crop_box(p, dr)
+
         # Gradient control line + stop handles
         if self._grad_handles_visible:
             self._draw_gradient_handles(p, dr)
 
         p.end()
+
+    # ---- Crop box drawing ----------------------------------------------------
+
+    def _draw_crop_box(self, p: QPainter, dr: QRectF) -> None:
+        """Draw the crop bounding box with dimmed outside area and handles."""
+        if self._crop_box is None or self._doc_w == 0 or self._doc_h == 0:
+            return
+        x, y, w, h = self._crop_box
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+        crop_rect = QRectF(dr.left() + x * sx, dr.top() + y * sy, w * sx, h * sy)
+
+        p.save()
+
+        # -- Dim the area outside the crop region --
+        dim_path = QPainterPath()
+        dim_path.addRect(dr)
+        inner_path = QPainterPath()
+        inner_path.addRect(crop_rect)
+        dim_path = dim_path.subtracted(inner_path)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 140))
+        p.drawPath(dim_path)
+
+        # -- Crop rectangle outline --
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(220, 50, 50, 230), 1.5)
+        pen.setCosmetic(True)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(crop_rect)
+
+        # -- Rule-of-thirds grid lines --
+        pen_grid = QPen(QColor(220, 50, 50, 80), 1.0)
+        pen_grid.setCosmetic(True)
+        pen_grid.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen_grid)
+        for i in (1, 2):
+            gx = crop_rect.left() + crop_rect.width() * i / 3
+            p.drawLine(QPointF(gx, crop_rect.top()), QPointF(gx, crop_rect.bottom()))
+            gy = crop_rect.top() + crop_rect.height() * i / 3
+            p.drawLine(QPointF(crop_rect.left(), gy), QPointF(crop_rect.right(), gy))
+
+        # -- Corner and edge handles --
+        hs = 7
+        handle_pts = [
+            (crop_rect.left(), crop_rect.top()),
+            (crop_rect.left() + crop_rect.width() / 2, crop_rect.top()),
+            (crop_rect.right(), crop_rect.top()),
+            (crop_rect.left(), crop_rect.top() + crop_rect.height() / 2),
+            (crop_rect.right(), crop_rect.top() + crop_rect.height() / 2),
+            (crop_rect.left(), crop_rect.bottom()),
+            (crop_rect.left() + crop_rect.width() / 2, crop_rect.bottom()),
+            (crop_rect.right(), crop_rect.bottom()),
+        ]
+        p.setPen(QPen(QColor(220, 50, 50, 230), 1))
+        p.setBrush(QColor(255, 255, 255))
+        for hx, hy in handle_pts:
+            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
+
+        p.restore()
 
     # ---- Transform box -------------------------------------------------------
 
