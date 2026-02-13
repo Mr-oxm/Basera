@@ -26,16 +26,17 @@ class PaintBucketTool(Tool):
                          tolerance: float) -> np.ndarray:
         """Return a boolean mask of connected pixels similar to the seed colour.
 
-        Uses cv2.floodFill for efficient C-level flood fill.
+        Uses cv2.floodFill on a 3-channel (RGB) image for reliable results.
         """
         h, w = pixels.shape[:2]
-        # Convert to uint8 for cv2.floodFill
-        pixels_u8 = np.clip(pixels * 255, 0, 255).astype(np.uint8)
+        # Work on RGB only — cv2.floodFill is most reliable on 1- or 3-channel
+        rgb = pixels[..., :3]
+        rgb_u8 = np.clip(rgb * 255, 0, 255).astype(np.uint8)
         # cv2.floodFill needs a mask 2px larger than the image
         ff_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
-        lo_diff = (int(tolerance),) * pixels_u8.shape[2]
-        hi_diff = (int(tolerance),) * pixels_u8.shape[2]
-        cv2.floodFill(pixels_u8, ff_mask, (sx, sy), 255,
+        lo_diff = (int(tolerance),) * 3
+        hi_diff = (int(tolerance),) * 3
+        cv2.floodFill(rgb_u8, ff_mask, (sx, sy), 255,
                       loDiff=lo_diff, upDiff=hi_diff,
                       flags=cv2.FLOODFILL_MASK_ONLY | (255 << 8))
         # Extract the inner mask (strip the 1px border)
@@ -46,8 +47,8 @@ class PaintBucketTool(Tool):
     def _global_tolerance_mask(pixels: np.ndarray, sx: int, sy: int,
                                tolerance: float) -> np.ndarray:
         """Return a boolean mask of ALL pixels similar to the seed colour (non-contiguous)."""
-        seed_color = pixels[sy, sx]
-        diff = np.abs(pixels - seed_color).max(axis=-1)
+        seed_color = pixels[sy, sx, :3]
+        diff = np.abs(pixels[..., :3] - seed_color).max(axis=-1)
         return diff <= (tolerance / 255.0)
 
     # ------------------------------------------------------------------

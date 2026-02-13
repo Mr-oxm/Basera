@@ -144,6 +144,10 @@ class CanvasView(_BASE_CLASS):
     tool_pressed = Signal(int, int, float)
     tool_moved = Signal(int, int, float)
     tool_released = Signal(int, int)
+    # Widget-coordinate signals (for pan tool / raw screen deltas)
+    widget_pressed = Signal(float, float)
+    widget_moved = Signal(float, float)
+    widget_released = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -1075,7 +1079,9 @@ class CanvasView(_BASE_CLASS):
             self._last_mouse = event.position()
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
         elif event.button() == Qt.MouseButton.LeftButton:
-            dx, dy = self._canvas_to_doc(event.position())
+            pos = event.position()
+            self.widget_pressed.emit(pos.x(), pos.y())
+            dx, dy = self._canvas_to_doc(pos)
             self.tool_pressed.emit(dx, dy, 1.0)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -1103,6 +1109,7 @@ class CanvasView(_BASE_CLASS):
                 self.update(cx - radius, cy - radius, radius * 2, radius * 2)
 
         if event.buttons() & Qt.MouseButton.LeftButton:
+            self.widget_moved.emit(event.position().x(), event.position().y())
             self.tool_moved.emit(dx, dy, 1.0)
         elif self._transform_box is not None:
             self._update_transform_cursor(event.position())
@@ -1121,6 +1128,7 @@ class CanvasView(_BASE_CLASS):
             self._panning = False
             # Restore tool cursor
         elif event.button() == Qt.MouseButton.LeftButton:
+            self.widget_released.emit()
             dx, dy = self._canvas_to_doc(event.position())
             self.tool_released.emit(dx, dy)
             self._drag_rect = None

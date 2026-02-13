@@ -991,6 +991,42 @@ class GradientPropertiesBar(QWidget):
 
 
 # ============================================================================
+# Zoom properties bar
+# ============================================================================
+
+class ZoomPropertiesBar(QWidget):
+    """Horizontal bar with zoom controls: Zoom In, Zoom Out, Fit, 100%."""
+
+    zoom_action = Signal(str)  # "zoom_in", "zoom_out", "fit", "reset"
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 0, 0)
+        layout.setSpacing(4)
+
+        _btn_style = _MOVE_BTN_STYLE.replace(
+            "min-width: 26px; min-height: 26px;\n        max-width: 26px; max-height: 26px;",
+            "min-width: 60px; min-height: 26px; max-height: 26px; font-size: 11px; color: #ccc;",
+        )
+
+        _items = [
+            ("zoom_in", "Zoom In", "+"),
+            ("zoom_out", "Zoom Out", "\u2212"),
+            ("fit", "Fit to Screen", "Fit"),
+            ("reset", "100%", "100%"),
+        ]
+        for action, tip, label in _items:
+            btn = QPushButton(label)
+            btn.setToolTip(tip)
+            btn.setStyleSheet(_btn_style)
+            btn.clicked.connect(lambda _=False, a=action: self.zoom_action.emit(a))
+            layout.addWidget(btn)
+
+        layout.addStretch()
+
+
+# ============================================================================
 # Crop properties bar
 # ============================================================================
 
@@ -1153,6 +1189,8 @@ class PropertiesPanel(QWidget):
     gradient_property_changed = Signal(str, object)
     # Move-tool alignment signal — carries the action name
     align_requested = Signal(str)
+    # Zoom-tool action signal — carries the action name
+    zoom_action = Signal(str)
     # Crop signals
     crop_property_changed = Signal(str, object)
     crop_apply = Signal()
@@ -1201,6 +1239,13 @@ class PropertiesPanel(QWidget):
         self._move_bar.hide()
         self._main_layout.addWidget(self._move_bar)
 
+        # Zoom properties bar (hidden by default)
+        self._zoom_bar = ZoomPropertiesBar()
+        self._zoom_bar.zoom_action.connect(
+            lambda action: self.zoom_action.emit(action))
+        self._zoom_bar.hide()
+        self._main_layout.addWidget(self._zoom_bar)
+
         # Crop properties bar (hidden by default)
         self._crop_bar = CropPropertiesBar()
         self._crop_bar.property_changed.connect(
@@ -1216,6 +1261,7 @@ class PropertiesPanel(QWidget):
         self._text_mode = False
         self._gradient_mode = False
         self._move_mode = False
+        self._zoom_mode = False
         self._crop_mode = False
 
         self.setFixedHeight(34)
@@ -1227,11 +1273,13 @@ class PropertiesPanel(QWidget):
         self._text_mode = enabled
         self._gradient_mode = False
         self._move_mode = False
+        self._zoom_mode = False
         self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(enabled)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(False)
+        self._zoom_bar.setVisible(False)
         self._crop_bar.setVisible(False)
         if enabled and tool is not None:
             self._text_bar.sync_from_tool(tool)
@@ -1241,11 +1289,13 @@ class PropertiesPanel(QWidget):
         self._gradient_mode = enabled
         self._text_mode = False
         self._move_mode = False
+        self._zoom_mode = False
         self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(enabled)
         self._move_bar.setVisible(False)
+        self._zoom_bar.setVisible(False)
         self._crop_bar.setVisible(False)
         if enabled and tool is not None:
             self._gradient_bar.sync_from_tool(tool)
@@ -1255,11 +1305,27 @@ class PropertiesPanel(QWidget):
         self._move_mode = enabled
         self._text_mode = False
         self._gradient_mode = False
+        self._zoom_mode = False
         self._crop_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(enabled)
+        self._zoom_bar.setVisible(False)
+        self._crop_bar.setVisible(False)
+
+    def set_zoom_mode(self, enabled: bool) -> None:
+        """Switch to zoom-tool properties bar."""
+        self._zoom_mode = enabled
+        self._text_mode = False
+        self._gradient_mode = False
+        self._move_mode = False
+        self._crop_mode = False
+        self._props_container.setVisible(not enabled)
+        self._text_bar.setVisible(False)
+        self._gradient_bar.setVisible(False)
+        self._move_bar.setVisible(False)
+        self._zoom_bar.setVisible(enabled)
         self._crop_bar.setVisible(False)
 
     def set_crop_mode(self, enabled: bool, tool=None) -> None:
@@ -1268,10 +1334,12 @@ class PropertiesPanel(QWidget):
         self._text_mode = False
         self._gradient_mode = False
         self._move_mode = False
+        self._zoom_mode = False
         self._props_container.setVisible(not enabled)
         self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(False)
+        self._zoom_bar.setVisible(False)
         self._crop_bar.setVisible(enabled)
         if enabled and tool is not None:
             self._crop_bar.sync_from_tool(tool)
@@ -1291,6 +1359,10 @@ class PropertiesPanel(QWidget):
     @property
     def crop_bar(self) -> CropPropertiesBar:
         return self._crop_bar
+
+    @property
+    def zoom_bar(self) -> ZoomPropertiesBar:
+        return self._zoom_bar
 
     # ---- Generic API (unchanged) ----
 

@@ -89,8 +89,6 @@ class ShapeTool(Tool):
     # ------------------------------------------------------------------
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
-        self._rasterize_if_needed(doc)
-        doc.save_snapshot("Draw Shape")
         self._start_x, self._start_y = x, y
         self._dragging = True
 
@@ -101,33 +99,49 @@ class ShapeTool(Tool):
         if not self._dragging:
             return
         self._dragging = False
-        layer = doc.layers.active_layer
-        if layer is None or layer.locked:
+
+        sx, sy = self._start_x, self._start_y
+        ex, ey = x, y
+        # Determine bounding rect of the shape in document coords
+        rx, ry = min(sx, ex), min(sy, ey)
+        rw, rh = abs(ex - sx), abs(ey - sy)
+        if rw < 2 or rh < 2:
             return
 
-        lx, ly = layer.position
-        h, w = layer.pixels.shape[:2]
+        # Add some padding for strokes
+        pad = self.stroke_width + 2
+        lx, ly = max(0, rx - pad), max(0, ry - pad)
+        lw, lh = rw + pad * 2, rh + pad * 2
+
+        # Create a new layer for the shape
+        from ..core.layer import Layer
+        from ..core.enums import LayerType
+        layer = Layer(name=f"Shape", width=lw, height=lh,
+                      layer_type=LayerType.RASTER)
+        layer.position = (lx, ly)
+        # pixels start as transparent zeros — perfect
+
         # Render shape into a BGRA uint8 buffer then convert to float RGBA
-        buf = np.zeros((h, w, 4), dtype=np.uint8)
+        buf = np.zeros((lh, lw, 4), dtype=np.uint8)
         # Convert document coords to layer-local coords
-        sx, sy = self._start_x - lx, self._start_y - ly
-        ex, ey = x - lx, y - ly
+        draw_sx, draw_sy = sx - lx, sy - ly
+        draw_ex, draw_ey = ex - lx, ey - ly
         draw_fn = {
             "rect": self._draw_rect,
             "ellipse": self._draw_ellipse,
             "line": self._draw_line,
             "polygon": self._draw_polygon,
         }.get(self.shape_type, self._draw_rect)
-        draw_fn(buf, sx, sy, ex, ey)
+        draw_fn(buf, draw_sx, draw_sy, draw_ex, draw_ey)
 
         # Convert BGRA uint8 → RGBA float32
-        shape_rgba = np.zeros_like(buf, dtype=np.float32)
+        shape_rgba = np.zeros((lh, lw, 4), dtype=np.float32)
         shape_rgba[..., 0] = buf[..., 2] / 255.0  # R
         shape_rgba[..., 1] = buf[..., 1] / 255.0  # G
         shape_rgba[..., 2] = buf[..., 0] / 255.0  # B
         shape_rgba[..., 3] = buf[..., 3] / 255.0  # A
 
-        # Alpha-composite shape onto layer
-        alpha = shape_rgba[..., 3:4]
-        layer.pixels[:] = layer.pixels * (1 - alpha) + shape_rgba * alpha
-        np.clip(layer.pixels, 0, 1, out=layer.pixels)
+        layer.pixels = shape_rgba
+        doc.layers.add(layer)
+        doc.save_snapshot("Draw Shape")
+        doc.mark_dirty()

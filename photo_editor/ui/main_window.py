@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         self._props_panel.text_property_changed.connect(self._on_text_prop_changed)
         self._props_panel.gradient_property_changed.connect(self._on_gradient_prop_changed)
         self._props_panel.align_requested.connect(self._on_align_requested)
+        self._props_panel.zoom_action.connect(self._on_zoom_action)
         self._props_panel.crop_property_changed.connect(self._on_crop_prop_changed)
         self._props_panel.crop_apply.connect(self._on_crop_apply)
         self._props_panel.crop_cancel.connect(self._on_crop_cancel)
@@ -225,6 +226,10 @@ class MainWindow(QMainWindow):
         self._canvas.tool_pressed.connect(self._on_canvas_press)
         self._canvas.tool_moved.connect(self._on_canvas_move)
         self._canvas.tool_released.connect(self._on_canvas_release)
+        # Widget-coord signals for the pan tool
+        self._canvas.widget_pressed.connect(self._on_widget_press)
+        self._canvas.widget_moved.connect(self._on_widget_move)
+        self._canvas.widget_released.connect(self._on_widget_release)
 
     # ---- Document lifecycle -------------------------------------------------
 
@@ -715,11 +720,53 @@ class MainWindow(QMainWindow):
         """Called when the zoom tool requests a zoom change."""
         self._canvas.set_zoom(self._canvas.zoom * factor)
 
-    def _on_pan_tool(self, dx: int, dy: int) -> None:
-        """Called when the pan tool requests a pan delta."""
+    def _on_zoom_action(self, action: str) -> None:
+        """Handle zoom actions from the zoom properties bar."""
+        if action == "zoom_in":
+            self._canvas.set_zoom(self._canvas.zoom * 1.5)
+        elif action == "zoom_out":
+            self._canvas.set_zoom(self._canvas.zoom / 1.5)
+        elif action == "fit":
+            if self._doc:
+                vw = self._canvas.width()
+                vh = self._canvas.height()
+                scale = min(vw / self._doc.width, vh / self._doc.height) * 0.95
+                self._canvas.set_zoom(scale)
+                from PySide6.QtCore import QPointF
+                self._canvas._pan = QPointF(0, 0)
+                self._canvas.update()
+        elif action == "reset":
+            self._canvas.set_zoom(1.0)
+            from PySide6.QtCore import QPointF
+            self._canvas._pan = QPointF(0, 0)
+            self._canvas.update()
+
+    def _on_pan_tool(self, dx_screen: float, dy_screen: float) -> None:
+        """Called when the pan tool requests a pan delta (screen pixels)."""
         from PySide6.QtCore import QPointF
-        self._canvas._pan += QPointF(dx * self._canvas.zoom, dy * self._canvas.zoom)
+        self._canvas._pan += QPointF(dx_screen, dy_screen)
         self._canvas.update()
+
+    def _on_widget_press(self, wx: float, wy: float) -> None:
+        """Forward widget-coord press to the pan tool."""
+        if self._tools.active_type == ToolType.PAN:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.begin_pan(wx, wy)
+
+    def _on_widget_move(self, wx: float, wy: float) -> None:
+        """Forward widget-coord move to the pan tool."""
+        if self._tools.active_type == ToolType.PAN:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.update_pan(wx, wy)
+
+    def _on_widget_release(self) -> None:
+        """Forward widget-coord release to the pan tool."""
+        if self._tools.active_type == ToolType.PAN:
+            tool = self._tools.active_tool
+            if tool is not None:
+                tool.end_pan()
 
     def _on_canvas_hover(self, x: int, y: int) -> None:
         """Handle non-drag mouse movement for cursor updates."""
@@ -837,6 +884,12 @@ class MainWindow(QMainWindow):
             self._props_panel.set_crop_mode(True, tool)
             return
 
+        # Zoom tool uses its own properties bar
+        if tool_type == ToolType.ZOOM:
+            self._props_panel.clear()
+            self._props_panel.set_zoom_mode(True)
+            return
+
         # Text tool uses its own specialised properties bar
         if tool_type == ToolType.TEXT:
             self._props_panel.clear()
@@ -853,6 +906,7 @@ class MainWindow(QMainWindow):
         self._props_panel.set_gradient_mode(False)
         self._props_panel.set_move_mode(False)
         self._props_panel.set_crop_mode(False)
+        self._props_panel.set_zoom_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
