@@ -53,6 +53,12 @@ class Layer:
         self._adjustment: object | None = None
         self._adjustment_params: dict = {}
         self.children: list[str] = []
+        # Mask layer children — IDs of MASK-type layers attached to this layer
+        self.mask_layers: list[str] = []
+        # Ex-parent tracking: when a mask layer is detached from its parent,
+        # this records the old parent so compositing can scope the mask
+        # to only that layer (instead of affecting all layers below).
+        self.ex_parent_id: str | None = None
         # --- Non-destructive transform state ---
         # Original full-quality pixel data (None = no ND transform active)
         self._source_pixels: np.ndarray | None = None
@@ -242,6 +248,24 @@ class Layer:
 
     # ---- Utilities ----------------------------------------------------------
 
+    @property
+    def is_mask_layer(self) -> bool:
+        """True when this layer acts as a mask (MASK type)."""
+        return self.layer_type == LayerType.MASK
+
+    def get_mask_grayscale(self) -> np.ndarray:
+        """Return the grayscale mask data from this layer's pixels.
+
+        For MASK layers the luminance of the RGB channels is used:
+        white = fully visible, black = fully hidden.
+        """
+        # Use luminance: 0.299R + 0.587G + 0.114B
+        return (
+            self._pixels[..., 0] * 0.299
+            + self._pixels[..., 1] * 0.587
+            + self._pixels[..., 2] * 0.114
+        ).astype(np.float32)
+
     def duplicate(self) -> "Layer":
         new = Layer(
             name=f"{self.name} copy",
@@ -262,6 +286,8 @@ class Layer:
         if self._mask is not None:
             new._mask = self._mask.copy()
         new._styles = list(self._styles)
+        new.mask_layers = list(self.mask_layers)
+        new.ex_parent_id = self.ex_parent_id
         # Copy non-destructive source data
         if self._source_pixels is not None:
             new._source_pixels = self._source_pixels.copy()

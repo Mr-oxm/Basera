@@ -44,6 +44,11 @@ _ROLE_LAYER_ID  = Qt.ItemDataRole.UserRole
 _ROLE_IS_GROUP  = Qt.ItemDataRole.UserRole + 1
 _ROLE_INDENT    = Qt.ItemDataRole.UserRole + 2
 _ROLE_PARENT_ID = Qt.ItemDataRole.UserRole + 3
+_ROLE_IS_MASK   = Qt.ItemDataRole.UserRole + 4
+_ROLE_IS_ADJ_FILTER = Qt.ItemDataRole.UserRole + 5
+_ROLE_IS_SEP    = Qt.ItemDataRole.UserRole + 6
+
+_SEP_HEIGHT = 6  # height of thin separator rows in the layer list
 
 _THUMB_SIZE = 36
 _ROW_HEIGHT = 48
@@ -148,6 +153,24 @@ def _ico_mask():
         p.setPen(QPen(QColor(_ICON_ACTIVE), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QRectF(2, 2, s - 4, s - 4))
+    return _tb_icon(_d)
+
+
+def _ico_mask_layer():
+    """Circle with a gradient fill — represents a mask layer."""
+    def _d(p, s):
+        cx, cy, r = s / 2, s / 2, s / 2 - 2
+        # Outer circle
+        p.setPen(QPen(QColor(_ICON_ACTIVE), 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(QPointF(cx, cy), r, r)
+        # Right half filled (white → black gradient visual)
+        clip = QPainterPath()
+        clip.addRect(QRectF(cx, 0, cx, s))
+        p.setClipPath(clip)
+        p.setBrush(QColor(_ICON_ACTIVE))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(cx, cy), r, r)
     return _tb_icon(_d)
 
 
@@ -400,10 +423,13 @@ class _LayerItemWidget(QWidget):
         is_group: bool = False,
         is_collapsed: bool = False,
         has_mask: bool = False,
+        has_children: bool = False,
+        masks_collapsed: bool = False,
         thumbnail: QPixmap | None = None,
         is_adjustment: bool = False,
         is_filter: bool = False,
         is_text: bool = False,
+        is_mask_layer: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -432,13 +458,32 @@ class _LayerItemWidget(QWidget):
                 lambda: self.collapse_clicked.emit(layer_id),
             )
             layout.addWidget(self._arrow_btn)
+        elif has_children:
+            # Arrow to show/hide mask/adjustment/filter children (like groups)
+            arrow_text = "\u25B6" if masks_collapsed else "\u25BC"
+            self._arrow_btn = QPushButton(arrow_text)
+            self._arrow_btn.setFixedSize(18, 18)
+            self._arrow_btn.setFlat(True)
+            self._arrow_btn.setStyleSheet(
+                f"font-size: 9px; padding: 0; color: {_TEXT}; background: transparent;")
+            self._arrow_btn.setToolTip("Show masks" if masks_collapsed else "Hide masks")
+            self._arrow_btn.clicked.connect(
+                lambda: self.collapse_clicked.emit(layer_id),
+            )
+            layout.addWidget(self._arrow_btn)
 
         # Thumbnail
         self._thumb_label = QLabel()
         self._thumb_label.setFixedSize(_THUMB_SIZE, _THUMB_SIZE)
         self._thumb_label.setStyleSheet(
             f"border: 1px solid {_BORDER}; background: transparent;")
-        if is_adjustment:
+        if is_mask_layer:
+            if thumbnail:
+                self._thumb_label.setPixmap(thumbnail)
+            else:
+                self._thumb_label.setPixmap(_ico_mask_layer().pixmap(_THUMB_SIZE - 4, _THUMB_SIZE - 4))
+                self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        elif is_adjustment:
             self._thumb_label.setPixmap(_ico_adjustment().pixmap(_THUMB_SIZE - 4, _THUMB_SIZE - 4))
             self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         elif is_filter:
@@ -547,6 +592,10 @@ class _LayerItemDelegate(QStyledItemDelegate):
     """Draw a rounded purple selection rectangle behind the item widget."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
+        # Skip selection highlight for separator rows
+        if index.data(_ROLE_IS_SEP):
+            return
+
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -573,12 +622,17 @@ class _LayerListWidget(QListWidget):
     layers_reordered = Signal(list, int)
     layers_dropped_in_group = Signal(list, str)
     layers_unparented = Signal(list)           # remove layers from their group
+    mask_dropped_on_layer = Signal(str, str)   # mask_layer_id, target_layer_id
+    adj_filter_dropped_on_layer = Signal(str, str)  # adj/filter_layer_id, target_layer_id
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setDragDropMode(QListWidget.DragDropMode.InternalMove)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setItemDelegate(_LayerItemDelegate(self))
+        self._mask_drop_target: QListWidgetItem | None = None
+        # Drop indicator line position (-1 = hidden)
+        self._drop_indicator_y: int = -1
 
         self.setStyleSheet(f"""
             QListWidget {{
@@ -596,7 +650,108 @@ class _LayerListWidget(QListWidget):
             }}
         """)
 
+    def _clear_mask_highlight(self) -> None:
+        """Remove the mask-drop highlight from any previously highlighted item."""
+        if self._mask_drop_target is not None:
+            w = self.itemWidget(self._mask_drop_target)
+            if w:
+                w.setStyleSheet("background: transparent;")
+            self._mask_drop_target = None
+
+    def _is_dragging_mask(self) -> bool:
+        """Return True if ALL selected (dragged) items are MASK layers."""
+        for item in self.selectedItems():
+            if not item.data(_ROLE_IS_MASK):
+                return False
+        return bool(self.selectedItems())
+
+    def _is_dragging_adj_filter(self) -> bool:
+        """Return True if ALL selected (dragged) items are ADJUSTMENT/FILTER layers."""
+        for item in self.selectedItems():
+            if not item.data(_ROLE_IS_ADJ_FILTER):
+                return False
+        return bool(self.selectedItems())
+
+    def _is_dragging_attachable(self) -> bool:
+        """Return True if dragging masks or adj/filter layers."""
+        return self._is_dragging_mask() or self._is_dragging_adj_filter()
+
+    def dragMoveEvent(self, event) -> None:
+        """Show a distinct highlight when a MASK or ADJ/FILTER layer is
+        dragged over a non-mask layer, indicating it will be attached."""
+        if self._is_dragging_attachable():
+            # Attachable layer drag — show border highlight, hide line indicator
+            self._drop_indicator_y = -1
+            self.viewport().update()
+            pos = event.position().toPoint()
+            target_item = self.itemAt(pos)
+            if (target_item
+                    and not target_item.data(_ROLE_IS_MASK)
+                    and not target_item.data(_ROLE_IS_ADJ_FILTER)
+                    and not target_item.data(_ROLE_IS_SEP)):
+                if target_item is not self._mask_drop_target:
+                    self._clear_mask_highlight()
+                    self._mask_drop_target = target_item
+                    w = self.itemWidget(target_item)
+                    border_color = "#00bcd4" if self._is_dragging_mask() else "#ff9800"
+                    if w:
+                        w.setStyleSheet(
+                            "background: transparent;"
+                            f"border: 2px solid {border_color};"
+                            "border-radius: 4px;"
+                        )
+                super().dragMoveEvent(event)
+                return
+            else:
+                self._clear_mask_highlight()
+        else:
+            self._clear_mask_highlight()
+            # Normal reorder drag — show drop indicator line
+            pos = event.position().toPoint()
+            target_item = self.itemAt(pos)
+            if target_item:
+                rect = self.visualItemRect(target_item)
+                rel_y = pos.y() - rect.top()
+                if rel_y < rect.height() / 2:
+                    self._drop_indicator_y = rect.top()
+                else:
+                    self._drop_indicator_y = rect.bottom()
+            else:
+                # Below all items
+                if self.count() > 0:
+                    last_rect = self.visualItemRect(self.item(self.count() - 1))
+                    self._drop_indicator_y = last_rect.bottom()
+                else:
+                    self._drop_indicator_y = -1
+            self.viewport().update()
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event) -> None:
+        self._clear_mask_highlight()
+        self._drop_indicator_y = -1
+        self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._drop_indicator_y >= 0:
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#7a3da8"), 2)
+            p.setPen(pen)
+            y = self._drop_indicator_y
+            p.drawLine(4, y, self.viewport().width() - 4, y)
+            # Small circles at each end
+            p.setBrush(QColor("#7a3da8"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QPointF(4, y), 3, 3)
+            p.drawEllipse(QPointF(self.viewport().width() - 4, y), 3, 3)
+            p.end()
+
     def dropEvent(self, event) -> None:
+        self._clear_mask_highlight()
+        self._drop_indicator_y = -1
+        self.viewport().update()
         source_items = self.selectedItems()
         if not source_items:
             event.ignore()
@@ -610,10 +765,43 @@ class _LayerListWidget(QListWidget):
         pos = event.position().toPoint()
         target_item = self.itemAt(pos)
 
+        # Mask-onto-layer drop: attach the mask to the target layer
+        if target_item and self._is_dragging_mask():
+            target_id = target_item.data(_ROLE_LAYER_ID)
+            if (not target_item.data(_ROLE_IS_MASK)
+                    and not target_item.data(_ROLE_IS_SEP)
+                    and target_id not in source_ids):
+                for sid in source_ids:
+                    self.mask_dropped_on_layer.emit(sid, target_id)
+                event.ignore()
+                return
+
+        # Adj/filter-onto-layer drop: attach as child of target layer
+        if target_item and self._is_dragging_adj_filter():
+            target_id = target_item.data(_ROLE_LAYER_ID)
+            if (not target_item.data(_ROLE_IS_MASK)
+                    and not target_item.data(_ROLE_IS_ADJ_FILTER)
+                    and not target_item.data(_ROLE_IS_SEP)
+                    and target_id not in source_ids):
+                for sid in source_ids:
+                    self.adj_filter_dropped_on_layer.emit(sid, target_id)
+                event.ignore()
+                return
+
+        pos = event.position().toPoint()
+        target_item = self.itemAt(pos)
+
         if target_item:
             target_id = target_item.data(_ROLE_LAYER_ID)
             is_group = target_item.data(_ROLE_IS_GROUP)
             parent_id = target_item.data(_ROLE_PARENT_ID)
+
+            # Skip separator rows — treat as reorder at that position
+            if target_item.data(_ROLE_IS_SEP):
+                drop_row = self.row(target_item)
+                self.layers_reordered.emit(source_ids, drop_row)
+                event.ignore()
+                return
 
             item_rect = self.visualItemRect(target_item)
             rel_y = pos.y() - item_rect.top()
@@ -743,6 +931,8 @@ class LayersPanel(QWidget):
     layers_reordered = Signal(list, int)
     layers_reparented = Signal(list, str)
     layers_unparented = Signal(list)
+    mask_dropped_on_layer = Signal(str, str)   # mask_layer_id, target_layer_id
+    adj_filter_dropped_on_layer = Signal(str, str)  # adj/filter_layer_id, target_layer_id
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -750,6 +940,7 @@ class LayersPanel(QWidget):
         self._refreshing = False
         self._row_layer_ids: list[str] = []
         self._collapsed_groups: set[str] = set()
+        self._collapsed_masks: set[str] = set()  # layers whose mask children are hidden
         self._build_ui()
 
     # ---- Build UI -----------------------------------------------------------
@@ -861,6 +1052,8 @@ class LayersPanel(QWidget):
         self._list.layers_reordered.connect(self.layers_reordered.emit)
         self._list.layers_dropped_in_group.connect(self.layers_reparented.emit)
         self._list.layers_unparented.connect(self.layers_unparented.emit)
+        self._list.mask_dropped_on_layer.connect(self.mask_dropped_on_layer.emit)
+        self._list.adj_filter_dropped_on_layer.connect(self.adj_filter_dropped_on_layer.emit)
         root.addWidget(self._list, 1)
 
         root.addWidget(_h_separator())
@@ -994,8 +1187,15 @@ class LayersPanel(QWidget):
 
         # --- Fast path: if the layer structure hasn't changed, just
         # update the active-layer highlight and header controls.
-        display_order = self._build_display_order(document, self._collapsed_groups)
-        new_ids = [layer.id for layer, _ in display_order]
+        display_order = self._build_display_order(document, self._collapsed_groups, self._collapsed_masks)
+        # Build id list — separators get a sentinel so structure changes
+        # are detected when separators shift.
+        new_ids: list[str] = []
+        for entry in display_order:
+            if len(entry) == 3:  # separator
+                new_ids.append("__sep__")
+            else:
+                new_ids.append(entry[0].id)
         structure_changed = (new_ids != self._row_layer_ids)
 
         if not structure_changed and not thumbnails:
@@ -1008,12 +1208,53 @@ class LayersPanel(QWidget):
         self._list.clear()
         self._row_layer_ids = []
 
-        for layer, indent in display_order:
+        for entry in display_order:
+            # --- Separator row ---
+            if len(entry) == 3:
+                _, indent, _ = entry
+                item = QListWidgetItem()
+                item.setData(_ROLE_LAYER_ID, "__sep__")
+                item.setData(_ROLE_IS_SEP, True)
+                item.setSizeHint(QSize(0, _SEP_HEIGHT))
+                item.setFlags(Qt.ItemFlag.NoItemFlags)  # non-selectable
+
+                sep_widget = QWidget()
+                sep_layout = QHBoxLayout(sep_widget)
+                left_margin = 4 + indent * 16
+                sep_layout.setContentsMargins(left_margin, 0, 4, 0)
+                sep_layout.setSpacing(0)
+                line = QFrame()
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setStyleSheet(f"color: {_BORDER};")
+                line.setFixedHeight(1)
+                sep_layout.addWidget(line)
+                sep_widget.setStyleSheet("background: transparent;")
+
+                self._list.addItem(item)
+                self._list.setItemWidget(item, sep_widget)
+                self._row_layer_ids.append("__sep__")
+                continue
+
+            layer, indent = entry
             is_group = layer.layer_type == LayerType.GROUP
             is_adjustment = layer.layer_type == LayerType.ADJUSTMENT
             is_filter = layer.layer_type == LayerType.FILTER
             is_text = layer.layer_type == LayerType.TEXT
-            has_mask = layer.mask is not None
+            is_mask_layer = layer.layer_type == LayerType.MASK
+            has_mask = layer.mask is not None or bool(layer.mask_layers)
+            # Check if layer has adj/filter children
+            has_adj_children = any(
+                cl.parent_id == layer.id
+                and cl.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+                for cl in document.layers
+            )
+            # Check if layer has mask layer children (attached MASK layers)
+            has_mask_children = any(
+                cl.parent_id == layer.id
+                and cl.layer_type == LayerType.MASK
+                for cl in document.layers
+            )
+            has_children = has_mask or has_mask_children or has_adj_children
             is_collapsed = layer.id in self._collapsed_groups
 
             item = QListWidgetItem()
@@ -1021,6 +1262,8 @@ class LayersPanel(QWidget):
             item.setData(_ROLE_IS_GROUP, is_group)
             item.setData(_ROLE_INDENT, indent)
             item.setData(_ROLE_PARENT_ID, layer.parent_id or "")
+            item.setData(_ROLE_IS_MASK, is_mask_layer)
+            item.setData(_ROLE_IS_ADJ_FILTER, is_adjustment or is_filter)
             item.setSizeHint(QSize(0, _ROW_HEIGHT))
 
             thumbnail = None
@@ -1030,15 +1273,19 @@ class LayersPanel(QWidget):
             widget = _LayerItemWidget(
                 layer.id, layer.name, layer.visible, layer.locked,
                 indent=indent, is_group=is_group, is_collapsed=is_collapsed,
-                has_mask=has_mask, thumbnail=thumbnail,
+                has_mask=has_mask, has_children=has_children,
+                masks_collapsed=(layer.id in self._collapsed_masks),
+                thumbnail=thumbnail,
                 is_adjustment=is_adjustment, is_filter=is_filter,
-                is_text=is_text,
+                is_text=is_text, is_mask_layer=is_mask_layer,
             )
             widget.visibility_clicked.connect(self.visibility_toggled.emit)
             widget.lock_clicked.connect(self.lock_toggled.emit)
             widget.rename_finished.connect(self.rename_requested.emit)
             if is_group:
                 widget.collapse_clicked.connect(self._on_collapse_toggled)
+            elif has_children:
+                widget.collapse_clicked.connect(self._on_mask_collapse_toggled)
 
             self._list.addItem(item)
             self._list.setItemWidget(item, widget)
@@ -1109,25 +1356,83 @@ class LayersPanel(QWidget):
     @staticmethod
     def _build_display_order(
         document: Document, collapsed: set[str],
+        masks_collapsed: set[str] | None = None,
     ) -> list[tuple]:
+        """Build the visible layer ordering for the panel.
+
+        Returns a list of tuples:
+          (layer, indent)       — normal layer rows
+          (None, indent, "sep") — thin separator rows
+
+        Ordering within each layer/group:
+          1. Mask children  (if any, and not collapsed)
+          2. ── separator ──
+          3. Adj/filter children  (if any, and not collapsed)
+          4. ── separator ──  (groups only)
+          5. Raster (group content) children  (groups only, if not collapsed)
+
+        For groups: collapsing the group hides ALL children (masks, adj,
+        raster).  The masks_collapsed set independently controls mask/adj
+        visibility on both groups and regular layers.
+        """
+        if masks_collapsed is None:
+            masks_collapsed = set()
         layers = list(document.layers)
         children_of: dict[str, list] = {}
+        mask_children_of: dict[str, list] = {}
+        adj_children_of: dict[str, list] = {}
         for layer in layers:
             if layer.parent_id:
-                children_of.setdefault(layer.parent_id, []).append(layer)
+                if layer.layer_type == LayerType.MASK:
+                    mask_children_of.setdefault(layer.parent_id, []).append(layer)
+                elif layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    adj_children_of.setdefault(layer.parent_id, []).append(layer)
+                else:
+                    children_of.setdefault(layer.parent_id, []).append(layer)
+
+        def _emit_children(lid, indent, result, is_group, group_collapsed):
+            """Emit mask, adj/filter, and (for groups) raster children."""
+            has_masks = lid in mask_children_of
+            has_adj = lid in adj_children_of
+            has_raster = is_group and lid in children_of
+            masks_hidden = lid in masks_collapsed
+
+            # For groups: if the group itself is collapsed, hide everything
+            if is_group and group_collapsed:
+                return
+
+            # -- Mask children --
+            if has_masks and not masks_hidden:
+                for child in reversed(mask_children_of[lid]):
+                    result.append((child, indent))
+
+            # -- Separator between masks and adj/filter --
+            if has_masks and has_adj and not masks_hidden:
+                result.append((None, indent, "sep"))
+
+            # -- Adj/filter children --
+            if has_adj and not masks_hidden:
+                for child in reversed(adj_children_of[lid]):
+                    result.append((child, indent))
+
+            # -- Separator between adj/filter and raster children (groups) --
+            if has_raster and not group_collapsed:
+                if (has_masks or has_adj) and not masks_hidden:
+                    result.append((None, indent, "sep"))
+                for child in reversed(children_of[lid]):
+                    result.append((child, indent))
+                    # Recurse: show mask/adj children of group's raster children
+                    _emit_children(child.id, indent + 1, result,
+                                   is_group=False, group_collapsed=False)
 
         result: list[tuple] = []
         for layer in reversed(layers):
             if layer.parent_id is not None:
                 continue
+            is_group = layer.layer_type == LayerType.GROUP
             result.append((layer, 0))
-            if (
-                layer.layer_type == LayerType.GROUP
-                and layer.id not in collapsed
-                and layer.id in children_of
-            ):
-                for child in reversed(children_of[layer.id]):
-                    result.append((child, 1))
+            group_collapsed = is_group and layer.id in collapsed
+            _emit_children(layer.id, 1, result, is_group, group_collapsed)
         return result
 
     # ---- Internal slots -----------------------------------------------------
@@ -1149,6 +1454,15 @@ class LayersPanel(QWidget):
             self._collapsed_groups.discard(group_id)
         else:
             self._collapsed_groups.add(group_id)
+        if self._doc:
+            self.refresh(self._doc)
+
+    def _on_mask_collapse_toggled(self, layer_id: str) -> None:
+        """Toggle visibility of mask children under a layer."""
+        if layer_id in self._collapsed_masks:
+            self._collapsed_masks.discard(layer_id)
+        else:
+            self._collapsed_masks.add(layer_id)
         if self._doc:
             self.refresh(self._doc)
 

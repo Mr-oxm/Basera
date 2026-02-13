@@ -51,6 +51,7 @@ class LayerType(Enum):
     FILTER = auto()
     GROUP = auto()
     SMART_OBJECT = auto()
+    MASK = auto()
 
 
 class ToolType(Enum):

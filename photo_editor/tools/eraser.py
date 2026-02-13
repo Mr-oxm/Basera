@@ -1,9 +1,14 @@
-"""Eraser tool — removes pixel data by reducing alpha on the active layer."""
+"""Eraser tool — removes pixel data by reducing alpha on the active layer.
+
+On MASK layers, erasing paints towards black (fully hidden) instead of
+reducing alpha, matching the Affinity / Photoshop convention.
+"""
 
 import numpy as np
 
 from .tool_base import Tool
 from ..core.document import Document
+from ..core.enums import LayerType
 
 
 class EraserTool(Tool):
@@ -95,9 +100,18 @@ class EraserTool(Tool):
         eff_opacity = self.opacity * pressure
         step = max(1.0, radius * 2 * self.spacing)
         sel_mask = self._get_sel_mask(doc)
-        for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._erase_circle(layer.pixels, px - lx, py - ly, radius,
-                               self.hardness, eff_opacity, sel_mask=sel_mask)
+
+        if layer.layer_type == LayerType.MASK:
+            # On mask layers, erase = paint black (RGB → 0, keep alpha=1)
+            black = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            for px, py in self._stroke_points(x0, y0, x1, y1, step):
+                self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
+                                   black, self.hardness, eff_opacity,
+                                   sel_mask=sel_mask)
+        else:
+            for px, py in self._stroke_points(x0, y0, x1, y1, step):
+                self._erase_circle(layer.pixels, px - lx, py - ly, radius,
+                                   self.hardness, eff_opacity, sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface

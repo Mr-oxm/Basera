@@ -78,6 +78,35 @@ class Document:
         return layer
 
     def remove_layer(self, layer_id: str) -> None:
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return
+        # If this is a group, recursively remove all children first
+        if layer.layer_type == LayerType.GROUP:
+            child_ids = [
+                c.id for c in list(self.layers)
+                if c.parent_id == layer_id
+            ]
+            for cid in child_ids:
+                self.remove_layer(cid)
+        # If this layer has mask layers, remove them too
+        for mid in list(layer.mask_layers):
+            ml = self.layers.get(mid)
+            if ml is not None:
+                self.layers.remove(mid)
+        # If this layer has child adj/filter layers, remove them too
+        adj_child_ids = [
+            c.id for c in list(self.layers)
+            if c.parent_id == layer_id
+            and c.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+        ]
+        for cid in adj_child_ids:
+            self.layers.remove(cid)
+        # If this is a mask layer, detach from parent
+        if layer.layer_type == LayerType.MASK and layer.parent_id:
+            parent = self.layers.get(layer.parent_id)
+            if parent and layer_id in parent.mask_layers:
+                parent.mask_layers.remove(layer_id)
         removed = self.layers.remove(layer_id)
         if removed:
             self._snapshot(f"Delete {removed.name}")
@@ -102,6 +131,113 @@ class Document:
         bg.locked = True
         self.layers.add(bg)
         self._snapshot("Flatten Image")
+        self._dirty = True
+
+    # ---- Mask layer operations ----------------------------------------------
+
+    def add_mask_layer(
+        self,
+        target_id: str | None = None,
+        fill_white: bool = True,
+        name: str | None = None,
+    ) -> Layer | None:
+        """Add a mask layer to the document.
+
+        Parameters
+        ----------
+        target_id : str | None
+            If provided, the mask is attached as a child of this layer.
+            If ``None`` and there is an active layer, it attaches to that.
+            Pass ``"__standalone__"`` to force a standalone mask layer.
+        fill_white : bool
+            White = fully visible (default); black = fully hidden.
+        name : str | None
+            Custom name for the mask layer.
+        """
+        standalone = target_id == "__standalone__"
+        if standalone:
+            target_id = None
+        elif target_id is None and self.layers.active_layer is not None:
+            active = self.layers.active_layer
+            # Don't attach a mask to another mask layer
+            if active.layer_type != LayerType.MASK:
+                target_id = active.id
+
+        # Use the target layer's current pixel dimensions so the mask
+        # matches a transformed (scaled/rotated) layer correctly.
+        mw, mh = self.width, self.height
+        if target_id:
+            target = self.layers.get(target_id)
+            if target is not None:
+                mw, mh = target.width, target.height
+
+        mask = self.layers.add_mask_layer(
+            target_id, mw, mh,
+            fill_white=fill_white, name=name,
+        )
+        if mask:
+            self._snapshot(f"Add Mask Layer")
+            self._dirty = True
+        return mask
+
+    def remove_mask_layer(self, mask_layer_id: str) -> None:
+        """Remove a mask layer from the document."""
+        removed = self.layers.remove_mask_layer(mask_layer_id)
+        if removed:
+            self._snapshot(f"Remove Mask {removed.name}")
+            self._dirty = True
+
+    def selection_to_mask_layer(self, target_id: str | None = None) -> Layer | None:
+        """Convert the current selection to a mask layer.
+
+        If no target_id is given, attaches to the active layer.
+        """
+        if not self.selection.active or self.selection.mask is None:
+            return None
+        if target_id is None and self.layers.active_layer is not None:
+            active = self.layers.active_layer
+            if active.layer_type != LayerType.MASK:
+                target_id = active.id
+        mask = self.layers.selection_to_mask_layer(
+            target_id, self.selection.mask, self.width, self.height,
+        )
+        if mask:
+            self._snapshot("Selection to Mask")
+            self._dirty = True
+        return mask
+
+    def convert_layer_to_mask(self, layer_id: str, target_id: str | None = None) -> Layer | None:
+        """Convert an existing layer to a mask layer.
+
+        If *target_id* is ``None``, the layer directly above in the stack is used.
+        """
+        if target_id is None:
+            # Find the layer directly above this one
+            for i, l in enumerate(self.layers):
+                if l.id == layer_id and i + 1 < len(self.layers):
+                    target_id = self.layers[i + 1].id
+                    break
+        if target_id is None:
+            return None
+        result = self.layers.convert_layer_to_mask(layer_id, target_id)
+        if result:
+            self._snapshot("Convert to Mask")
+            self._dirty = True
+        return result
+
+    def apply_mask_layer(self, mask_layer_id: str) -> None:
+        """Burn a mask layer into its parent's old-style single mask, then remove it."""
+        mask_layer = self.layers.get(mask_layer_id)
+        if mask_layer is None or mask_layer.layer_type != LayerType.MASK:
+            return
+        parent = self.layers.get(mask_layer.parent_id) if mask_layer.parent_id else None
+        if parent is None:
+            return
+        # Combine this mask layer's grayscale into the parent's alpha
+        grayscale = mask_layer.get_mask_grayscale()
+        parent.pixels[..., 3] *= grayscale
+        self.layers.remove_mask_layer(mask_layer_id)
+        self._snapshot("Apply Mask Layer")
         self._dirty = True
 
     # ---- History ------------------------------------------------------------
@@ -158,6 +294,8 @@ class Document:
                 "clipping_mask": layer.clipping_mask,
                 "parent_id": layer.parent_id,
                 "children": list(layer.children),
+                "mask_layers": list(layer.mask_layers),
+                "ex_parent_id": layer.ex_parent_id,
                 "transform_angle": layer.transform_angle,
                 "transform_scale_x": layer.transform_scale_x,
                 "transform_scale_y": layer.transform_scale_y,
@@ -213,8 +351,10 @@ class Document:
                     transform_base_w=meta.get("transform_base_w", 0),
                     transform_base_h=meta.get("transform_base_h", 0),
                 )
-                # Restore children list
+                # Restore children list and mask_layers
                 layer.children = list(meta.get("children", []))
+                layer.mask_layers = list(meta.get("mask_layers", []))
+                layer.ex_parent_id = meta.get("ex_parent_id")
                 # Restore pixel data
                 if lid in state.layer_data:
                     layer.pixels = state.layer_data[lid].copy()

@@ -166,6 +166,12 @@ class MainWindow(QMainWindow):
         a["dup_layer"].triggered.connect(self._on_dup_layer)
         a["del_layer"].triggered.connect(self._on_del_layer)
         a["add_mask"].triggered.connect(self._on_add_mask)
+        a["add_mask_black"].triggered.connect(self._on_add_mask_black)
+        a["add_mask_standalone"].triggered.connect(self._on_add_mask_standalone)
+        a["remove_mask_layer"].triggered.connect(self._on_remove_mask_layer)
+        a["apply_mask_layer"].triggered.connect(self._on_apply_mask_layer)
+        a["invert_mask_layer"].triggered.connect(self._on_invert_mask_layer)
+        a["convert_to_mask"].triggered.connect(self._on_convert_to_mask)
         a["toggle_vis"].triggered.connect(self._on_toggle_vis_selected)
         a["flatten"].triggered.connect(self._on_flatten)
         a["select_all"].triggered.connect(self._on_select_all)
@@ -178,6 +184,7 @@ class MainWindow(QMainWindow):
         a["copy"].triggered.connect(self._on_copy)
         a["paste"].triggered.connect(self._on_paste)
         a["duplicate_sel"].triggered.connect(self._on_duplicate_selection)
+        a["selection_to_mask"].triggered.connect(self._on_selection_to_mask)
         a["zoom_in"].triggered.connect(lambda: self._zoom(1.25))
         a["zoom_out"].triggered.connect(lambda: self._zoom(1 / 1.25))
         a["zoom_fit"].triggered.connect(self._canvas.zoom_to_fit)
@@ -208,6 +215,8 @@ class MainWindow(QMainWindow):
         lp.layers_reordered.connect(self._on_layers_reordered)
         lp.layers_reparented.connect(self._on_layers_reparented)
         lp.layers_unparented.connect(self._on_layers_unparented)
+        lp.mask_dropped_on_layer.connect(self._on_mask_dropped_on_layer)
+        lp.adj_filter_dropped_on_layer.connect(self._on_adj_filter_dropped_on_layer)
         lp.rename_requested.connect(self._on_rename_layer)
         lp.adjustment_layer_requested.connect(self._on_add_adjustment_layer)
         lp.edit_adjustment_requested.connect(self._on_edit_adjustment_layer)
@@ -549,8 +558,62 @@ class MainWindow(QMainWindow):
 
     def _on_add_mask(self) -> None:
         if self._doc and self._doc.layers.active_layer:
-            self._doc.layers.active_layer.add_mask(fill_white=True)
-            self._doc.save_snapshot("Add Mask")
+            # If there's an active selection, convert it to a mask layer
+            if self._doc.selection.active and self._doc.selection.mask is not None:
+                self._doc.selection_to_mask_layer()
+            else:
+                self._doc.add_mask_layer(fill_white=True)
+            self._refresh()
+
+    def _on_add_mask_black(self) -> None:
+        if self._doc and self._doc.layers.active_layer:
+            self._doc.add_mask_layer(fill_white=False)
+            self._refresh()
+
+    def _on_add_mask_standalone(self) -> None:
+        if self._doc:
+            self._doc.add_mask_layer(target_id="__standalone__", fill_white=True)
+            self._refresh()
+
+    def _on_remove_mask_layer(self) -> None:
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        if active and active.layer_type == LayerType.MASK:
+            self._doc.remove_mask_layer(active.id)
+            self._refresh()
+
+    def _on_apply_mask_layer(self) -> None:
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        if active and active.layer_type == LayerType.MASK:
+            self._doc.apply_mask_layer(active.id)
+            self._refresh()
+
+    def _on_invert_mask_layer(self) -> None:
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        if active and active.layer_type == LayerType.MASK:
+            from ..masks.mask_manager import MaskManager
+            self._doc.save_snapshot("Invert Mask Layer")
+            MaskManager.invert_mask_layer(active)
+            self._refresh()
+
+    def _on_convert_to_mask(self) -> None:
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        if active and active.layer_type not in (LayerType.MASK, LayerType.GROUP):
+            self._doc.convert_layer_to_mask(active.id)
+            self._refresh()
+
+    def _on_selection_to_mask(self) -> None:
+        if not self._doc:
+            return
+        if self._doc.selection.active:
+            self._doc.selection_to_mask_layer()
             self._refresh()
 
     def _on_layer_selected(self, stack_index: int) -> None:
@@ -629,15 +692,25 @@ class MainWindow(QMainWindow):
         # The display is top→bottom (reverse of stack bottom→top).
         display_ids = self._layers_panel.row_layer_ids()
 
-        # Remove the dragged ids from the display order
-        remaining = [lid for lid in display_ids if lid not in layer_ids]
+        # Count how many dragged items sit above the target row — after
+        # removal, the insertion index must be shifted down by that count.
+        drag_set = set(layer_ids)
+        above_count = 0
+        for i, lid in enumerate(display_ids):
+            if i >= target_visual_row:
+                break
+            if lid in drag_set:
+                above_count += 1
 
-        # Clamp target row
-        target_visual_row = max(0, min(target_visual_row, len(remaining)))
+        # Remove the dragged ids from the display order
+        remaining = [lid for lid in display_ids if lid not in drag_set]
+
+        # Clamp adjusted target row
+        adjusted_row = max(0, min(target_visual_row - above_count, len(remaining)))
 
         # Insert dragged ids at the target position
         for i, lid in enumerate(layer_ids):
-            remaining.insert(target_visual_row + i, lid)
+            remaining.insert(adjusted_row + i, lid)
 
         # Display order is reversed stack order.  Reverse to get stack order.
         new_stack_order = list(reversed(remaining))
@@ -661,6 +734,55 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, None)
         self._doc.save_snapshot("Remove from Group")
+        self._pipeline.engine.invalidate_all()
+        self._refresh()
+
+    def _on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
+        """Attach a mask layer to a target layer via drag-drop."""
+        if not self._doc:
+            return
+        mask = self._doc.layers.get(mask_id)
+        target = self._doc.layers.get(target_id)
+        if mask is None or target is None:
+            return
+        if mask.layer_type != LayerType.MASK:
+            return
+        # Detach from old parent if any
+        if mask.parent_id:
+            old_parent = self._doc.layers.get(mask.parent_id)
+            if old_parent and mask_id in old_parent.mask_layers:
+                old_parent.mask_layers.remove(mask_id)
+        # Attach to new target
+        mask.parent_id = target_id
+        mask.ex_parent_id = None  # Clear ex-parent since it's now attached
+        if mask_id not in target.mask_layers:
+            target.mask_layers.append(mask_id)
+        # Reposition just before the target in the stack
+        self._doc.layers.reposition_before(mask_id, target_id)
+        self._doc.save_snapshot("Attach Mask to Layer")
+        self._pipeline.engine.invalidate_all()
+        self._refresh()
+
+    def _on_adj_filter_dropped_on_layer(self, adj_id: str, target_id: str) -> None:
+        """Attach an adjustment/filter layer to a target layer via drag-drop."""
+        if not self._doc:
+            return
+        adj_layer = self._doc.layers.get(adj_id)
+        target = self._doc.layers.get(target_id)
+        if adj_layer is None or target is None:
+            return
+        if adj_layer.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER):
+            return
+        # Remove from old parent's children if any
+        if adj_layer.parent_id:
+            old_parent = self._doc.layers.get(adj_layer.parent_id)
+            if old_parent and adj_id in old_parent.children:
+                old_parent.children.remove(adj_id)
+        # Set new parent
+        adj_layer.parent_id = target_id
+        # Reposition just before the target in the stack
+        self._doc.layers.reposition_before(adj_id, target_id)
+        self._doc.save_snapshot("Attach Adjustment to Layer")
         self._pipeline.engine.invalidate_all()
         self._refresh()
 
@@ -1550,16 +1672,33 @@ class MainWindow(QMainWindow):
             self._refresh()
 
     def _on_add_adjustment_layer(self, name: str) -> None:
-        """Create a new adjustment layer for the given adjustment *name*."""
+        """Create a new adjustment layer for the given adjustment *name*.
+
+        By default, the adjustment is attached as a child of the active
+        layer so it only affects that layer (like Affinity Photo).
+        """
         if not self._doc:
             return
         adj_cls = _adj_map().get(name)
         if adj_cls is None:
             return
         adj = adj_cls()
+        # Remember the selected layer *before* add_layer changes active
+        prev_active = self._doc.layers.active_layer
         layer = self._doc.add_layer(name=name, layer_type=LayerType.ADJUSTMENT)
         layer.adjustment = adj
         layer.adjustment_params = dict(adj.default_params)
+        # Parent under the previously active layer
+        if prev_active is not None:
+            parent = prev_active
+            # If active is itself a child layer, parent under its parent instead
+            if prev_active.parent_id:
+                p = self._doc.layers.get(prev_active.parent_id)
+                if p:
+                    parent = p
+            if parent.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK):
+                layer.parent_id = parent.id
+                self._doc.layers.reposition_before(layer.id, parent.id)
         self._refresh()
         # Open the edit dialog immediately (skip for param-less adjustments like Invert)
         if adj.default_params:
@@ -1609,7 +1748,11 @@ class MainWindow(QMainWindow):
             self._refresh()
 
     def _on_add_filter_layer(self, display_name: str) -> None:
-        """Create a new filter layer for the given filter display name."""
+        """Create a new filter layer for the given filter display name.
+
+        By default, the filter is attached as a child of the active
+        layer so it only affects that layer (like Affinity Photo).
+        """
         if not self._doc:
             return
         fmap = _filter_name_map()
@@ -1617,9 +1760,21 @@ class MainWindow(QMainWindow):
         if filt_cls is None:
             return
         filt = filt_cls()
+        # Remember the selected layer *before* add_layer changes active
+        prev_active = self._doc.layers.active_layer
         layer = self._doc.add_layer(name=display_name, layer_type=LayerType.FILTER)
         layer.adjustment = filt
         layer.adjustment_params = dict(filt.default_params)
+        # Parent under the previously active layer
+        if prev_active is not None:
+            parent = prev_active
+            if prev_active.parent_id:
+                p = self._doc.layers.get(prev_active.parent_id)
+                if p:
+                    parent = p
+            if parent.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK):
+                layer.parent_id = parent.id
+                self._doc.layers.reposition_before(layer.id, parent.id)
         self._refresh()
         # Open the edit dialog immediately (skip for param-less filters)
         if filt.default_params:

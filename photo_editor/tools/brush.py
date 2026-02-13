@@ -4,10 +4,16 @@ import numpy as np
 
 from .tool_base import Tool
 from ..core.document import Document
+from ..core.enums import LayerType
 
 
 class BrushTool(Tool):
-    """Round pixel brush with pressure-sensitive size and opacity."""
+    """Round pixel brush with pressure-sensitive size and opacity.
+
+    When the active layer is a MASK layer, the brush automatically
+    paints in grayscale: the foreground colour's luminance is used so
+    that white = fully visible and black = fully hidden.
+    """
 
     def __init__(self) -> None:
         super().__init__("Brush")
@@ -62,6 +68,21 @@ class BrushTool(Tool):
             t = i / max(steps, 1)
             yield int(x0 + dx * t), int(y0 + dy * t)
 
+    def _get_paint_color(self, layer) -> np.ndarray:
+        """Return the effective paint colour for the given layer.
+
+        For MASK layers the colour is forced to grayscale (luminance of
+        the foreground colour replicated across RGB) with full alpha.
+        """
+        if layer is not None and layer.layer_type == LayerType.MASK:
+            lum = (
+                self.color[0] * 0.299
+                + self.color[1] * 0.587
+                + self.color[2] * 0.114
+            )
+            return np.array([lum, lum, lum, 1.0], dtype=np.float32)
+        return self.color
+
     def _stamp_along(self, doc: Document, x0: int, y0: int, x1: int, y1: int,
                      pressure: float) -> None:
         layer = doc.layers.active_layer
@@ -72,9 +93,10 @@ class BrushTool(Tool):
         eff_opacity = self._effective_opacity(pressure)
         step = max(1.0, radius * 2 * self.spacing)
         sel_mask = self._get_sel_mask(doc)
+        paint_color = self._get_paint_color(layer)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
             self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
-                               self.color, self.hardness, eff_opacity,
+                               paint_color, self.hardness, eff_opacity,
                                sel_mask=sel_mask)
 
     # ------------------------------------------------------------------

@@ -93,6 +93,11 @@ class MoveTool(Tool):
         self._group_child_positions: dict[str, tuple[int, int]] = {}
         self._group_child_pixels: dict[str, np.ndarray] = {}
         self._group_orig_bbox: tuple[int, int, int, int] | None = None
+        # Non-destructive group transforms (Affinity-style)
+        self._group_child_base_sx: dict[str, float] = {}
+        self._group_child_base_sy: dict[str, float] = {}
+        self._group_child_base_angle: dict[str, float] = {}
+        self._group_child_dims: dict[str, tuple[int, int]] = {}
         # Floating selection: when an active selection exists and the user
         # drags with the move tool, only the selected pixels move.
         self._floating: bool = False
@@ -323,7 +328,7 @@ class MoveTool(Tool):
             layer = doc.layers.layers[i]
             if not layer.visible or layer.locked:
                 continue
-            if layer.layer_type in (LayerType.GROUP, LayerType.ADJUSTMENT, LayerType.FILTER):
+            if layer.layer_type in (LayerType.GROUP, LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK):
                 continue
             if exclude_id is not None and layer.id == exclude_id:
                 continue
@@ -342,15 +347,25 @@ class MoveTool(Tool):
         #     click point.  If it differs from the current active layer,
         #     switch to it before doing anything else.  This ensures you
         #     always interact with what you visually click on. -------------
+        #     EXCEPTION: if the click lands on a resize/rotate handle of
+        #     the active layer's bounding box, skip auto-select so the
+        #     user can transform the layer without unwanted switches.
         if self.auto_select:
-            topmost_idx = self._find_layer_at(doc, x, y)
-            if topmost_idx is not None:
-                topmost = doc.layers.layers[topmost_idx]
-                if layer is None or topmost.id != layer.id:
-                    doc.layers.active_index = topmost_idx
-                    if self.on_layer_auto_selected:
-                        self.on_layer_auto_selected(topmost_idx)
-                    layer = doc.layers.active_layer
+            skip_autoselect = False
+            if layer is not None:
+                mode_hit, _ = self._hit_test(doc, x, y)
+                if mode_hit == _Mode.RESIZE:
+                    skip_autoselect = True
+
+            if not skip_autoselect:
+                topmost_idx = self._find_layer_at(doc, x, y)
+                if topmost_idx is not None:
+                    topmost = doc.layers.layers[topmost_idx]
+                    if layer is None or topmost.id != layer.id:
+                        doc.layers.active_index = topmost_idx
+                        if self.on_layer_auto_selected:
+                            self.on_layer_auto_selected(topmost_idx)
+                        layer = doc.layers.active_layer
 
         if layer is None or layer.locked:
             return
@@ -413,13 +428,23 @@ class MoveTool(Tool):
         self._group_child_positions = {}
         self._group_child_pixels = {}
         self._group_orig_bbox = None
+        self._group_child_base_sx = {}
+        self._group_child_base_sy = {}
+        self._group_child_base_angle = {}
+        self._group_child_dims = {}
 
         if layer.layer_type == LayerType.GROUP:
             for child in doc.layers:
                 if child.parent_id == layer.id:
                     self._group_children.append(child)
                     self._group_child_positions[child.id] = child.position
-                    self._group_child_pixels[child.id] = child.pixels.copy()
+                    # Non-destructive: snapshot source and record base transforms
+                    if child.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                        child.init_non_destructive()
+                        self._group_child_base_sx[child.id] = child.transform_scale_x
+                        self._group_child_base_sy[child.id] = child.transform_scale_y
+                        self._group_child_base_angle[child.id] = child.transform_angle
+                        self._group_child_dims[child.id] = (child.width, child.height)
             bbox = self._group_bbox(doc, layer)
             self._group_orig_bbox = bbox
             if bbox:
@@ -434,6 +459,22 @@ class MoveTool(Tool):
         # -- Single-layer non-destructive setup ----------------------------
         # Initialise ND source (idempotent — only snapshots on first call)
         layer.init_non_destructive()
+
+        # --- Collect mask children so transforms propagate to them ---
+        self._mask_children: list = []
+        self._mask_child_positions: dict[str, tuple[int, int]] = {}
+        self._mask_child_base_sx: dict[str, float] = {}
+        self._mask_child_base_sy: dict[str, float] = {}
+        self._mask_child_base_angle: dict[str, float] = {}
+        for mid in layer.mask_layers:
+            mc = doc.layers.get(mid)
+            if mc is not None:
+                mc.init_non_destructive()
+                self._mask_children.append(mc)
+                self._mask_child_positions[mc.id] = mc.position
+                self._mask_child_base_sx[mc.id] = mc.transform_scale_x
+                self._mask_child_base_sy[mc.id] = mc.transform_scale_y
+                self._mask_child_base_angle[mc.id] = mc.transform_angle
 
         if self._mode == _Mode.ROTATE:
             # Dimensions for center computation: current display size
@@ -504,18 +545,26 @@ class MoveTool(Tool):
             for child in self._group_children:
                 cox, coy = self._group_child_positions[child.id]
                 child.position = (cox + dx, coy + dy)
+            # Move mask children together with the parent
+            for mc in getattr(self, '_mask_children', []):
+                mcox, mcoy = self._mask_child_positions[mc.id]
+                mc.position = (mcox + dx, mcoy + dy)
 
         elif self._mode == _Mode.RESIZE:
             if is_group:
                 self._apply_group_resize(dx, dy)
             else:
                 self._apply_resize(layer, dx, dy)
+                # Propagate scale to mask children
+                self._sync_mask_transforms(layer)
 
         elif self._mode == _Mode.ROTATE:
             if is_group:
                 self._apply_group_rotate(x, y)
             else:
                 self._apply_rotate(layer, x, y)
+                # Propagate rotation to mask children
+                self._sync_mask_transforms(layer)
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         # Floating selection: keep the float alive, just commit the offset
@@ -545,6 +594,15 @@ class MoveTool(Tool):
         self._group_child_positions = {}
         self._group_child_pixels = {}
         self._group_orig_bbox = None
+        self._group_child_base_sx = {}
+        self._group_child_base_sy = {}
+        self._group_child_base_angle = {}
+        self._group_child_dims = {}
+        self._mask_children = []
+        self._mask_child_positions = {}
+        self._mask_child_base_sx = {}
+        self._mask_child_base_sy = {}
+        self._mask_child_base_angle = {}
 
     # ------------------------------------------------------------------
     # Resize
@@ -656,10 +714,31 @@ class MoveTool(Tool):
         self._current_angle = 0.0
 
     # ------------------------------------------------------------------
+    # Sync mask children transforms
+    # ------------------------------------------------------------------
+
+    def _sync_mask_transforms(self, parent) -> None:
+        """Propagate the parent layer's scale and angle to its mask children.
+
+        Each mask child mirrors the parent's transform so it always
+        aligns with the parent's visual output.
+        """
+        for mc in getattr(self, '_mask_children', []):
+            if mc._source_pixels is None:
+                continue
+            mc.transform_scale_x = parent.transform_scale_x
+            mc.transform_scale_y = parent.transform_scale_y
+            mc.transform_angle = parent.transform_angle
+            mc.compute_display()
+            # Keep the mask co-located with the parent
+            mc.position = parent.position
+
+    # ------------------------------------------------------------------
     # Group resize
     # ------------------------------------------------------------------
 
     def _apply_group_resize(self, dx: int, dy: int) -> None:
+        """Non-destructive group resize: update child scale params and recompute."""
         bbox = self._group_orig_bbox
         if bbox is None:
             return
@@ -692,12 +771,19 @@ class MoveTool(Tool):
             new_by = by + (oh - new_h)
 
         for child in self._group_children:
-            orig_pixels = self._group_child_pixels[child.id]
+            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            if child._source_pixels is None:
+                continue
+
+            base_sx = self._group_child_base_sx[child.id]
+            base_sy = self._group_child_base_sy[child.id]
+
+            child.transform_scale_x = base_sx * sx
+            child.transform_scale_y = base_sy * sy
+            child.compute_display()
+
             orig_cx, orig_cy = self._group_child_positions[child.id]
-
-            scaled = TransformEngine.scale(orig_pixels, sx, sy)
-            child.pixels = scaled
-
             rel_x = orig_cx - bx
             rel_y = orig_cy - by
             child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
@@ -707,6 +793,7 @@ class MoveTool(Tool):
     # ------------------------------------------------------------------
 
     def _apply_group_rotate(self, x: int, y: int) -> None:
+        """Non-destructive group rotate: update child angle and recompute."""
         bbox = self._group_orig_bbox
         if bbox is None:
             return
@@ -725,16 +812,19 @@ class MoveTool(Tool):
         sin_a = math.sin(rad)
 
         for child in self._group_children:
-            orig_pixels = self._group_child_pixels[child.id]
-            orig_cx, orig_cy = self._group_child_positions[child.id]
-            orig_ch, orig_cw = orig_pixels.shape[:2]
+            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            if child._source_pixels is None:
+                continue
 
-            # Rotate child pixels
-            rotated = TransformEngine.rotate(orig_pixels, angle_deg, expand=True)
-            rh, rw = rotated.shape[:2]
-            child.pixels = rotated
+            base_angle = self._group_child_base_angle[child.id]
+            child.transform_angle = base_angle + angle_deg
+            child.compute_display()
 
             # Rotate child center around the group center
+            orig_cx, orig_cy = self._group_child_positions[child.id]
+            orig_cw, orig_ch = self._group_child_dims[child.id]
+
             child_mid_x = orig_cx + orig_cw / 2.0
             child_mid_y = orig_cy + orig_ch / 2.0
             dx_c = child_mid_x - gcx
@@ -743,8 +833,8 @@ class MoveTool(Tool):
             new_dy = -dx_c * sin_a + dy_c * cos_a
 
             child.position = (
-                int(gcx + new_dx - rw / 2),
-                int(gcy + new_dy - rh / 2),
+                int(gcx + new_dx - child.width / 2),
+                int(gcy + new_dy - child.height / 2),
             )
 
     # ------------------------------------------------------------------
