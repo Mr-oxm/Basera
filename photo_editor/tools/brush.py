@@ -71,9 +71,11 @@ class BrushTool(Tool):
         radius = self._effective_radius(pressure)
         eff_opacity = self._effective_opacity(pressure)
         step = max(1.0, radius * 2 * self.spacing)
+        sel_mask = self._get_sel_mask(doc)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
             self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
-                               self.color, self.hardness, eff_opacity)
+                               self.color, self.hardness, eff_opacity,
+                               sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface

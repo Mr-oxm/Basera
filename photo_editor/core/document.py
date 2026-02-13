@@ -178,6 +178,9 @@ class Document:
         state.metadata["_active_index"] = self.layers.active_index
         state.metadata["_doc_width"] = self.width
         state.metadata["_doc_height"] = self.height
+        # Save selection mask
+        if self.selection._mask is not None:
+            state.layer_data["__selection_mask__"] = self.selection._mask.copy()
         self.history.push(state)
 
     def _restore(self, state: HistoryState) -> None:
@@ -260,6 +263,12 @@ class Document:
             self.width = saved_w
             self.height = saved_h
             self.selection.resize(saved_w, saved_h)
+        # Restore selection mask
+        sel_key = "__selection_mask__"
+        if sel_key in state.layer_data:
+            self.selection._mask = state.layer_data[sel_key].copy()
+        else:
+            self.selection._mask = None
         self._dirty = True
 
     # ---- Canvas ops ---------------------------------------------------------

@@ -47,6 +47,36 @@ class Tool(ABC):
         if layer is not None and layer._source_pixels is not None:
             layer.rasterize_transform()
 
+    @staticmethod
+    def _get_sel_mask(doc: Document) -> np.ndarray | None:
+        """Return a layer-local selection mask for the active layer, or None.
+
+        The returned array has shape (lh, lw) float32 in [0,1] and is
+        aligned to the layer's pixel grid.
+        """
+        if doc is None or not doc.selection.active:
+            return None
+        layer = doc.layers.active_layer
+        if layer is None:
+            return None
+        mask = doc.selection._mask
+        lx, ly = layer.position
+        lh, lw = layer.pixels.shape[:2]
+        dh, dw = mask.shape[:2]
+
+        dy0 = max(0, ly)
+        dy1 = min(dh, ly + lh)
+        dx0 = max(0, lx)
+        dx1 = min(dw, lx + lw)
+        if dy1 <= dy0 or dx1 <= dx0:
+            return np.zeros((lh, lw), dtype=np.float32)
+
+        out = np.zeros((lh, lw), dtype=np.float32)
+        sy0, sy1 = dy0 - ly, dy1 - ly
+        sx0, sx1 = dx0 - lx, dx1 - lx
+        out[sy0:sy1, sx0:sx1] = mask[dy0:dy1, dx0:dx1]
+        return out
+
     def generate_preview_dab(self) -> np.ndarray | None:
         """Return an RGBA uint8 array showing what a single dab looks like.
 
@@ -58,7 +88,7 @@ class Tool(ABC):
     def _stamp_circle(
         self, target: np.ndarray, cx: int, cy: int,
         radius: int, color: np.ndarray, hardness: float = 1.0,
-        opacity: float = 1.0,
+        opacity: float = 1.0, sel_mask: np.ndarray | None = None,
     ) -> None:
         """Stamp a circular brush dab onto *target* (region-optimised)."""
         h, w = target.shape[:2]
@@ -74,6 +104,9 @@ class Tool(ABC):
         mask = np.clip(1.0 - np.sqrt(dist_sq) / r, 0, 1)
         np.power(mask, 1.0 / max(hardness, 0.01), out=mask)
         mask *= opacity
+        # Clip to selection
+        if sel_mask is not None:
+            mask *= sel_mask[y0:y1, x0:x1]
         mask = mask[..., np.newaxis]
         # In-place compositing on the target slice
         roi = target[y0:y1, x0:x1]

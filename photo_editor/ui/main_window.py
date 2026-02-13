@@ -66,6 +66,11 @@ class MainWindow(QMainWindow):
         self._render_timer.timeout.connect(self._do_deferred_render)
         self._render_pending = False
         self._dragging = False
+        self._sel_moving = False
+        self._sel_move_start: tuple[int, int] = (0, 0)
+        self._sel_move_orig_mask: object = None   # saved mask before drag
+        self._sel_move_total_dx: int = 0
+        self._sel_move_total_dy: int = 0
 
         # Deferred panel refresh — coalesced to avoid rebuilding panels
         # dozens of times per second during interactive operations.
@@ -166,6 +171,13 @@ class MainWindow(QMainWindow):
         a["select_all"].triggered.connect(self._on_select_all)
         a["deselect"].triggered.connect(self._on_deselect)
         a["invert_sel"].triggered.connect(self._on_invert_sel)
+        a["delete_sel"].triggered.connect(self._on_delete_selection)
+        a["fill_fg"].triggered.connect(lambda: self._on_fill_selection("fg"))
+        a["fill_bg"].triggered.connect(lambda: self._on_fill_selection("bg"))
+        a["cut"].triggered.connect(self._on_cut)
+        a["copy"].triggered.connect(self._on_copy)
+        a["paste"].triggered.connect(self._on_paste)
+        a["duplicate_sel"].triggered.connect(self._on_duplicate_selection)
         a["zoom_in"].triggered.connect(lambda: self._zoom(1.25))
         a["zoom_out"].triggered.connect(lambda: self._zoom(1 / 1.25))
         a["zoom_fit"].triggered.connect(self._canvas.zoom_to_fit)
@@ -208,6 +220,8 @@ class MainWindow(QMainWindow):
         self._props_panel.gradient_property_changed.connect(self._on_gradient_prop_changed)
         self._props_panel.align_requested.connect(self._on_align_requested)
         self._props_panel.zoom_action.connect(self._on_zoom_action)
+        self._props_panel.selection_property_changed.connect(self._on_sel_prop_changed)
+        self._props_panel.selection_action.connect(self._on_sel_action)
         self._props_panel.crop_property_changed.connect(self._on_crop_prop_changed)
         self._props_panel.crop_apply.connect(self._on_crop_apply)
         self._props_panel.crop_cancel.connect(self._on_crop_cancel)
@@ -324,6 +338,27 @@ class MainWindow(QMainWindow):
         if self._tools.active_type == ToolType.MOVE and self._doc:
             layer = self._doc.layers.active_layer
             if layer:
+                # If a selection is active, fit the box to the selection mask
+                if self._doc.selection.active and self._doc.selection._mask is not None:
+                    import numpy as np
+                    mask = self._doc.selection._mask
+                    rows = np.any(mask > 0.5, axis=1)
+                    cols = np.any(mask > 0.5, axis=0)
+                    if np.any(rows) and np.any(cols):
+                        y0, y1 = int(np.where(rows)[0][0]), int(np.where(rows)[0][-1])
+                        x0, x1 = int(np.where(cols)[0][0]), int(np.where(cols)[0][-1])
+                        # Offset by floating selection drag if in progress
+                        tool = self._tools.active_tool
+                        fdx = fdy = 0
+                        if tool is not None and getattr(tool, '_floating', False):
+                            fdx = getattr(tool, '_float_dx', 0)
+                            fdy = getattr(tool, '_float_dy', 0)
+                        self._canvas.set_transform_box(
+                            (x0 + fdx, y0 + fdy, x1 - x0 + 1, y1 - y0 + 1))
+                    else:
+                        self._canvas.set_transform_box(None)
+                    return
+
                 # For groups, compute bounding box from children
                 if layer.layer_type == LayerType.GROUP:
                     box = self._group_bbox(layer)
@@ -654,6 +689,163 @@ class MainWindow(QMainWindow):
             self._doc.selection.invert()
             self._update_selection_overlay()
 
+    def _on_delete_selection(self) -> None:
+        """Delete (clear to transparent) the selected region on the active layer."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            return
+        mask = self._doc.selection._mask
+        if mask is None:
+            return
+        self._doc._snapshot("Delete Selection")
+        lx, ly = layer.position
+        h, w = layer.pixels.shape[:2]
+        # Extract the portion of the document-level selection that overlaps the layer
+        layer_mask = self._extract_layer_mask(mask, lx, ly, w, h)
+        if layer_mask is not None:
+            # Set alpha to 0 where selected
+            layer.pixels[..., 3] *= (1.0 - layer_mask)
+        self._refresh()
+
+    def _on_fill_selection(self, which: str) -> None:
+        """Fill the selected region with foreground or background color."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            return
+        import numpy as np
+        if which == "fg":
+            color = self._color_panel._mgr.foreground.to_array()
+        else:
+            color = self._color_panel._mgr.background.to_array()
+        # Ensure RGBA float32
+        if len(color) < 4:
+            color = np.array([*color[:3], 1.0], dtype=np.float32)
+        self._doc._snapshot("Fill Selection")
+        mask = self._doc.selection._mask
+        lx, ly = layer.position
+        h, w = layer.pixels.shape[:2]
+        if mask is not None:
+            layer_mask = self._extract_layer_mask(mask, lx, ly, w, h)
+            if layer_mask is not None:
+                for c in range(4):
+                    layer.pixels[..., c] = (
+                        layer.pixels[..., c] * (1.0 - layer_mask) + color[c] * layer_mask
+                    )
+        else:
+            # No selection — fill entire layer
+            layer.pixels[..., :] = color
+        self._refresh()
+
+    def _on_cut(self) -> None:
+        """Copy selected area then delete it."""
+        self._on_copy()
+        self._on_delete_selection()
+
+    def _on_copy(self) -> None:
+        """Copy selected region of the active layer to an internal clipboard."""
+        if not self._doc:
+            return
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            return
+        import numpy as np
+        mask = self._doc.selection._mask
+        lx, ly = layer.position
+        h, w = layer.pixels.shape[:2]
+        if mask is not None:
+            layer_mask = self._extract_layer_mask(mask, lx, ly, w, h)
+            if layer_mask is None:
+                return
+            copied = layer.pixels.copy()
+            copied[..., 3] *= layer_mask
+        else:
+            copied = layer.pixels.copy()
+        self._clipboard = copied.copy()
+        self._clipboard_pos = (lx, ly)
+        self._status.showMessage("Copied to clipboard", 2000)
+
+    def _on_paste(self) -> None:
+        """Paste clipboard content as a new layer."""
+        if not hasattr(self, "_clipboard") or self._clipboard is None:
+            return
+        if not self._doc:
+            return
+        from ..core.layer import Layer
+        import numpy as np
+        new_layer = Layer(
+            name="Pasted Layer",
+            width=self._clipboard.shape[1],
+            height=self._clipboard.shape[0],
+        )
+        new_layer.pixels = self._clipboard.copy()
+        if hasattr(self, "_clipboard_pos"):
+            new_layer.position = list(self._clipboard_pos)
+        self._doc._snapshot("Paste")
+        self._doc.layers.add(new_layer)
+        self._refresh()
+
+    def _on_duplicate_selection(self) -> None:
+        """Create a new layer from the selected pixels of the active layer."""
+        if not self._doc or not self._doc.selection.active:
+            return
+        layer = self._doc.layers.active_layer
+        if layer is None:
+            return
+        import numpy as np
+        from ..core.layer import Layer
+        mask = self._doc.selection._mask
+        lx, ly = layer.position
+        h, w = layer.pixels.shape[:2]
+        layer_mask = self._extract_layer_mask(mask, lx, ly, w, h)
+        if layer_mask is None:
+            return
+        # Copy pixels masked by selection
+        copied = layer.pixels.copy()
+        copied[..., 3] *= layer_mask
+        # Crop to bounding box of non-zero alpha
+        alpha = copied[..., 3]
+        rows = np.any(alpha > 0, axis=1)
+        cols = np.any(alpha > 0, axis=0)
+        if not np.any(rows) or not np.any(cols):
+            return
+        y0, y1 = np.where(rows)[0][[0, -1]]
+        x0, x1 = np.where(cols)[0][[0, -1]]
+        cropped = copied[y0:y1 + 1, x0:x1 + 1].copy()
+        new_layer = Layer(
+            name=f"{layer.name} copy",
+            width=cropped.shape[1],
+            height=cropped.shape[0],
+        )
+        new_layer.pixels = cropped
+        new_layer.position = [lx + int(x0), ly + int(y0)]
+        self._doc._snapshot("Duplicate Selection")
+        self._doc.layers.add(new_layer)
+        self._refresh()
+        self._status.showMessage("Duplicated selection to new layer", 2000)
+
+    def _extract_layer_mask(self, doc_mask, lx: int, ly: int,
+                            w: int, h: int):
+        """Extract the portion of the doc-level selection mask that overlaps the layer."""
+        import numpy as np
+        dh, dw = doc_mask.shape[:2]
+        dst_y1 = max(0, ly)
+        dst_y2 = min(dh, ly + h)
+        dst_x1 = max(0, lx)
+        dst_x2 = min(dw, lx + w)
+        if dst_y2 <= dst_y1 or dst_x2 <= dst_x1:
+            return None
+        layer_mask = np.zeros((h, w), dtype=np.float32)
+        src_y1 = dst_y1 - ly
+        src_y2 = dst_y2 - ly
+        src_x1 = dst_x1 - lx
+        src_x2 = dst_x2 - lx
+        layer_mask[src_y1:src_y2, src_x1:src_x2] = doc_mask[dst_y1:dst_y2, dst_x1:dst_x2]
+        return layer_mask
+
     # ---- Tools + Canvas -----------------------------------------------------
 
     # Tools that should display a real-time brush size cursor
@@ -666,6 +858,12 @@ class MainWindow(QMainWindow):
         # Commit any in-progress text editing when switching away
         if self._tools.active_type == ToolType.TEXT and t != ToolType.TEXT:
             self._text_exit_editing()
+        # Commit floating selection when leaving the move tool
+        if self._tools.active_type == ToolType.MOVE and t != ToolType.MOVE:
+            tool = self._tools.active_tool
+            if tool is not None and getattr(tool, '_floating', False):
+                tool.commit_float(self._doc)
+                self._update_selection_overlay()
         # Clear clone/heal source overlay when switching away
         if (self._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)
                 and t not in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
@@ -811,6 +1009,41 @@ class MainWindow(QMainWindow):
             if not self._ask_rasterize():
                 self._dragging = False
                 return
+
+        # Override selection mode from keyboard modifiers
+        _SEL_TOOLS = {ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT,
+                      ToolType.LASSO, ToolType.MAGIC_WAND}
+        tool_type = self._tools.active_type
+        if tool_type in _SEL_TOOLS:
+            tool = self._tools.active_tool
+            if tool is not None and hasattr(tool, "mode"):
+                shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+                alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+                if shift and alt:
+                    tool.mode = "intersect"
+                elif shift:
+                    tool.mode = "add"
+                elif alt:
+                    tool.mode = "subtract"
+                # else: keep the mode from the properties bar
+
+            # Check if click is inside existing selection → move selection mode
+            # Only for rect, ellipse, and lasso tools (not magic wand)
+            if (tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT, ToolType.LASSO)
+                    and self._doc and self._doc.selection._mask is not None
+                    and not shift and not alt):
+                mask = self._doc.selection._mask
+                if (0 <= y < mask.shape[0] and 0 <= x < mask.shape[1]
+                        and mask[y, x] > 0.5):
+                    self._doc.save_snapshot("Move Selection")
+                    self._sel_moving = True
+                    self._sel_move_start = (x, y)
+                    self._sel_move_orig_mask = self._doc.selection._mask.copy()
+                    self._sel_move_total_dx = 0
+                    self._sel_move_total_dy = 0
+                    self._dragging = True
+                    return
+
         self._tools.on_press(self._doc, x, y, pressure)
         tool_type = self._tools.active_type
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
@@ -824,6 +1057,33 @@ class MainWindow(QMainWindow):
                 self._canvas.set_source_drawing(True)
 
     def _on_canvas_move(self, x: int, y: int, pressure: float) -> None:
+        # Move selection mask by dragging (using original mask + total offset)
+        if self._sel_moving and self._doc and self._sel_move_orig_mask is not None:
+            ox, oy = self._sel_move_start
+            self._sel_move_total_dx += x - ox
+            self._sel_move_total_dy += y - oy
+            self._sel_move_start = (x, y)
+            # Recompute mask from original + total offset (no incremental clipping)
+            import numpy as np
+            orig = self._sel_move_orig_mask
+            h, w = orig.shape
+            dx, dy = self._sel_move_total_dx, self._sel_move_total_dy
+            new_mask = np.zeros_like(orig)
+            sx0 = max(0, -dx)
+            sy0 = max(0, -dy)
+            sx1 = min(w, w - dx)
+            sy1 = min(h, h - dy)
+            dx0 = max(0, dx)
+            dy0 = max(0, dy)
+            dx1 = dx0 + (sx1 - sx0)
+            dy1 = dy0 + (sy1 - sy0)
+            if sx1 > sx0 and sy1 > sy0:
+                new_mask[dy0:dy1, dx0:dx1] = orig[sy0:sy1, sx0:sx1]
+            self._doc.selection._mask = new_mask
+            self._update_selection_overlay()
+            self._canvas.update()
+            return
+
         tool_type = self._tools.active_type
         self._tools.on_move(self._doc, x, y, pressure)
         
@@ -834,7 +1094,13 @@ class MainWindow(QMainWindow):
             zy = dr.top() + (min(sy, y) / self._canvas._doc_h) * dr.height()
             zw = abs(x - sx) / self._canvas._doc_w * dr.width()
             zh = abs(y - sy) / self._canvas._doc_h * dr.height()
-            self._canvas.set_drag_rect(QRectF(zx, zy, zw, zh))
+            is_ellipse = (tool_type == ToolType.ELLIPSE_SELECT)
+            self._canvas.set_drag_rect(QRectF(zx, zy, zw, zh), ellipse=is_ellipse)
+        elif tool_type == ToolType.LASSO:
+            # Feed live lasso path to canvas for preview
+            tool = self._tools.active_tool
+            if tool is not None and hasattr(tool, '_points') and tool._drawing:
+                self._canvas.set_lasso_points(list(tool._points))
         elif tool_type == ToolType.TEXT:
             # Update overlay to show drawing preview or editing state
             self._text_update_overlay()
@@ -846,9 +1112,19 @@ class MainWindow(QMainWindow):
 
     def _on_canvas_release(self, x: int, y: int) -> None:
         self._dragging = False
+        if self._sel_moving:
+            self._sel_moving = False
+            self._sel_move_orig_mask = None
+            self._update_selection_overlay()
+            self._canvas.update()
+            # Refresh history panel so the snapshot shows up
+            if self._doc:
+                self._history_panel.refresh(self._doc.history)
+            return
         tool_type = self._tools.active_type
         self._tools.on_release(self._doc, x, y)
         self._canvas.set_drag_rect(None)
+        self._canvas.set_lasso_points(None)
         if hasattr(self, "_drag_start"):
             del self._drag_start
         # End clone/heal drawing state
@@ -867,9 +1143,7 @@ class MainWindow(QMainWindow):
         tool = self._tools.active_tool
         if tool is None:
             self._props_panel.clear()
-            self._props_panel.set_text_mode(False)
-            self._props_panel.set_gradient_mode(False)
-            self._props_panel.set_move_mode(False)
+            self._props_panel.set_text_mode(False)  # clears all modes
             return
 
         # Move tool uses its own alignment properties bar
@@ -890,6 +1164,15 @@ class MainWindow(QMainWindow):
             self._props_panel.set_zoom_mode(True)
             return
 
+        # Selection tools use their own properties bar
+        _SEL_TOOLS = {ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT,
+                      ToolType.LASSO, ToolType.MAGIC_WAND}
+        if tool_type in _SEL_TOOLS:
+            self._props_panel.clear()
+            is_wand = (tool_type == ToolType.MAGIC_WAND)
+            self._props_panel.set_selection_mode(True, tool, is_wand=is_wand)
+            return
+
         # Text tool uses its own specialised properties bar
         if tool_type == ToolType.TEXT:
             self._props_panel.clear()
@@ -907,6 +1190,7 @@ class MainWindow(QMainWindow):
         self._props_panel.set_move_mode(False)
         self._props_panel.set_crop_mode(False)
         self._props_panel.set_zoom_mode(False)
+        self._props_panel.set_selection_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -944,6 +1228,37 @@ class MainWindow(QMainWindow):
         if method is not None:
             method(self._doc)
             self._refresh()
+
+    # ---- Selection tool property/action handlers ----------------------------
+
+    def _on_sel_prop_changed(self, key: str, value: object) -> None:
+        """Handle property changes from the selection properties bar."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        if key == "mode" and hasattr(tool, "mode"):
+            tool.mode = str(value)
+        elif key == "feather" and hasattr(tool, "feather"):
+            tool.feather = int(value)
+        elif key == "tolerance" and hasattr(tool, "tolerance"):
+            tool.tolerance = int(value)
+        elif key == "contiguous" and hasattr(tool, "contiguous"):
+            tool.contiguous = bool(value)
+
+    def _on_sel_action(self, action: str) -> None:
+        """Handle action buttons from the selection properties bar."""
+        if action == "delete":
+            self._on_delete_selection()
+        elif action == "fill_fg":
+            self._on_fill_selection("fg")
+        elif action == "fill_bg":
+            self._on_fill_selection("bg")
+        elif action == "duplicate":
+            self._on_duplicate_selection()
+        elif action == "invert":
+            self._on_invert_sel()
+        elif action == "deselect":
+            self._on_deselect()
 
     # ---- Gradient tool -------------------------------------------------------
 

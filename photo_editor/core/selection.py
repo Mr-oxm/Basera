@@ -79,3 +79,22 @@ class Selection:
         if self._mask is not None:
             import cv2
             self._mask = cv2.resize(self._mask, (width, height))
+
+    def translate(self, dx: int, dy: int) -> None:
+        """Shift the selection mask by (dx, dy) pixels."""
+        if self._mask is None or (dx == 0 and dy == 0):
+            return
+        new_mask = np.zeros_like(self._mask)
+        h, w = self._mask.shape
+        # source and destination slices
+        sx0 = max(0, -dx)
+        sy0 = max(0, -dy)
+        sx1 = min(w, w - dx)
+        sy1 = min(h, h - dy)
+        dx0 = max(0, dx)
+        dy0 = max(0, dy)
+        dx1 = dx0 + (sx1 - sx0)
+        dy1 = dy0 + (sy1 - sy0)
+        if sx1 > sx0 and sy1 > sy0:
+            new_mask[dy0:dy1, dx0:dx1] = self._mask[sy0:sy1, sx0:sx1]
+        self._mask = new_mask

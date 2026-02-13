@@ -72,7 +72,8 @@ class HealingBrushTool(Tool):
         """Return single-channel luminance (float32) from RGB channels."""
         return 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
 
-    def _heal_patch(self, target: np.ndarray, cx: int, cy: int, radius: int) -> None:
+    def _heal_patch(self, target: np.ndarray, cx: int, cy: int, radius: int,
+                    sel_mask: np.ndarray | None = None) -> None:
         h, w = target.shape[:2]
         sx, sy = cx + self._offset_x, cy + self._offset_y
 
@@ -125,6 +126,9 @@ class HealingBrushTool(Tool):
         # Re-apply hard clip after blur to prevent square bleeding
         mask[dist > radius] = 0.0
         mask *= self.opacity
+        # Clip to selection
+        if sel_mask is not None:
+            mask *= sel_mask[y0d:y0d + ph, x0d:x0d + pw]
         mask = mask[..., np.newaxis]
 
         target[y0d:y0d + ph, x0d:x0d + pw] = (
@@ -147,8 +151,10 @@ class HealingBrushTool(Tool):
         lx, ly = layer.position
         radius = max(1, self.size // 2)
         step = max(1.0, radius * 0.5)
+        sel_mask = self._get_sel_mask(doc)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._heal_patch(layer.pixels, px - lx, py - ly, radius)
+            self._heal_patch(layer.pixels, px - lx, py - ly, radius,
+                             sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface

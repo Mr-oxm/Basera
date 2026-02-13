@@ -991,6 +991,153 @@ class GradientPropertiesBar(QWidget):
 
 
 # ============================================================================
+# Selection properties bar
+# ============================================================================
+
+_SEL_MODE_BTN = """
+    QPushButton {
+        font-size: 10px; padding: 2px 8px;
+        background: transparent; border: 1px solid #444; border-radius: 4px;
+        color: #999; min-height: 22px; max-height: 22px;
+    }
+    QPushButton:hover { background: rgba(255,255,255,0.07); color: #ccc; }
+    QPushButton:checked { background: rgba(74,111,165,0.35); color: #ddeeff; border-color: #5a8abf; }
+"""
+
+_SEL_ACTION_BTN = """
+    QPushButton {
+        font-size: 10px; padding: 2px 8px;
+        background: #383838; border: 1px solid #444; border-radius: 4px;
+        color: #bbb; min-height: 22px; max-height: 22px;
+    }
+    QPushButton:hover { background: rgba(255,255,255,0.07); color: #ccc; border-color: #5a8abf; }
+    QPushButton:pressed { background: rgba(74,111,165,0.35); }
+"""
+
+
+class SelectionPropertiesBar(QWidget):
+    """Horizontal bar for selection tools: mode, feather, tolerance, actions."""
+
+    # Emitted as (key, value) for tool property changes
+    property_changed = Signal(str, object)
+    # Emitted when an action button is pressed
+    action_requested = Signal(str)   # "delete", "fill_fg", "fill_bg", "invert", "deselect"
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
+
+        # ---- Mode buttons (New / Add / Subtract / Intersect) ----
+        lbl = QLabel("Mode")
+        lbl.setStyleSheet(_LABEL)
+        layout.addWidget(lbl)
+
+        self._mode_btns: dict[str, QPushButton] = {}
+        for mode_key, mode_label in [
+            ("new", "New"), ("add", "Add"), ("subtract", "Sub"), ("intersect", "Int"),
+        ]:
+            btn = QPushButton(mode_label)
+            btn.setCheckable(True)
+            btn.setStyleSheet(_SEL_MODE_BTN)
+            btn.setToolTip({"new": "New Selection", "add": "Add to Selection (Shift)",
+                            "subtract": "Subtract from Selection (Alt)",
+                            "intersect": "Intersect with Selection (Shift+Alt)"}[mode_key])
+            btn.clicked.connect(lambda checked, m=mode_key: self._set_mode(m))
+            layout.addWidget(btn)
+            self._mode_btns[mode_key] = btn
+        self._mode_btns["new"].setChecked(True)
+
+        layout.addWidget(_make_separator())
+
+        # ---- Feather ----
+        lbl2 = QLabel("Feather")
+        lbl2.setStyleSheet(_LABEL)
+        layout.addWidget(lbl2)
+        self._feather_spin = QSpinBox()
+        self._feather_spin.setRange(0, 100)
+        self._feather_spin.setValue(0)
+        self._feather_spin.setSuffix(" px")
+        self._feather_spin.setFixedWidth(70)
+        self._feather_spin.setMaximumHeight(22)
+        self._feather_spin.setStyleSheet(_SPIN.format(max_w=70, accent=_ACCENT))
+        self._feather_spin.valueChanged.connect(
+            lambda v: self.property_changed.emit("feather", v))
+        layout.addWidget(self._feather_spin)
+
+        # ---- Tolerance (shown only for magic wand) ----
+        self._tol_label = QLabel("Tolerance")
+        self._tol_label.setStyleSheet(_LABEL)
+        layout.addWidget(self._tol_label)
+        self._tolerance_spin = QSpinBox()
+        self._tolerance_spin.setRange(0, 255)
+        self._tolerance_spin.setValue(32)
+        self._tolerance_spin.setFixedWidth(60)
+        self._tolerance_spin.setMaximumHeight(22)
+        self._tolerance_spin.setStyleSheet(_SPIN.format(max_w=60, accent=_ACCENT))
+        self._tolerance_spin.valueChanged.connect(
+            lambda v: self.property_changed.emit("tolerance", v))
+        layout.addWidget(self._tolerance_spin)
+
+        # ---- Contiguous toggle (shown only for magic wand) ----
+        self._contiguous_btn = QPushButton("Contiguous")
+        self._contiguous_btn.setCheckable(True)
+        self._contiguous_btn.setChecked(True)
+        self._contiguous_btn.setStyleSheet(_SEL_MODE_BTN)
+        self._contiguous_btn.setToolTip("Select only connected pixels")
+        self._contiguous_btn.toggled.connect(
+            lambda v: self.property_changed.emit("contiguous", v))
+        layout.addWidget(self._contiguous_btn)
+
+        layout.addWidget(_make_separator())
+
+        # ---- Action buttons ----
+        for action, label, tip in [
+            ("delete", "Delete", "Delete selected pixels (Del)"),
+            ("fill_fg", "Fill FG", "Fill with foreground color (Alt+Backspace)"),
+            ("fill_bg", "Fill BG", "Fill with background color (Ctrl+Backspace)"),
+            ("duplicate", "Duplicate", "Create new layer from selection (Ctrl+J)"),
+            ("invert", "Invert", "Invert selection"),
+            ("deselect", "Deselect", "Clear selection (Ctrl+D)"),
+        ]:
+            btn = QPushButton(label)
+            btn.setStyleSheet(_SEL_ACTION_BTN)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _=False, a=action: self.action_requested.emit(a))
+            layout.addWidget(btn)
+
+        layout.addStretch()
+
+    def _set_mode(self, mode: str) -> None:
+        for k, btn in self._mode_btns.items():
+            btn.setChecked(k == mode)
+        self.property_changed.emit("mode", mode)
+
+    def set_wand_mode(self, is_wand: bool) -> None:
+        """Show/hide tolerance and contiguous controls."""
+        self._tol_label.setVisible(is_wand)
+        self._tolerance_spin.setVisible(is_wand)
+        self._contiguous_btn.setVisible(is_wand)
+
+    def sync_from_tool(self, tool) -> None:
+        """Update the bar to reflect the tool's current state."""
+        self.blockSignals(True)
+        try:
+            if hasattr(tool, "feather"):
+                self._feather_spin.setValue(tool.feather)
+            if hasattr(tool, "tolerance"):
+                self._tolerance_spin.setValue(tool.tolerance)
+            if hasattr(tool, "contiguous"):
+                self._contiguous_btn.setChecked(tool.contiguous)
+            if hasattr(tool, "mode"):
+                for k, btn in self._mode_btns.items():
+                    btn.setChecked(k == tool.mode)
+        finally:
+            self.blockSignals(False)
+
+
+# ============================================================================
 # Zoom properties bar
 # ============================================================================
 
@@ -1191,6 +1338,10 @@ class PropertiesPanel(QWidget):
     align_requested = Signal(str)
     # Zoom-tool action signal — carries the action name
     zoom_action = Signal(str)
+    # Selection-tool property signal
+    selection_property_changed = Signal(str, object)
+    # Selection-tool action signal
+    selection_action = Signal(str)
     # Crop signals
     crop_property_changed = Signal(str, object)
     crop_apply = Signal()
@@ -1246,6 +1397,15 @@ class PropertiesPanel(QWidget):
         self._zoom_bar.hide()
         self._main_layout.addWidget(self._zoom_bar)
 
+        # Selection properties bar (hidden by default)
+        self._sel_bar = SelectionPropertiesBar()
+        self._sel_bar.property_changed.connect(
+            lambda k, v: self.selection_property_changed.emit(k, v))
+        self._sel_bar.action_requested.connect(
+            lambda action: self.selection_action.emit(action))
+        self._sel_bar.hide()
+        self._main_layout.addWidget(self._sel_bar)
+
         # Crop properties bar (hidden by default)
         self._crop_bar = CropPropertiesBar()
         self._crop_bar.property_changed.connect(
@@ -1262,84 +1422,83 @@ class PropertiesPanel(QWidget):
         self._gradient_mode = False
         self._move_mode = False
         self._zoom_mode = False
+        self._sel_mode = False
         self._crop_mode = False
 
         self.setFixedHeight(34)
 
     # ---- Mode switching ----
 
-    def set_text_mode(self, enabled: bool, tool=None) -> None:
-        """Switch between generic slider mode and text properties mode."""
-        self._text_mode = enabled
-        self._gradient_mode = False
-        self._move_mode = False
-        self._zoom_mode = False
-        self._crop_mode = False
-        self._props_container.setVisible(not enabled)
-        self._text_bar.setVisible(enabled)
+    def _hide_all_bars(self) -> None:
+        """Hide all specialised tool bars."""
+        self._text_bar.setVisible(False)
         self._gradient_bar.setVisible(False)
         self._move_bar.setVisible(False)
         self._zoom_bar.setVisible(False)
+        self._sel_bar.setVisible(False)
         self._crop_bar.setVisible(False)
+
+    def _clear_modes(self) -> None:
+        self._text_mode = False
+        self._gradient_mode = False
+        self._move_mode = False
+        self._zoom_mode = False
+        self._sel_mode = False
+        self._crop_mode = False
+
+    def set_text_mode(self, enabled: bool, tool=None) -> None:
+        """Switch between generic slider mode and text properties mode."""
+        self._clear_modes()
+        self._text_mode = enabled
+        self._props_container.setVisible(not enabled)
+        self._hide_all_bars()
+        self._text_bar.setVisible(enabled)
         if enabled and tool is not None:
             self._text_bar.sync_from_tool(tool)
 
     def set_gradient_mode(self, enabled: bool, tool=None) -> None:
         """Switch to gradient properties mode."""
+        self._clear_modes()
         self._gradient_mode = enabled
-        self._text_mode = False
-        self._move_mode = False
-        self._zoom_mode = False
-        self._crop_mode = False
         self._props_container.setVisible(not enabled)
-        self._text_bar.setVisible(False)
+        self._hide_all_bars()
         self._gradient_bar.setVisible(enabled)
-        self._move_bar.setVisible(False)
-        self._zoom_bar.setVisible(False)
-        self._crop_bar.setVisible(False)
         if enabled and tool is not None:
             self._gradient_bar.sync_from_tool(tool)
 
     def set_move_mode(self, enabled: bool) -> None:
         """Switch to move-tool alignment bar."""
+        self._clear_modes()
         self._move_mode = enabled
-        self._text_mode = False
-        self._gradient_mode = False
-        self._zoom_mode = False
-        self._crop_mode = False
         self._props_container.setVisible(not enabled)
-        self._text_bar.setVisible(False)
-        self._gradient_bar.setVisible(False)
+        self._hide_all_bars()
         self._move_bar.setVisible(enabled)
-        self._zoom_bar.setVisible(False)
-        self._crop_bar.setVisible(False)
 
     def set_zoom_mode(self, enabled: bool) -> None:
         """Switch to zoom-tool properties bar."""
+        self._clear_modes()
         self._zoom_mode = enabled
-        self._text_mode = False
-        self._gradient_mode = False
-        self._move_mode = False
-        self._crop_mode = False
         self._props_container.setVisible(not enabled)
-        self._text_bar.setVisible(False)
-        self._gradient_bar.setVisible(False)
-        self._move_bar.setVisible(False)
+        self._hide_all_bars()
         self._zoom_bar.setVisible(enabled)
-        self._crop_bar.setVisible(False)
+
+    def set_selection_mode(self, enabled: bool, tool=None, is_wand: bool = False) -> None:
+        """Switch to selection-tool properties bar."""
+        self._clear_modes()
+        self._sel_mode = enabled
+        self._props_container.setVisible(not enabled)
+        self._hide_all_bars()
+        self._sel_bar.setVisible(enabled)
+        self._sel_bar.set_wand_mode(is_wand)
+        if enabled and tool is not None:
+            self._sel_bar.sync_from_tool(tool)
 
     def set_crop_mode(self, enabled: bool, tool=None) -> None:
         """Switch to crop properties bar."""
+        self._clear_modes()
         self._crop_mode = enabled
-        self._text_mode = False
-        self._gradient_mode = False
-        self._move_mode = False
-        self._zoom_mode = False
         self._props_container.setVisible(not enabled)
-        self._text_bar.setVisible(False)
-        self._gradient_bar.setVisible(False)
-        self._move_bar.setVisible(False)
-        self._zoom_bar.setVisible(False)
+        self._hide_all_bars()
         self._crop_bar.setVisible(enabled)
         if enabled and tool is not None:
             self._crop_bar.sync_from_tool(tool)
@@ -1363,6 +1522,10 @@ class PropertiesPanel(QWidget):
     @property
     def zoom_bar(self) -> ZoomPropertiesBar:
         return self._zoom_bar
+
+    @property
+    def selection_bar(self) -> SelectionPropertiesBar:
+        return self._sel_bar
 
     # ---- Generic API (unchanged) ----
 

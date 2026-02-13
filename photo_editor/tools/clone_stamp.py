@@ -78,7 +78,7 @@ class CloneStampTool(Tool):
             yield int(x0 + dx * t), int(y0 + dy * t)
 
     def _clone_circle(self, target: np.ndarray, cx: int, cy: int,
-                      radius: int) -> None:
+                      radius: int, sel_mask: np.ndarray | None = None) -> None:
         """Stamp source pixels onto *target* centred at (cx, cy)."""
         h, w = target.shape[:2]
         sx = cx + self._offset_x
@@ -116,6 +116,9 @@ class CloneStampTool(Tool):
         mask = np.clip(1.0 - dist / max(radius, 1), 0, 1)
         mask = mask ** (1.0 / max(self.hardness, 0.01))
         mask *= self.opacity
+        # Clip to selection
+        if sel_mask is not None:
+            mask *= sel_mask[y0d:y0d + sh, x0d:x0d + sw]
         mask = mask[..., np.newaxis]
 
         target[y0d:y0d + sh, x0d:x0d + sw] = (
@@ -130,8 +133,10 @@ class CloneStampTool(Tool):
         lx, ly = layer.position
         radius = self._effective_radius(pressure)
         step = max(1.0, radius * 2 * self.spacing)
+        sel_mask = self._get_sel_mask(doc)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._clone_circle(layer.pixels, px - lx, py - ly, radius)
+            self._clone_circle(layer.pixels, px - lx, py - ly, radius,
+                               sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface

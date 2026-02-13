@@ -62,7 +62,8 @@ class EraserTool(Tool):
             yield int(x0 + dx * t), int(y0 + dy * t)
 
     def _erase_circle(self, target: np.ndarray, cx: int, cy: int,
-                      radius: int, hardness: float, opacity: float) -> None:
+                      radius: int, hardness: float, opacity: float,
+                      sel_mask: np.ndarray | None = None) -> None:
         """Reduce alpha in a circular region."""
         h, w = target.shape[:2]
         y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
@@ -74,6 +75,9 @@ class EraserTool(Tool):
         mask = np.clip(1.0 - dist / max(radius, 1), 0, 1)
         mask = mask ** (1.0 / max(hardness, 0.01))
         mask *= opacity
+        # Clip to selection
+        if sel_mask is not None:
+            mask *= sel_mask[y0:y1, x0:x1]
         # Reduce the alpha channel
         target[y0:y1, x0:x1, 3] *= (1.0 - mask)
         # Also fade RGB towards transparent to avoid colour fringing
@@ -90,9 +94,10 @@ class EraserTool(Tool):
         radius = self._effective_radius(pressure)
         eff_opacity = self.opacity * pressure
         step = max(1.0, radius * 2 * self.spacing)
+        sel_mask = self._get_sel_mask(doc)
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
             self._erase_circle(layer.pixels, px - lx, py - ly, radius,
-                               self.hardness, eff_opacity)
+                               self.hardness, eff_opacity, sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface

@@ -46,6 +46,10 @@ class EditorMenuBar(QMenuBar):
         self._add(m, "cut", "Cu&t", "Ctrl+X")
         self._add(m, "copy", "&Copy", "Ctrl+C")
         self._add(m, "paste", "&Paste", "Ctrl+V")
+        m.addSeparator()
+        self._add(m, "delete_sel", "&Delete", "Delete")
+        self._add(m, "fill_fg", "Fill with &Foreground Color", "Alt+Backspace")
+        self._add(m, "fill_bg", "Fill with &Background Color", "Ctrl+Backspace")
 
     def _image_menu(self) -> None:
         m = self.addMenu("&Image")
@@ -75,6 +79,8 @@ class EditorMenuBar(QMenuBar):
         self._add(m, "select_all", "Select &All", "Ctrl+A")
         self._add(m, "deselect", "&Deselect", "Ctrl+D")
         self._add(m, "invert_sel", "&Invert Selection", "Ctrl+Shift+I")
+        m.addSeparator()
+        self._add(m, "duplicate_sel", "Duplicate &Layer via Selection", "Ctrl+J")
         m.addSeparator()
         self._add(m, "feather_sel", "&Feather…")
         self._add(m, "grow_sel", "&Grow…")

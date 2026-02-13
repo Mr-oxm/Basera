@@ -158,11 +158,18 @@ class CanvasView(_BASE_CLASS):
         self._panning = False
         self._doc_w = 0
         self._doc_h = 0
-        # Selection overlay
+        # Selection overlay — marching ants
         self._sel_mask: np.ndarray | None = None
-        self._sel_pixmap: QPixmap | None = None
+        self._sel_contours: list | None = None  # list of QPolygonF for marching ants
+        self._march_offset: int = 0               # animated dash offset
+        self._march_timer = QTimer(self)
+        self._march_timer.setInterval(100)         # ~10 fps animation
+        self._march_timer.timeout.connect(self._march_tick)
         # Drag rect feedback for selection tools
         self._drag_rect: QRectF | None = None
+        self._drag_is_ellipse: bool = False  # True → draw ellipse instead of rect
+        # Lasso path preview (list of (x, y) doc coords)
+        self._lasso_points: list[tuple[int, int]] | None = None
         # Transform bounding box (x, y, w, h) in document coordinates
         self._transform_box: tuple[int, int, int, int] | None = None
         self._transform_angle: float = 0.0  # rotation angle in degrees
@@ -228,27 +235,48 @@ class CanvasView(_BASE_CLASS):
         self.update()
 
     def set_selection_mask(self, mask: np.ndarray | None) -> None:
-        """Set the selection mask for overlay rendering."""
+        """Set the selection mask for marching-ants overlay rendering."""
         if mask is None:
-            if self._sel_pixmap is None:
-                return  # already cleared, skip update
-            self._sel_pixmap = None
+            if self._sel_mask is None:
+                return  # already cleared
             self._sel_mask = None
+            self._sel_contours = None
+            self._march_timer.stop()
             self.update()
             return
         self._sel_mask = mask
-        h, w = mask.shape[:2]
-        overlay = np.zeros((h, w, 4), dtype=np.uint8)
-        overlay[..., 0] = 70   # blue tint
-        overlay[..., 1] = 130
-        overlay[..., 2] = 220
-        np.multiply(mask, 80, out=overlay[..., 3], casting='unsafe')
-        qimg = QImage(overlay.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
-        self._sel_pixmap = QPixmap.fromImage(qimg)
+        # Extract contours from the binary mask for marching ants
+        import cv2
+        mask_u8 = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+        contours, _ = cv2.findContours(mask_u8, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        from PySide6.QtGui import QPolygonF
+        polys = []
+        for c in contours:
+            if len(c) < 2:
+                continue
+            pts = [QPointF(float(pt[0][0]), float(pt[0][1])) for pt in c]
+            pts.append(pts[0])  # close the polygon
+            polys.append(QPolygonF(pts))
+        self._sel_contours = polys
+        if polys:
+            self._march_timer.start()
+        else:
+            self._march_timer.stop()
         self.update()
 
-    def set_drag_rect(self, rect: QRectF | None) -> None:
+    def _march_tick(self) -> None:
+        """Advance marching ants animation by one step."""
+        self._march_offset = (self._march_offset + 1) % 16
+        self.update()
+
+    def set_drag_rect(self, rect: QRectF | None, ellipse: bool = False) -> None:
         self._drag_rect = rect
+        self._drag_is_ellipse = ellipse
+        self.update()
+
+    def set_lasso_points(self, points: list[tuple[int, int]] | None) -> None:
+        """Set lasso path preview points (doc coords) or None to clear."""
+        self._lasso_points = points
         self.update()
 
     def set_transform_box(self, box: tuple[int, int, int, int] | None,
@@ -470,18 +498,40 @@ class CanvasView(_BASE_CLASS):
         # Document image
         p.drawPixmap(dr.toAlignedRect(), self._pixmap)
 
-        # Selection overlay
-        if self._sel_pixmap is not None:
-            p.setOpacity(0.6)
-            p.drawPixmap(dr.toAlignedRect(), self._sel_pixmap)
-            p.setOpacity(1.0)
+        # Selection overlay — marching ants
+        if self._sel_contours:
+            self._draw_marching_ants(p, dr)
 
-        # Selection drag rectangle
+        # Selection drag rectangle / ellipse
         if self._drag_rect is not None:
             pen = QPen(QColor(100, 180, 255), 1, Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.setBrush(QColor(100, 180, 255, 30))
-            p.drawRect(self._drag_rect)
+            if self._drag_is_ellipse:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                p.drawEllipse(self._drag_rect)
+            else:
+                p.drawRect(self._drag_rect)
+
+        # Lasso path preview
+        if self._lasso_points and len(self._lasso_points) > 1 and self._doc_w > 0:
+            from PySide6.QtGui import QPolygonF as _QPolyF
+            pen = QPen(QColor(100, 180, 255), 1, Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            poly = _QPolyF()
+            for lx, ly in self._lasso_points:
+                sx = dr.left() + (lx / self._doc_w) * dr.width()
+                sy = dr.top() + (ly / self._doc_h) * dr.height()
+                poly.append(QPointF(sx, sy))
+            # Close back to start
+            lx0, ly0 = self._lasso_points[0]
+            poly.append(QPointF(
+                dr.left() + (lx0 / self._doc_w) * dr.width(),
+                dr.top() + (ly0 / self._doc_h) * dr.height(),
+            ))
+            p.drawPolyline(poly)
 
         # Transform bounding box with handles
         if self._transform_box is not None:
@@ -515,6 +565,49 @@ class CanvasView(_BASE_CLASS):
             self._draw_gradient_handles(p, dr)
 
         p.end()
+
+    # ---- Marching ants (selection contour) -----------------------------------
+
+    def _draw_marching_ants(self, p: QPainter, dr: QRectF) -> None:
+        """Draw animated marching-ants contour from the selection mask."""
+        if not self._sel_contours or self._doc_w == 0 or self._doc_h == 0:
+            return
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        # Background stroke (white) so ants are visible on any colour
+        bg_pen = QPen(QColor(255, 255, 255), 1.0, Qt.PenStyle.SolidLine)
+        bg_pen.setCosmetic(True)
+        p.setPen(bg_pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for poly in self._sel_contours:
+            mapped = self._map_polygon_to_screen(poly, dr, sx, sy)
+            p.drawPolyline(mapped)
+
+        # Foreground stroke (black dashes) animated
+        fg_pen = QPen(QColor(0, 0, 0), 1.0, Qt.PenStyle.DashLine)
+        fg_pen.setCosmetic(True)
+        fg_pen.setDashOffset(float(self._march_offset))
+        p.setPen(fg_pen)
+        for poly in self._sel_contours:
+            mapped = self._map_polygon_to_screen(poly, dr, sx, sy)
+            p.drawPolyline(mapped)
+
+        p.restore()
+
+    def _map_polygon_to_screen(self, poly, dr: QRectF,
+                                sx: float, sy: float):
+        """Map a QPolygonF from document coords to screen coords."""
+        from PySide6.QtGui import QPolygonF
+        pts = []
+        for i in range(poly.count()):
+            pt = poly.at(i)
+            pts.append(QPointF(dr.left() + pt.x() * sx,
+                               dr.top() + pt.y() * sy))
+        return QPolygonF(pts)
 
     # ---- Crop box drawing ----------------------------------------------------
 

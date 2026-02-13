@@ -93,6 +93,72 @@ class MoveTool(Tool):
         self._group_child_positions: dict[str, tuple[int, int]] = {}
         self._group_child_pixels: dict[str, np.ndarray] = {}
         self._group_orig_bbox: tuple[int, int, int, int] | None = None
+        # Floating selection: when an active selection exists and the user
+        # drags with the move tool, only the selected pixels move.
+        self._floating: bool = False
+        self._float_pixels: np.ndarray | None = None
+        self._float_base: np.ndarray | None = None   # base layer with hole
+        self._float_orig: np.ndarray | None = None    # full original pixels (pre-cut)
+        self._float_dx: int = 0
+        self._float_dy: int = 0
+        self._float_committed_dx: int = 0   # accumulated offset from prior drags
+        self._float_committed_dy: int = 0
+
+    # ------------------------------------------------------------------
+    # Floating selection helpers
+    # ------------------------------------------------------------------
+
+    def commit_float(self, doc: Document | None = None) -> None:
+        """Permanently apply the floating selection to the layer pixels.
+
+        Called when switching tools or starting a non-float interaction.
+        The base pixels under the float's new position are replaced.
+        """
+        if not self._floating or self._float_pixels is None or self._active_layer is None:
+            self._clear_float()
+            return
+        layer = self._active_layer
+        total_dx = self._float_committed_dx
+        total_dy = self._float_committed_dy
+        # Restore base-with-hole, then composite float at final position
+        layer.pixels[:] = self._float_base
+        self._composite_float(layer.pixels, total_dx, total_dy)
+        # Translate the selection mask
+        if doc is not None and doc.selection.active and (total_dx != 0 or total_dy != 0):
+            doc.selection.translate(int(total_dx), int(total_dy))
+        self._clear_float()
+
+    def _clear_float(self) -> None:
+        self._floating = False
+        self._float_pixels = None
+        self._float_base = None
+        self._float_orig = None
+        self._float_dx = 0
+        self._float_dy = 0
+        self._float_committed_dx = 0
+        self._float_committed_dy = 0
+
+    def _composite_float(self, target: np.ndarray, dx: int, dy: int) -> None:
+        """Composite floating pixels onto target at offset (dx, dy)."""
+        fp = self._float_pixels
+        if fp is None:
+            return
+        h, w = target.shape[:2]
+        fh, fw = fp.shape[:2]
+        sy0 = max(0, -dy)
+        sx0 = max(0, -dx)
+        sy1 = min(fh, h - dy)
+        sx1 = min(fw, w - dx)
+        d_y0 = max(0, dy)
+        d_x0 = max(0, dx)
+        d_y1 = d_y0 + (sy1 - sy0)
+        d_x1 = d_x0 + (sx1 - sx0)
+        if sy1 > sy0 and sx1 > sx0:
+            src = fp[sy0:sy1, sx0:sx1]
+            roi = target[d_y0:d_y1, d_x0:d_x1]
+            alpha = src[..., 3:4]
+            roi[:] = roi * (1.0 - alpha) + src * alpha
+            np.clip(roi, 0, 1, out=roi)
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -311,6 +377,37 @@ class MoveTool(Tool):
         self._current_angle = 0.0
         self._base_angle = layer.transform_angle
 
+        # -- Floating selection: if a selection is active and mode is MOVE,
+        #    cut selected pixels into a floating buffer. -------------------
+        if (self._mode == _Mode.MOVE
+                and doc.selection.active
+                and layer.layer_type not in (LayerType.GROUP, LayerType.ADJUSTMENT, LayerType.FILTER)):
+
+            # If we already have a float in progress, continue dragging it
+            if self._floating and self._float_pixels is not None:
+                self._float_dx = self._float_committed_dx
+                self._float_dy = self._float_committed_dy
+                return
+
+            sel_mask = self._get_sel_mask(doc)
+            if sel_mask is not None and sel_mask.max() > 0:
+                mask4 = sel_mask[..., np.newaxis]
+                self._float_orig = layer.pixels.copy()
+                self._float_pixels = layer.pixels * mask4
+                layer.pixels[:] = layer.pixels * (1.0 - mask4)
+                np.clip(layer.pixels, 0, 1, out=layer.pixels)
+                self._float_base = layer.pixels.copy()
+                self._floating = True
+                self._float_dx = 0
+                self._float_dy = 0
+                self._float_committed_dx = 0
+                self._float_committed_dy = 0
+                return  # skip normal setup — we handle everything
+
+        # If there's an existing float but we're not continuing it, commit it
+        if self._floating:
+            self.commit_float(doc)
+
         # -- Group setup ---------------------------------------------------
         self._group_children = []
         self._group_child_positions = {}
@@ -390,6 +487,14 @@ class MoveTool(Tool):
         dx = x - self._start_x
         dy = y - self._start_y
 
+        # -- Floating selection move --
+        if self._floating and self._float_pixels is not None and self._float_base is not None:
+            self._float_dx = self._float_committed_dx + dx
+            self._float_dy = self._float_committed_dy + dy
+            layer.pixels[:] = self._float_base
+            self._composite_float(layer.pixels, self._float_dx, self._float_dy)
+            return
+
         is_group = layer.layer_type == LayerType.GROUP
 
         if self._mode == _Mode.MOVE:
@@ -413,6 +518,16 @@ class MoveTool(Tool):
                 self._apply_rotate(layer, x, y)
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
+        # Floating selection: keep the float alive, just commit the offset
+        if self._floating and self._active_layer is not None:
+            self._float_committed_dx = self._float_dx
+            self._float_committed_dy = self._float_dy
+            self._dragging = False
+            self._mode = _Mode.NONE
+            self._handle = _Handle.NONE
+            # Don't clear _active_layer — we need it for re-drags and commit
+            return
+
         if self._mode == _Mode.ROTATE and self._active_layer is not None:
             if self._active_layer.layer_type != LayerType.GROUP:
                 # ND system: angle already committed during drag via
