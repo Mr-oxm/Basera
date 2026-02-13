@@ -393,6 +393,89 @@ def _make_align_icons():
     return icons
 
 
+def _make_transform_icons():
+    """Return a dict of action-name → QIcon for the flip / rotate buttons."""
+    from PySide6.QtGui import QPen, QColor as QC, QPolygonF
+    from PySide6.QtCore import QRectF, QPointF
+
+    icons = {}
+    line_c = QC("#cccccc")
+
+    def _pen(color=line_c, w=1.4):
+        pen = QPen(color, w)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return pen
+
+    def flip_h(p, s):
+        # Two mirrored arrows pointing left/right
+        p.setPen(_pen())
+        mid = s / 2
+        # Dashed center line
+        dp = QPen(QC("#666666"), 1.0)
+        dp.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(dp)
+        p.drawLine(QPointF(mid, 3), QPointF(mid, s - 3))
+        # Left arrow
+        p.setPen(_pen())
+        p.drawLine(QPointF(mid - 3, mid), QPointF(3, mid))
+        p.drawLine(QPointF(3, mid), QPointF(6, mid - 3))
+        p.drawLine(QPointF(3, mid), QPointF(6, mid + 3))
+        # Right arrow
+        p.drawLine(QPointF(mid + 3, mid), QPointF(s - 3, mid))
+        p.drawLine(QPointF(s - 3, mid), QPointF(s - 6, mid - 3))
+        p.drawLine(QPointF(s - 3, mid), QPointF(s - 6, mid + 3))
+
+    def flip_v(p, s):
+        # Two mirrored arrows pointing up/down
+        p.setPen(_pen())
+        mid = s / 2
+        dp = QPen(QC("#666666"), 1.0)
+        dp.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(dp)
+        p.drawLine(QPointF(3, mid), QPointF(s - 3, mid))
+        # Up arrow
+        p.setPen(_pen())
+        p.drawLine(QPointF(mid, mid - 3), QPointF(mid, 3))
+        p.drawLine(QPointF(mid, 3), QPointF(mid - 3, 6))
+        p.drawLine(QPointF(mid, 3), QPointF(mid + 3, 6))
+        # Down arrow
+        p.drawLine(QPointF(mid, mid + 3), QPointF(mid, s - 3))
+        p.drawLine(QPointF(mid, s - 3), QPointF(mid - 3, s - 6))
+        p.drawLine(QPointF(mid, s - 3), QPointF(mid + 3, s - 6))
+
+    def rotate_cw(p, s):
+        # Curved arrow clockwise
+        from PySide6.QtCore import QRectF as QR
+        p.setPen(_pen())
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        arc_rect = QR(4, 4, s - 8, s - 8)
+        p.drawArc(arc_rect, 90 * 16, -270 * 16)  # 3/4 arc CW
+        # Arrowhead at the end (bottom of arc, pointing right-down)
+        ex, ey = s / 2, s - 4
+        p.drawLine(QPointF(ex, ey), QPointF(ex + 3, ey - 3))
+        p.drawLine(QPointF(ex, ey), QPointF(ex - 2, ey - 3))
+
+    def rotate_ccw(p, s):
+        # Curved arrow counter-clockwise
+        from PySide6.QtCore import QRectF as QR
+        p.setPen(_pen())
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        arc_rect = QR(4, 4, s - 8, s - 8)
+        p.drawArc(arc_rect, 90 * 16, 270 * 16)  # 3/4 arc CCW
+        # Arrowhead at the end (bottom of arc, pointing left-down)
+        ex, ey = s / 2, s - 4
+        p.drawLine(QPointF(ex, ey), QPointF(ex - 3, ey - 3))
+        p.drawLine(QPointF(ex, ey), QPointF(ex + 2, ey - 3))
+
+    for name, fn in [
+        ("flip_horizontal", flip_h), ("flip_vertical", flip_v),
+        ("rotate_90_cw", rotate_cw), ("rotate_90_ccw", rotate_ccw),
+    ]:
+        icons[name] = _icon_from_painter(fn)
+    return icons
+
+
 class MovePropertiesBar(QWidget):
     """Horizontal bar with layer alignment buttons — clean, icon-only design."""
 
@@ -420,6 +503,30 @@ class MovePropertiesBar(QWidget):
         for action in ("align_top", "align_middle_v", "align_bottom"):
             self._btns.append(self._make_btn(icons[action], action))
             layout.addWidget(self._btns[-1])
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setFixedHeight(18)
+        sep2.setStyleSheet(_MOVE_SEP_STYLE)
+        layout.addWidget(sep2)
+
+        t_icons = _make_transform_icons()
+        _TIPS = {
+            "flip_horizontal": "Flip Horizontal",
+            "flip_vertical": "Flip Vertical",
+            "rotate_90_cw": "Rotate 90° CW",
+            "rotate_90_ccw": "Rotate 90° CCW",
+        }
+        for action in ("flip_horizontal", "flip_vertical", "rotate_90_cw", "rotate_90_ccw"):
+            btn = QPushButton()
+            btn.setIcon(t_icons[action])
+            from PySide6.QtCore import QSize
+            btn.setIconSize(QSize(20, 20))
+            btn.setToolTip(_TIPS[action])
+            btn.setStyleSheet(_MOVE_BTN_STYLE)
+            btn.clicked.connect(lambda checked=False, a=action: self.align_requested.emit(a))
+            self._btns.append(btn)
+            layout.addWidget(btn)
 
         layout.addStretch()
 

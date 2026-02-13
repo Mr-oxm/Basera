@@ -695,3 +695,52 @@ class MoveTool(Tool):
         doc.save_snapshot("Align Bottom")
         lx, _ = layer.position
         layer.position = (lx, doc.height - layer.height)
+
+    # ------------------------------------------------------------------
+    # Flip / Rotate helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def flip_horizontal(doc: Document) -> None:
+        """Flip the active layer horizontally."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Flip Horizontal")
+        layer.pixels = TransformEngine.flip_h(layer.pixels)
+
+    @staticmethod
+    def flip_vertical(doc: Document) -> None:
+        """Flip the active layer vertically."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Flip Vertical")
+        layer.pixels = TransformEngine.flip_v(layer.pixels)
+
+    @staticmethod
+    def rotate_90_cw(doc: Document) -> None:
+        """Rotate the active layer 90° clockwise, keeping the centre in place."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Rotate 90° CW")
+        px, py = layer.position
+        old_w, old_h = layer.width, layer.height
+        layer.pixels = TransformEngine.rotate(layer.pixels, -90, expand=True)
+        new_w, new_h = layer.width, layer.height
+        # Adjust position so the layer centre stays at the same spot
+        layer.position = (px + (old_w - new_w) // 2, py + (old_h - new_h) // 2)
+
+    @staticmethod
+    def rotate_90_ccw(doc: Document) -> None:
+        """Rotate the active layer 90° counter-clockwise, keeping the centre in place."""
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.save_snapshot("Rotate 90° CCW")
+        px, py = layer.position
+        old_w, old_h = layer.width, layer.height
+        layer.pixels = TransformEngine.rotate(layer.pixels, 90, expand=True)
+        new_w, new_h = layer.width, layer.height
+        layer.position = (px + (old_w - new_w) // 2, py + (old_h - new_h) // 2)
