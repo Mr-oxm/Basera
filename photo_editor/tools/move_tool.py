@@ -372,11 +372,16 @@ class MoveTool(Tool):
 
         self._mode, self._handle = self._hit_test(doc, x, y)
 
-        # If the click lands in the ROTATE zone of the newly-selected
-        # layer, default to MOVE so the user can immediately drag it.
+        # If the click lands in the ROTATE zone (outside the bbox) with
+        # auto-select on, only promote to MOVE if the click actually hit
+        # the layer's opaque pixels (so dragging empty space / ruler
+        # guides doesn't move the layer).
         if self.auto_select and self._mode == _Mode.ROTATE:
-            self._mode = _Mode.MOVE
-            self._handle = _Handle.NONE
+            if self._point_on_layer(layer, x, y):
+                self._mode = _Mode.MOVE
+                self._handle = _Handle.NONE
+            else:
+                self._mode = _Mode.NONE
 
         if self._mode == _Mode.NONE:
             return

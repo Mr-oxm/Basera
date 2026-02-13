@@ -1,9 +1,15 @@
-"""Application menu bar with all top-level menus."""
+"""Application menu bar with all top-level menus.
+
+Shortcuts are sourced from :class:`ShortcutManager` so they update
+automatically when the user changes preset or edits a binding.
+"""
 
 from __future__ import annotations
 
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QMenuBar
+
+from .shortcut_manager import ShortcutManager
 
 
 class EditorMenuBar(QMenuBar):
@@ -12,7 +18,10 @@ class EditorMenuBar(QMenuBar):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.actions_map: dict[str, QAction] = {}
+        self._mgr = ShortcutManager.instance()
         self._build()
+        # Live-update shortcuts when the user changes bindings
+        self._mgr.shortcuts_changed.connect(self._refresh_shortcuts)
 
     def _build(self) -> None:
         self._file_menu()
@@ -28,28 +37,28 @@ class EditorMenuBar(QMenuBar):
 
     def _file_menu(self) -> None:
         m = self.addMenu("&File")
-        self._add(m, "new", "&New…", "Ctrl+N")
-        self._add(m, "open", "&Open…", "Ctrl+O")
-        self._add(m, "place_image", "&Place Image as Layer…", "Ctrl+Shift+O")
+        self._add(m, "new", "&New…")
+        self._add(m, "open", "&Open…")
+        self._add(m, "place_image", "&Place Image as Layer…")
         m.addSeparator()
-        self._add(m, "save", "&Save", "Ctrl+S")
-        self._add(m, "save_as", "Save &As…", "Ctrl+Shift+S")
-        self._add(m, "export", "&Export…", "Ctrl+Shift+E")
+        self._add(m, "save", "&Save")
+        self._add(m, "save_as", "Save &As…")
+        self._add(m, "export", "&Export…")
         m.addSeparator()
-        self._add(m, "quit", "&Quit", "Ctrl+Q")
+        self._add(m, "quit", "&Quit")
 
     def _edit_menu(self) -> None:
         m = self.addMenu("&Edit")
-        self._add(m, "undo", "&Undo", "Ctrl+Z")
-        self._add(m, "redo", "&Redo", "Ctrl+Shift+Z")
+        self._add(m, "undo", "&Undo")
+        self._add(m, "redo", "&Redo")
         m.addSeparator()
-        self._add(m, "cut", "Cu&t", "Ctrl+X")
-        self._add(m, "copy", "&Copy", "Ctrl+C")
-        self._add(m, "paste", "&Paste", "Ctrl+V")
+        self._add(m, "cut", "Cu&t")
+        self._add(m, "copy", "&Copy")
+        self._add(m, "paste", "&Paste")
         m.addSeparator()
-        self._add(m, "delete_sel", "&Delete", "Delete")
-        self._add(m, "fill_fg", "Fill with &Foreground Color", "Alt+Backspace")
-        self._add(m, "fill_bg", "Fill with &Background Color", "Ctrl+Backspace")
+        self._add(m, "delete_sel", "&Delete")
+        self._add(m, "fill_fg", "Fill with &Foreground Color")
+        self._add(m, "fill_bg", "Fill with &Background Color")
 
     def _image_menu(self) -> None:
         m = self.addMenu("&Image")
@@ -63,12 +72,12 @@ class EditorMenuBar(QMenuBar):
 
     def _layer_menu(self) -> None:
         m = self.addMenu("&Layer")
-        self._add(m, "new_layer", "&New Layer", "Ctrl+Shift+N")
+        self._add(m, "new_layer", "&New Layer")
         self._add(m, "new_group", "New &Group")
-        self._add(m, "dup_layer", "&Duplicate Layer", "Ctrl+J")
+        self._add(m, "dup_layer", "&Duplicate Layer")
         self._add(m, "del_layer", "De&lete Layer")
         m.addSeparator()
-        self._add(m, "merge_down", "Merge &Down", "Ctrl+E")
+        self._add(m, "merge_down", "Merge &Down")
         self._add(m, "flatten", "&Flatten Image")
         m.addSeparator()
         mask_sub = m.addMenu("Mas&k")
@@ -86,11 +95,11 @@ class EditorMenuBar(QMenuBar):
 
     def _select_menu(self) -> None:
         m = self.addMenu("&Select")
-        self._add(m, "select_all", "Select &All", "Ctrl+A")
-        self._add(m, "deselect", "&Deselect", "Ctrl+D")
-        self._add(m, "invert_sel", "&Invert Selection", "Ctrl+Shift+I")
+        self._add(m, "select_all", "Select &All")
+        self._add(m, "deselect", "&Deselect")
+        self._add(m, "invert_sel", "&Invert Selection")
         m.addSeparator()
-        self._add(m, "duplicate_sel", "Duplicate &Layer via Selection", "Ctrl+J")
+        self._add(m, "duplicate_sel", "Duplicate &Layer via Selection")
         self._add(m, "selection_to_mask", "Selection to &Mask Layer")
         m.addSeparator()
         self._add(m, "feather_sel", "&Feather…")
@@ -114,10 +123,10 @@ class EditorMenuBar(QMenuBar):
 
     def _view_menu(self) -> None:
         m = self.addMenu("&View")
-        self._add(m, "zoom_in", "Zoom &In", "Ctrl+=")
-        self._add(m, "zoom_out", "Zoom &Out", "Ctrl+-")
-        self._add(m, "zoom_fit", "Zoom to &Fit", "Ctrl+0")
-        self._add(m, "zoom_100", "Actual &Pixels", "Ctrl+1")
+        self._add(m, "zoom_in", "Zoom &In")
+        self._add(m, "zoom_out", "Zoom &Out")
+        self._add(m, "zoom_fit", "Zoom to &Fit")
+        self._add(m, "zoom_100", "Actual &Pixels")
         m.addSeparator()
         self._add(m, "toggle_grid", "Show &Grid")
         self._add(m, "toggle_rulers", "Show &Rulers")
@@ -125,14 +134,26 @@ class EditorMenuBar(QMenuBar):
 
     def _help_menu(self) -> None:
         m = self.addMenu("&Help")
+        self._add(m, "keyboard_shortcuts", "&Keyboard Shortcuts…")
+        m.addSeparator()
         self._add(m, "about", "&About")
 
     # ---- Helper -------------------------------------------------------------
 
-    def _add(self, menu, key: str, text: str, shortcut: str = "") -> QAction:
+    def _add(self, menu, key: str, text: str) -> QAction:
         action = QAction(text, self)
+        shortcut = self._mgr.binding(key)
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
         menu.addAction(action)
         self.actions_map[key] = action
         return action
+
+    def _refresh_shortcuts(self) -> None:
+        """Re-apply all shortcut key-sequences from the manager."""
+        for key, action in self.actions_map.items():
+            shortcut = self._mgr.binding(key)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            else:
+                action.setShortcut(QKeySequence())

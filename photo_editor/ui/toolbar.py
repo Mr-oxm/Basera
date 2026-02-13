@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from ..core.color import Color
 from ..core.color_engine import ColorManager
 from ..core.enums import ToolType
+from .shortcut_manager import ShortcutManager
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -421,12 +422,20 @@ class _ToolFlyout(QFrame):
             btn.deleteLater()
         self._buttons.clear()
 
-        for tool_type, label, shortcut in tools:
+        mgr = ShortcutManager.instance()
+
+        for tool_type, label, _ in tools:
             btn = QToolButton()
             btn.setIcon(_tool_icon(tool_type))
             btn.setIconSize(QSize(_ICO, _ICO))
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            btn.setText(f"  {label}  ({shortcut})")
+            
+            # Lookup dynamic shortcut
+            action_id = f"tool_{tool_type.name.lower()}"
+            shortcut = mgr.binding(action_id)
+            sc_text = f" ({shortcut})" if shortcut else ""
+            
+            btn.setText(f"  {label} {sc_text}")
             btn.setFixedHeight(_BTN)
             btn.setMinimumWidth(160)
             btn.setCheckable(True)
@@ -512,10 +521,16 @@ class _ToolGroupButton(QToolButton):
                 return
 
     def _update_icon(self) -> None:
-        tt, label, shortcut = self._tools[self._active_index]
+        tt, label, _ = self._tools[self._active_index]
         self.setIcon(_tool_icon(tt))
+        
+        mgr = ShortcutManager.instance()
+        action_id = f"tool_{tt.name.lower()}"
+        shortcut = mgr.binding(action_id)
+        sc_text = f" ({shortcut})" if shortcut else ""
+
         extra = "  (right-click for more)" if len(self._tools) > 1 else ""
-        self.setToolTip(f"{label} ({shortcut}){extra}")
+        self.setToolTip(f"{label}{sc_text}{extra}")
 
     def _show_flyout(self) -> None:
         if self._flyout:
@@ -663,7 +678,9 @@ class EditorToolbar(QToolBar):
 
         self._group_buttons: list[_ToolGroupButton] = []
         self._tool_to_group: dict[ToolType, _ToolGroupButton] = {}
-        self._mgr = ColorManager.instance()
+        self._col_mgr = ColorManager.instance()
+        self._shortcut_mgr = ShortcutManager.instance()
+        self._shortcut_mgr.shortcuts_changed.connect(self._refresh_tooltips)
         self._build()
 
     @staticmethod
@@ -700,13 +717,18 @@ class EditorToolbar(QToolBar):
         # FG / BG colour swatches
         self.addSeparator()
         self._fg_bg = _FGBGWidget()
-        self._fg_bg.swap_requested.connect(self._mgr.swap)
-        self._fg_bg.reset_requested.connect(self._mgr.reset)
+        self._fg_bg.swap_requested.connect(self._col_mgr.swap)
+        self._fg_bg.reset_requested.connect(self._col_mgr.reset)
         self.addWidget(self._centered_wrapper(self._fg_bg, v_margin=4))
 
-        self._mgr.foreground_changed.connect(self._on_color_changed)
-        self._mgr.background_changed.connect(self._on_color_changed)
-        self._fg_bg.set_colors(self._mgr.foreground, self._mgr.background)
+        self._col_mgr.foreground_changed.connect(self._on_color_changed)
+        self._col_mgr.background_changed.connect(self._on_color_changed)
+        self._fg_bg.set_colors(self._col_mgr.foreground, self._col_mgr.background)
+
+    def _refresh_tooltips(self) -> None:
+        """Update tooltips on all group buttons when shortcuts change."""
+        for gbtn in self._group_buttons:
+            gbtn._update_icon()
 
     def _on_tool_activated(self, tool_type: ToolType) -> None:
         sender = self._tool_to_group.get(tool_type)
@@ -715,7 +737,7 @@ class EditorToolbar(QToolBar):
         self.tool_selected.emit(tool_type)
 
     def _on_color_changed(self, _color=None) -> None:
-        self._fg_bg.set_colors(self._mgr.foreground, self._mgr.background)
+        self._fg_bg.set_colors(self._col_mgr.foreground, self._col_mgr.background)
 
     def select_tool(self, tool_type: ToolType) -> None:
         gbtn = self._tool_to_group.get(tool_type)

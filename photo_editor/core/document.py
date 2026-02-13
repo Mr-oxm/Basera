@@ -133,6 +133,72 @@ class Document:
         self._snapshot("Flatten Image")
         self._dirty = True
 
+    def merge_down(self) -> bool:
+        """Merge the active layer onto the layer directly below it.
+
+        Returns ``True`` on success, ``False`` if there is nothing to
+        merge (e.g. no active layer, no layer below, or a group).
+        """
+        active = self.layers.active_layer
+        if active is None:
+            return False
+
+        # Find the active layer's index in the flat list
+        idx = self.layers.active_index
+        if idx <= 0:
+            return False  # nothing below
+
+        below = self.layers.layers[idx - 1]
+
+        # Skip non-raster targets (groups, adjustments, masks, etc.)
+        if below.layer_type != LayerType.RASTER:
+            return False
+        if active.layer_type != LayerType.RASTER:
+            return False
+
+        from ..blending.blending_engine import BlendingEngine
+
+        # Build document-sized canvases for both layers
+        canvas_below = np.zeros((self.height, self.width, 4), dtype=np.float32)
+        bx, by = below.position
+        bp = below.pixels
+        bh, bw = bp.shape[:2]
+        # Clip to canvas bounds
+        sx0, sy0 = max(0, bx), max(0, by)
+        sx1 = min(self.width, bx + bw)
+        sy1 = min(self.height, by + bh)
+        if sx1 > sx0 and sy1 > sy0:
+            canvas_below[sy0:sy1, sx0:sx1] = bp[sy0 - by:sy1 - by, sx0 - bx:sx1 - bx]
+
+        canvas_top = np.zeros((self.height, self.width, 4), dtype=np.float32)
+        ax, ay = active.position
+        ap = active.pixels
+        ah, aw = ap.shape[:2]
+        tx0, ty0 = max(0, ax), max(0, ay)
+        tx1 = min(self.width, ax + aw)
+        ty1 = min(self.height, ay + ah)
+        if tx1 > tx0 and ty1 > ty0:
+            canvas_top[ty0:ty1, tx0:tx1] = ap[ty0 - ay:ty1 - ay, tx0 - ax:tx1 - ax]
+
+        merged = BlendingEngine.blend(
+            canvas_below, canvas_top,
+            mode=active.blend_mode,
+            opacity=active.opacity,
+        )
+
+        # Crop merged back to the below-layer bounds
+        if sx1 > sx0 and sy1 > sy0:
+            below.pixels = merged[sy0:sy1, sx0:sx1].copy()
+        else:
+            below.pixels = merged
+
+        # Remove the active layer (and its mask/adj children)
+        self.remove_layer(active.id)
+        self.layers.active_index = idx - 1
+        self._snapshot("Merge Down")
+        self._dirty = True
+        return True
+
     # ---- Mask layer operations ----------------------------------------------
 
     def add_mask_layer(

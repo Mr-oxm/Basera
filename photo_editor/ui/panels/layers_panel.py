@@ -842,6 +842,18 @@ class _LayerListWidget(QListWidget):
 
         event.ignore()   # always prevent Qt internal move; we rebuild via refresh
 
+    def keyPressEvent(self, event) -> None:
+        """Forward Delete / Backspace to the panel's delete signal."""
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # Walk up to find the LayersPanel and emit delete_requested
+            panel = self.parent()
+            while panel is not None and not isinstance(panel, LayersPanel):
+                panel = panel.parent()
+            if panel is not None:
+                panel.delete_requested.emit()
+            return
+        super().keyPressEvent(event)
+
 
 class _BlendModeCombo(QComboBox):
     hover_preview = Signal(object)

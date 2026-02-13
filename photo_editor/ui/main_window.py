@@ -6,11 +6,12 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QRectF, QTimer
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QDockWidget, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
 )
 
+from ..core.color_engine import ColorManager
 from ..core.document import Document
 from ..core.enums import BlendMode, LayerType, ToolType
 from ..engine.render_pipeline import RenderPipeline
@@ -26,6 +27,7 @@ from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
 from .panels.properties_panel import PropertiesPanel
+from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
 from .theme import DARK_STYLESHEET
 from .tool_manager import ToolManager
@@ -80,17 +82,21 @@ class MainWindow(QMainWindow):
         self._panel_refresh_timer.timeout.connect(self._do_deferred_panel_refresh)
         self._panel_refresh_pending = False
 
+        self._shortcut_mgr = ShortcutManager.instance()
+
         self._build_ui()
         self._wire_menus()
         self._wire_panels()
         self._wire_canvas()
         self._wire_file_tabs()
+        self._wire_shortcuts()
         self._new_document(1920, 1080)
 
     # ---- UI assembly --------------------------------------------------------
 
     def _build_ui(self) -> None:
-        from PySide6.QtWidgets import QWidget, QVBoxLayout, QToolBar
+        from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QToolBar
+        from .widgets.rulers import HorizontalRuler, VerticalRuler, RulerCorner, Guide, RULER_SIZE
         
         self._menu = EditorMenuBar(self)
         self.setMenuBar(self._menu)
@@ -110,7 +116,7 @@ class MainWindow(QMainWindow):
         self._toolbar = EditorToolbar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._toolbar)
         
-        # Central widget: file tabs + canvas
+        # Central widget: file tabs + rulers + canvas
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
@@ -120,9 +126,33 @@ class MainWindow(QMainWindow):
         self._file_tabs = FileTabBar()
         central_layout.addWidget(self._file_tabs)
         
-        # Canvas below the tabs
+        # Grid: rulers + canvas
+        ruler_grid = QWidget()
+        grid = QGridLayout(ruler_grid)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+
+        self._ruler_corner = RulerCorner()
+        self._h_ruler = HorizontalRuler()
+        self._v_ruler = VerticalRuler()
         self._canvas = CanvasView(self)
-        central_layout.addWidget(self._canvas)
+
+        grid.addWidget(self._ruler_corner, 0, 0)
+        grid.addWidget(self._h_ruler, 0, 1)
+        grid.addWidget(self._v_ruler, 1, 0)
+        grid.addWidget(self._canvas, 1, 1)
+
+        # Rulers default visible
+        self._rulers_visible = True
+        self._guides: list = []
+
+        # Wire ruler signals
+        for ruler in (self._h_ruler, self._v_ruler):
+            ruler.guide_created.connect(self._on_guide_created)
+            ruler.guide_moved.connect(self._on_guide_moved)
+            ruler.guide_deleted.connect(self._on_guide_deleted)
+
+        central_layout.addWidget(ruler_grid, 1)
         
         self.setCentralWidget(central)
         
@@ -161,6 +191,8 @@ class MainWindow(QMainWindow):
         a["flip_v"].triggered.connect(lambda: self._transform("flip_v"))
         a["rotate_cw"].triggered.connect(lambda: self._transform("rotate_cw"))
         a["rotate_ccw"].triggered.connect(lambda: self._transform("rotate_ccw"))
+        a["resize_canvas"].triggered.connect(self._on_resize_canvas)
+        a["resize_image"].triggered.connect(self._on_resize_image)
         a["new_layer"].triggered.connect(self._on_add_layer)
         a["new_group"].triggered.connect(self._on_add_group)
         a["dup_layer"].triggered.connect(self._on_dup_layer)
@@ -174,9 +206,13 @@ class MainWindow(QMainWindow):
         a["convert_to_mask"].triggered.connect(self._on_convert_to_mask)
         a["toggle_vis"].triggered.connect(self._on_toggle_vis_selected)
         a["flatten"].triggered.connect(self._on_flatten)
+        a["merge_down"].triggered.connect(self._on_merge_down)
         a["select_all"].triggered.connect(self._on_select_all)
         a["deselect"].triggered.connect(self._on_deselect)
         a["invert_sel"].triggered.connect(self._on_invert_sel)
+        a["feather_sel"].triggered.connect(self._on_feather_sel)
+        a["grow_sel"].triggered.connect(self._on_grow_sel)
+        a["shrink_sel"].triggered.connect(self._on_shrink_sel)
         a["delete_sel"].triggered.connect(self._on_delete_selection)
         a["fill_fg"].triggered.connect(lambda: self._on_fill_selection("fg"))
         a["fill_bg"].triggered.connect(lambda: self._on_fill_selection("bg"))
@@ -189,6 +225,14 @@ class MainWindow(QMainWindow):
         a["zoom_out"].triggered.connect(lambda: self._zoom(1 / 1.25))
         a["zoom_fit"].triggered.connect(self._canvas.zoom_to_fit)
         a["zoom_100"].triggered.connect(lambda: self._canvas.set_zoom(1.0))
+        a["toggle_grid"].triggered.connect(self._on_toggle_grid)
+        a["toggle_rulers"].triggered.connect(self._on_toggle_rulers)
+        a["toggle_guides"].triggered.connect(self._on_toggle_guides)
+        # Keyboard Shortcuts dialog
+        if "keyboard_shortcuts" in a:
+            a["keyboard_shortcuts"].triggered.connect(self._on_keyboard_shortcuts)
+        if "about" in a:
+            a["about"].triggered.connect(self._on_about)
         for key, action in a.items():
             if key.startswith("filter_"):
                 fkey = key[len("filter_"):]
@@ -253,6 +297,11 @@ class MainWindow(QMainWindow):
         self._canvas.widget_pressed.connect(self._on_widget_press)
         self._canvas.widget_moved.connect(self._on_widget_move)
         self._canvas.widget_released.connect(self._on_widget_release)
+        # View change → sync rulers
+        self._canvas.view_changed.connect(self._update_rulers)
+        # Guide interaction on canvas
+        self._canvas.guide_drag_moved.connect(self._on_canvas_guide_drag_moved)
+        self._canvas.guide_drag_released.connect(self._on_canvas_guide_drag_released)
 
     # ---- Document lifecycle -------------------------------------------------
 
@@ -289,6 +338,7 @@ class MainWindow(QMainWindow):
         self._history_panel.refresh(self._doc.history)
         self._update_selection_overlay()
         self._update_transform_box()
+        self._update_rulers()
 
     def _refresh_canvas_only(self) -> None:
         """Re-render and update canvas only (skip panel updates)."""
@@ -299,6 +349,7 @@ class MainWindow(QMainWindow):
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result, force=True)
         self._update_transform_box()
+        self._update_rulers()
 
     def _refresh_lightweight(self) -> None:
         """Re-render canvas + lightweight panel sync (no thumbnails)."""
@@ -538,8 +589,8 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         selected = self._layers_panel.selected_layer_ids()
-        if len(selected) > 1:
-            # Group the selected layers into a new group
+        if len(selected) >= 1:
+            # Group all selected layers (including single) into a new group
             self._doc.group_selected_layers(selected)
         else:
             self._doc.add_group()
@@ -547,14 +598,29 @@ class MainWindow(QMainWindow):
         self._refresh()
 
     def _on_dup_layer(self) -> None:
-        if self._doc and self._doc.layers.active_layer:
+        if not self._doc or not self._doc.layers.active_layer:
+            return
+        # Ctrl+J is context-dependent: selection active → duplicate via selection
+        if self._doc.selection.active and self._doc.selection.mask is not None:
+            self._on_duplicate_selection()
+        else:
             self._doc.duplicate_layer(self._doc.layers.active_layer.id)
             self._refresh()
 
     def _on_del_layer(self) -> None:
-        if self._doc and self._doc.layers.active_layer and len(self._doc.layers) > 1:
+        if not self._doc or len(self._doc.layers) <= 1:
+            return
+        # Delete all selected layers (multi-select support)
+        selected = self._layers_panel.selected_layer_ids()
+        if selected:
+            for lid in selected:
+                if len(self._doc.layers) <= 1:
+                    break
+                if self._doc.layers.get(lid):
+                    self._doc.remove_layer(lid)
+        elif self._doc.layers.active_layer:
             self._doc.remove_layer(self._doc.layers.active_layer.id)
-            self._refresh()
+        self._refresh()
 
     def _on_add_mask(self) -> None:
         if self._doc and self._doc.layers.active_layer:
@@ -794,6 +860,58 @@ class MainWindow(QMainWindow):
             self._doc.flatten()
             self._refresh()
 
+    def _on_merge_down(self) -> None:
+        if self._doc:
+            if not self._doc.merge_down():
+                self.statusBar().showMessage("Cannot merge down — no suitable layer below", 3000)
+            else:
+                self._refresh()
+
+    def _on_resize_canvas(self) -> None:
+        """Resize the document canvas (keeps layer pixel data, changes bounds)."""
+        if not self._doc:
+            return
+        from .dialogs.new_document import NewDocumentDialog
+        dlg = NewDocumentDialog(self)
+        dlg.setWindowTitle("Canvas Size")
+        # Pre-fill with current dimensions
+        dlg._width.setValue(self._doc.width)
+        dlg._height.setValue(self._doc.height)
+        if dlg.exec():
+            w, h, _ = dlg.get_values()
+            if w > 0 and h > 0:
+                self._doc._snapshot("Resize Canvas")
+                self._doc.resize(w, h)
+                self._refresh()
+
+    def _on_resize_image(self) -> None:
+        """Resize / resample the entire image (scales all layers)."""
+        if not self._doc:
+            return
+        from .dialogs.new_document import NewDocumentDialog
+        dlg = NewDocumentDialog(self)
+        dlg.setWindowTitle("Image Size")
+        dlg._width.setValue(self._doc.width)
+        dlg._height.setValue(self._doc.height)
+        if dlg.exec():
+            import cv2
+            new_w, new_h, _ = dlg.get_values()
+            if new_w < 1 or new_h < 1:
+                return
+            sx = new_w / max(self._doc.width, 1)
+            sy = new_h / max(self._doc.height, 1)
+            self._doc._snapshot("Resize Image")
+            for layer in self._doc.layers.layers:
+                px = layer.pixels
+                lh, lw = px.shape[:2]
+                nlw, nlh = max(1, round(lw * sx)), max(1, round(lh * sy))
+                layer._pixels = cv2.resize(px, (nlw, nlh), interpolation=cv2.INTER_AREA)
+                layer.width, layer.height = nlw, nlh
+                ox, oy = layer.position
+                layer.position = (round(ox * sx), round(oy * sy))
+            self._doc.resize(new_w, new_h)
+            self._refresh()
+
     # ---- Selection ----------------------------------------------------------
 
     def _on_select_all(self) -> None:
@@ -809,6 +927,36 @@ class MainWindow(QMainWindow):
     def _on_invert_sel(self) -> None:
         if self._doc:
             self._doc.selection.invert()
+            self._update_selection_overlay()
+
+    def _on_feather_sel(self) -> None:
+        """Feather (blur) the current selection edges."""
+        if not self._doc or not self._doc.selection.active:
+            return
+        radius, ok = QInputDialog.getInt(
+            self, "Feather Selection", "Feather radius (px):", 5, 1, 250)
+        if ok:
+            self._doc.selection.feather(radius)
+            self._update_selection_overlay()
+
+    def _on_grow_sel(self) -> None:
+        """Expand the current selection."""
+        if not self._doc or not self._doc.selection.active:
+            return
+        pixels, ok = QInputDialog.getInt(
+            self, "Grow Selection", "Grow by (px):", 5, 1, 250)
+        if ok:
+            self._doc.selection.grow(pixels)
+            self._update_selection_overlay()
+
+    def _on_shrink_sel(self) -> None:
+        """Shrink the current selection."""
+        if not self._doc or not self._doc.selection.active:
+            return
+        pixels, ok = QInputDialog.getInt(
+            self, "Shrink Selection", "Shrink by (px):", 5, 1, 250)
+        if ok:
+            self._doc.selection.shrink(pixels)
             self._update_selection_overlay()
 
     def _on_delete_selection(self) -> None:
@@ -1090,6 +1238,14 @@ class MainWindow(QMainWindow):
 
     def _on_canvas_hover(self, x: int, y: int) -> None:
         """Handle non-drag mouse movement for cursor updates."""
+        # Update ruler cursor position indicators
+        if hasattr(self, '_h_ruler') and self._rulers_visible:
+            dr = self._canvas._doc_rect()
+            if self._canvas._doc_w > 0 and self._canvas._doc_h > 0:
+                wx = dr.left() + (x / self._canvas._doc_w) * dr.width()
+                wy = dr.top() + (y / self._canvas._doc_h) * dr.height()
+                self._h_ruler.set_cursor_position(wx)
+                self._v_ruler.set_cursor_position(wy)
         if self._tools.active_type == ToolType.TEXT:
             self._text_update_hover_cursor(x, y)
         elif self._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
@@ -2095,6 +2251,190 @@ class MainWindow(QMainWindow):
     def _zoom(self, factor: float) -> None:
         self._canvas.set_zoom(self._canvas.zoom * factor)
         self._status.set_zoom(self._canvas.zoom)
+        self._update_rulers()
+
+    # ---- View toggles -------------------------------------------------------
+
+    def _on_toggle_grid(self) -> None:
+        self._show_grid = not getattr(self, "_show_grid", False)
+        state = "on" if self._show_grid else "off"
+        self.statusBar().showMessage(f"Grid {state} (not yet implemented)", 2000)
+
+    def _on_toggle_rulers(self) -> None:
+        self._rulers_visible = not self._rulers_visible
+        self._ruler_corner.setVisible(self._rulers_visible)
+        self._h_ruler.setVisible(self._rulers_visible)
+        self._v_ruler.setVisible(self._rulers_visible)
+        state = "on" if self._rulers_visible else "off"
+        self.statusBar().showMessage(f"Rulers {state}", 2000)
+
+    def _on_toggle_guides(self) -> None:
+        self._show_guides = not getattr(self, "_show_guides", True)
+        self._canvas.set_guides(self._guides if self._show_guides else [])
+        state = "on" if self._show_guides else "off"
+        self.statusBar().showMessage(f"Guides {state}", 2000)
+
+    # ---- Ruler / guide management -------------------------------------------
+
+    def _update_rulers(self) -> None:
+        """Sync rulers with current canvas zoom/pan state."""
+        if not hasattr(self, '_h_ruler') or not self._rulers_visible:
+            return
+        dr = self._canvas._doc_rect()
+        dw = self._canvas._doc_w or 1
+        dh = self._canvas._doc_h or 1
+
+        # Horizontal ruler: origin is the widget-x of doc-coord 0
+        h_zoom = dr.width() / dw
+        h_origin = dr.left()
+        self._h_ruler.set_view_params(h_zoom, h_origin, dw)
+
+        # Vertical ruler: origin is the widget-y of doc-coord 0
+        v_zoom = dr.height() / dh
+        v_origin = dr.top()
+        self._v_ruler.set_view_params(v_zoom, v_origin, dh)
+
+        # Each ruler needs the *other* axis params for guide creation.
+        # The perpendicular origin must account for the ruler bar offset:
+        # the canvas widget starts at RULER_SIZE px below/right of the
+        # ruler's origin, so doc-coord-0 in ruler space = RULER_SIZE + canvas origin.
+        from .widgets.rulers import RULER_SIZE
+        self._h_ruler.set_perp_view_params(v_zoom, v_origin + RULER_SIZE, dh)
+        self._v_ruler.set_perp_view_params(h_zoom, h_origin + RULER_SIZE, dw)
+
+        # Layer bounds
+        layer = self._doc.layers.active_layer if self._doc else None
+        if layer and layer.layer_type not in (LayerType.GROUP, LayerType.MASK):
+            lx, ly = layer.position
+            lh, lw = layer.pixels.shape[:2]
+            self._h_ruler.set_layer_bounds(float(lx), float(lx + lw))
+            self._v_ruler.set_layer_bounds(float(ly), float(ly + lh))
+        else:
+            self._h_ruler.set_layer_bounds(None, None)
+            self._v_ruler.set_layer_bounds(None, None)
+
+        # Pass guides to rulers
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    def _on_guide_created(self, guide) -> None:
+        self._guides.append(guide)
+        self._canvas.set_preview_guide(None)  # clear preview
+        self._canvas.set_guides(self._guides)
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    def _on_guide_moved(self, guide, new_pos: float) -> None:
+        guide.position = new_pos
+        # Show preview on canvas while dragging from ruler
+        if guide not in self._guides:
+            self._canvas.set_preview_guide(guide)
+        else:
+            self._canvas.set_guides(self._guides)
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    def _on_guide_deleted(self, guide) -> None:
+        if guide in self._guides:
+            self._guides.remove(guide)
+        self._canvas.set_preview_guide(None)
+        self._canvas.set_guides(self._guides)
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    # ---- Canvas guide interaction -------------------------------------------
+
+    def _on_canvas_guide_drag_moved(self, guide, new_pos: float) -> None:
+        """Guide is being dragged on the canvas."""
+        guide.position = new_pos
+        self._canvas.set_guides(self._guides)
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    def _on_canvas_guide_drag_released(self, guide, pos: float, delete: bool) -> None:
+        """Guide drag finished on canvas — update or delete."""
+        if delete:
+            if guide in self._guides:
+                self._guides.remove(guide)
+        else:
+            guide.position = pos
+        self._canvas.set_guides(self._guides)
+        self._h_ruler.set_guides(self._guides)
+        self._v_ruler.set_guides(self._guides)
+
+    # ---- Numpad opacity (Affinity-style) ------------------------------------
+
+    _NUMPAD_MAP = {
+        Qt.Key.Key_0: 0, Qt.Key.Key_1: 1, Qt.Key.Key_2: 2,
+        Qt.Key.Key_3: 3, Qt.Key.Key_4: 4, Qt.Key.Key_5: 5,
+        Qt.Key.Key_6: 6, Qt.Key.Key_7: 7, Qt.Key.Key_8: 8,
+        Qt.Key.Key_9: 9,
+    }
+
+    def _init_numpad_state(self) -> None:
+        self._numpad_first: int | None = None
+        self._numpad_timer = QTimer(self)
+        self._numpad_timer.setSingleShot(True)
+        self._numpad_timer.setInterval(500)  # 500ms window for second digit
+        self._numpad_timer.timeout.connect(self._numpad_commit)
+
+    def _handle_numpad_opacity(self, key: int) -> bool:
+        """Process a numpad digit for opacity. Returns True if consumed."""
+        digit = self._NUMPAD_MAP.get(key)
+        if digit is None:
+            return False
+        if not self._doc or not self._doc.layers.active_layer:
+            return False
+
+        if not hasattr(self, '_numpad_timer'):
+            self._init_numpad_state()
+
+        if self._numpad_first is not None:
+            # Second digit — combine: first*10 + second → percentage
+            pct = self._numpad_first * 10 + digit
+            pct = max(0, min(100, pct))
+            self._numpad_first = None
+            self._numpad_timer.stop()
+            self._set_opacity_pct(pct)
+            return True
+        else:
+            # First digit — wait for possible second
+            self._numpad_first = digit
+            self._numpad_timer.start()
+            return True
+
+    def _numpad_commit(self) -> None:
+        """Timer expired — commit single digit as opacity (1→10%, ... 0→100%)."""
+        if self._numpad_first is not None:
+            d = self._numpad_first
+            pct = 100 if d == 0 else d * 10
+            self._numpad_first = None
+            self._set_opacity_pct(pct)
+
+    def _set_opacity_pct(self, pct: int) -> None:
+        """Set active layer opacity to *pct* percent."""
+        if self._doc and self._doc.layers.active_layer:
+            self._doc.layers.active_layer.opacity = pct / 100.0
+            self._layers_panel.refresh_controls_only(self._doc)
+            self._refresh_canvas_only()
+            self.statusBar().showMessage(f"Opacity: {pct}%", 1500)
+
+    # ---- Key event handling -------------------------------------------------
+
+    def keyPressEvent(self, event) -> None:
+        # Don't intercept during text editing
+        if (self._tools.active_type == ToolType.TEXT
+                and self._canvas._text_editing):
+            return super().keyPressEvent(event)
+
+        key = event.key()
+        mods = event.modifiers()
+
+        # Numpad digits (no modifiers) → opacity
+        if not mods and self._handle_numpad_opacity(key):
+            return
+
+        super().keyPressEvent(event)
 
     # ---- Drag & drop --------------------------------------------------------
 
@@ -2120,3 +2460,164 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.warning(self, "Error", str(exc))
             break
+
+    # ---- Keyboard shortcuts system ------------------------------------------
+
+    # Mapping from shortcut action_id → ToolType
+    _TOOL_SHORTCUT_MAP = {
+        "tool_move":            ToolType.MOVE,
+        "tool_rect_select":     ToolType.RECT_SELECT,
+        "tool_ellipse_select":  ToolType.ELLIPSE_SELECT,
+        "tool_lasso":           ToolType.LASSO,
+        "tool_magic_wand":      ToolType.MAGIC_WAND,
+        "tool_crop":            ToolType.CROP,
+        "tool_eyedropper":      ToolType.EYEDROPPER,
+        "tool_healing_brush":   ToolType.HEALING_BRUSH,
+        "tool_clone_stamp":     ToolType.CLONE_STAMP,
+        "tool_brush":           ToolType.BRUSH,
+        "tool_eraser":          ToolType.ERASER,
+        "tool_gradient":        ToolType.GRADIENT,
+        "tool_paint_bucket":    ToolType.PAINT_BUCKET,
+        "tool_text":            ToolType.TEXT,
+        "tool_shape":           ToolType.SHAPE,
+        "tool_zoom":            ToolType.ZOOM,
+        "tool_pan":             ToolType.PAN,
+    }
+
+    def _wire_shortcuts(self) -> None:
+        """Build QShortcuts for tool switching, color, and brush size.
+
+        These are re-created whenever the shortcut manager emits
+        ``shortcuts_changed`` (preset change or manual rebind).
+        """
+        self._active_shortcuts: list[QShortcut] = []
+        self._rebuild_shortcuts()
+        self._shortcut_mgr.shortcuts_changed.connect(self._rebuild_shortcuts)
+
+    def _rebuild_shortcuts(self) -> None:
+        """Tear down and re-create all QShortcut objects."""
+        # Remove old shortcuts
+        for sc in self._active_shortcuts:
+            sc.setEnabled(False)
+            sc.deleteLater()
+        self._active_shortcuts.clear()
+
+        mgr = self._shortcut_mgr
+
+        # ---- Tool shortcuts -------------------------------------------------
+        for action_id, tool_type in self._TOOL_SHORTCUT_MAP.items():
+            key_seq = mgr.binding(action_id)
+            if not key_seq:
+                continue
+            sc = QShortcut(QKeySequence(key_seq), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            tt = tool_type  # capture for lambda
+            sc.activated.connect(lambda t=tt: self._shortcut_tool(t))
+            self._active_shortcuts.append(sc)
+
+        # ---- Color shortcuts ------------------------------------------------
+        swap_key = mgr.binding("swap_colors")
+        if swap_key:
+            sc = QShortcut(QKeySequence(swap_key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(self._shortcut_swap_colors)
+            self._active_shortcuts.append(sc)
+
+        reset_key = mgr.binding("reset_colors")
+        if reset_key:
+            sc = QShortcut(QKeySequence(reset_key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(self._shortcut_reset_colors)
+            self._active_shortcuts.append(sc)
+
+        # ---- Brush size shortcuts -------------------------------------------
+        inc_key = mgr.binding("brush_size_increase")
+        if inc_key:
+            sc = QShortcut(QKeySequence(inc_key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(lambda: self._shortcut_brush_size(5))
+            self._active_shortcuts.append(sc)
+
+        dec_key = mgr.binding("brush_size_decrease")
+        if dec_key:
+            sc = QShortcut(QKeySequence(dec_key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(lambda: self._shortcut_brush_size(-5))
+            self._active_shortcuts.append(sc)
+
+        # ---- Fullscreen shortcut --------------------------------------------
+        fs_key = mgr.binding("toggle_fullscreen")
+        if fs_key:
+            sc = QShortcut(QKeySequence(fs_key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(self._shortcut_toggle_fullscreen)
+            self._active_shortcuts.append(sc)
+
+    # ---- Shortcut callbacks -------------------------------------------------
+
+    # Tools that share the same shortcut key cycle through each other
+    _TOOL_CYCLE_GROUPS: list[tuple[ToolType, ...]] = [
+        (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT),
+    ]
+
+    def _shortcut_tool(self, tool_type: ToolType) -> None:
+        """Activate a tool via keyboard shortcut, cycling if same key pressed again."""
+        # Don't hijack shortcuts while text editing
+        if (self._tools.active_type == ToolType.TEXT
+                and self._canvas._text_editing):
+            return
+        # Cycle through tool group if pressing the same key again
+        current = self._tools.active_type
+        for group in self._TOOL_CYCLE_GROUPS:
+            if tool_type in group and current in group:
+                idx = group.index(current)
+                tool_type = group[(idx + 1) % len(group)]
+                break
+        self._toolbar.select_tool(tool_type)
+
+    def _shortcut_swap_colors(self) -> None:
+        if (self._tools.active_type == ToolType.TEXT
+                and self._canvas._text_editing):
+            return
+        ColorManager.instance().swap()
+
+    def _shortcut_reset_colors(self) -> None:
+        if (self._tools.active_type == ToolType.TEXT
+                and self._canvas._text_editing):
+            return
+        ColorManager.instance().reset()
+
+    def _shortcut_brush_size(self, delta: int) -> None:
+        """Increase or decrease the current tool's brush size."""
+        tool = self._tools.active_tool
+        if tool and hasattr(tool, 'size'):
+            new_size = max(1, tool.size + delta)
+            tool.size = new_size
+            self._update_properties_panel()
+            self._update_brush_cursor()
+
+    def _shortcut_toggle_fullscreen(self) -> None:
+        if (self._tools.active_type == ToolType.TEXT
+                and self._canvas._text_editing):
+            return
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _on_keyboard_shortcuts(self) -> None:
+        """Open the keyboard shortcuts editor dialog."""
+        from .dialogs.shortcuts_dialog import KeyboardShortcutsDialog
+        dlg = KeyboardShortcutsDialog(self)
+        dlg.exec()
+
+    def _on_about(self) -> None:
+        """Show the About dialog."""
+        QMessageBox.about(
+            self,
+            "About Photo Editor",
+            "<h3>Photo Editor</h3>"
+            "<p>A professional raster image editor built with PySide6.</p>"
+            "<p>Features include layers, masks, blending modes, "
+            "filters, adjustments, and more.</p>",
+        )

@@ -148,6 +148,12 @@ class CanvasView(_BASE_CLASS):
     widget_pressed = Signal(float, float)
     widget_moved = Signal(float, float)
     widget_released = Signal()
+    # Emitted whenever zoom or pan changes (for ruler sync)
+    view_changed = Signal()
+    # Guide interaction on canvas
+    guide_grabbed = Signal(object)          # Guide
+    guide_drag_moved = Signal(object, float)  # Guide, new doc position
+    guide_drag_released = Signal(object, float, bool)  # Guide, pos, delete?
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -214,6 +220,14 @@ class CanvasView(_BASE_CLASS):
 
         # Crop bounding box overlay state
         self._crop_box: tuple[int, int, int, int] | None = None  # (x, y, w, h) doc coords
+
+        # Guide lines (list of guide objects with .orientation and .position)
+        self._guide_lines: list = []
+        # Preview guide (shown while dragging from ruler before release)
+        self._preview_guide = None   # Guide or None
+        # Guide dragging on canvas
+        self._dragging_canvas_guide = None  # Guide being dragged on canvas
+        self._guide_snap_px = 6  # pixel hit-test distance for guides
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -299,6 +313,16 @@ class CanvasView(_BASE_CLASS):
     def set_crop_box(self, box: tuple[int, int, int, int] | None) -> None:
         """Set / clear the crop bounding box overlay (doc coords: x, y, w, h)."""
         self._crop_box = box
+        self.update()
+
+    def set_guides(self, guides: list) -> None:
+        """Set the guide lines to draw (objects with .orientation and .position)."""
+        self._guide_lines = list(guides)
+        self.update()
+
+    def set_preview_guide(self, guide) -> None:
+        """Set a temporary preview guide (or None to clear)."""
+        self._preview_guide = guide
         self.update()
 
     # ---- Clone / Heal source overlay API ------------------------------------
@@ -453,6 +477,7 @@ class CanvasView(_BASE_CLASS):
     def set_zoom(self, z: float) -> None:
         self._zoom = max(0.01, min(z, 32.0))
         self.update()
+        self.view_changed.emit()
 
     def zoom_to_fit(self) -> None:
         if self._doc_w and self._doc_h:
@@ -461,6 +486,7 @@ class CanvasView(_BASE_CLASS):
             self._zoom = min(sx, sy) * 0.9
             self._pan = QPointF(0, 0)
             self.update()
+            self.view_changed.emit()
 
     def _canvas_to_doc(self, pos: QPointF) -> tuple[int, int]:
         cx = self.width() / 2 + self._pan.x()
@@ -563,6 +589,10 @@ class CanvasView(_BASE_CLASS):
         # Gradient control line + stop handles
         if self._grad_handles_visible:
             self._draw_gradient_handles(p, dr)
+
+        # Guide lines overlay (including preview guide)
+        if self._guide_lines or self._preview_guide is not None:
+            self._draw_guides(p, dr)
 
         p.end()
 
@@ -947,6 +977,64 @@ class CanvasView(_BASE_CLASS):
 
         p.restore()
 
+    # ---- Guide lines overlay ------------------------------------------------
+
+    def _draw_guides(self, p: QPainter, dr: QRectF) -> None:
+        """Draw horizontal and vertical guide lines across the full canvas."""
+        all_guides = list(self._guide_lines)
+        preview = self._preview_guide
+        if not all_guides and preview is None:
+            return
+        if self._doc_w == 0 or self._doc_h == 0:
+            return
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        guide_pen = QPen(QColor(74, 179, 255, 180), 1.0, Qt.PenStyle.DashLine)
+        guide_pen.setCosmetic(True)
+        preview_pen = QPen(QColor(74, 179, 255, 100), 1.0, Qt.PenStyle.DashLine)
+        preview_pen.setCosmetic(True)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+
+        def _draw_one(g, pen):
+            p.setPen(pen)
+            if g.orientation == Qt.Orientation.Vertical:
+                wx = dr.left() + g.position * sx
+                p.drawLine(QPointF(wx, 0), QPointF(wx, self.height()))
+            else:  # Horizontal
+                wy = dr.top() + g.position * sy
+                p.drawLine(QPointF(0, wy), QPointF(self.width(), wy))
+
+        for g in all_guides:
+            _draw_one(g, guide_pen)
+
+        if preview is not None:
+            _draw_one(preview, preview_pen)
+
+        p.restore()
+
+    def _hit_test_guide(self, pos: QPointF):
+        """Return the Guide object near *pos* (widget coords), or None."""
+        if not self._guide_lines or self._doc_w == 0 or self._doc_h == 0:
+            return None
+        dr = self._doc_rect()
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+        snap = self._guide_snap_px
+        for g in self._guide_lines:
+            if g.orientation == Qt.Orientation.Horizontal:
+                wy = dr.top() + g.position * sy
+                if abs(pos.y() - wy) <= snap:
+                    return g
+            else:  # Vertical
+                wx = dr.left() + g.position * sx
+                if abs(pos.x() - wx) <= snap:
+                    return g
+        return None
+
     # ---- Text overlay drawing -----------------------------------------------
 
     def _doc_to_widget(self, dr: QRectF, dx: float, dy: float) -> QPointF:
@@ -1165,6 +1253,7 @@ class CanvasView(_BASE_CLASS):
         factor = 1.15 if delta > 0 else 1 / 1.15
         self._zoom = max(0.01, min(self._zoom * factor, 32.0))
         self.update()
+        self.view_changed.emit()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
@@ -1172,6 +1261,15 @@ class CanvasView(_BASE_CLASS):
             self._last_mouse = event.position()
             self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
         elif event.button() == Qt.MouseButton.LeftButton:
+            # Check for guide hit first
+            hit_guide = self._hit_test_guide(event.position())
+            if hit_guide is not None:
+                self._dragging_canvas_guide = hit_guide
+                self.guide_grabbed.emit(hit_guide)
+                self.setCursor(QCursor(
+                    Qt.CursorShape.SplitVCursor if hit_guide.orientation == Qt.Orientation.Horizontal
+                    else Qt.CursorShape.SplitHCursor))
+                return
             pos = event.position()
             self.widget_pressed.emit(pos.x(), pos.y())
             dx, dy = self._canvas_to_doc(pos)
@@ -1183,7 +1281,24 @@ class CanvasView(_BASE_CLASS):
             self._pan += delta
             self._last_mouse = event.position()
             self.update()
+            self.view_changed.emit()
             return
+
+        # Guide dragging on canvas
+        if self._dragging_canvas_guide is not None:
+            g = self._dragging_canvas_guide
+            dr = self._doc_rect()
+            if g.orientation == Qt.Orientation.Horizontal:
+                sy = dr.height() / self._doc_h if self._doc_h else 1
+                doc_pos = (event.position().y() - dr.top()) / sy if sy else 0
+            else:
+                sx = dr.width() / self._doc_w if self._doc_w else 1
+                doc_pos = (event.position().x() - dr.left()) / sx if sx else 0
+            g.position = doc_pos
+            self.guide_drag_moved.emit(g, doc_pos)
+            self.update()
+            return
+
         dx, dy = self._canvas_to_doc(event.position())
         self.cursor_moved.emit(dx, dy)
 
@@ -1221,6 +1336,25 @@ class CanvasView(_BASE_CLASS):
             self._panning = False
             # Restore tool cursor
         elif event.button() == Qt.MouseButton.LeftButton:
+            # Guide drag release on canvas
+            if self._dragging_canvas_guide is not None:
+                g = self._dragging_canvas_guide
+                dr = self._doc_rect()
+                if g.orientation == Qt.Orientation.Horizontal:
+                    sy = dr.height() / self._doc_h if self._doc_h else 1
+                    doc_pos = (event.position().y() - dr.top()) / sy if sy else 0
+                    # Delete if dragged to ruler area (top edge)
+                    delete = event.position().y() < dr.top() - 20
+                else:
+                    sx = dr.width() / self._doc_w if self._doc_w else 1
+                    doc_pos = (event.position().x() - dr.left()) / sx if sx else 0
+                    # Delete if dragged to ruler area (left edge)
+                    delete = event.position().x() < dr.left() - 20
+                g.position = doc_pos
+                self.guide_drag_released.emit(g, doc_pos, delete)
+                self._dragging_canvas_guide = None
+                self.unsetCursor()
+                return
             self.widget_released.emit()
             dx, dy = self._canvas_to_doc(event.position())
             self.tool_released.emit(dx, dy)
