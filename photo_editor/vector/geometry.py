@@ -14,7 +14,11 @@ speed in per-object transform stacking.
 from __future__ import annotations
 
 import math
-from typing import Iterator, Sequence
+from typing import Iterator, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QTransform
 
 __all__ = ["Vec2", "BBox", "AffineTransform"]
 
@@ -129,9 +133,18 @@ class Vec2:
     def to_tuple(self) -> tuple[float, float]:
         return (self.x, self.y)
 
+    def to_qpoint(self) -> "QPointF":
+        """Convert to PySide6 QPointF."""
+        from PySide6.QtCore import QPointF
+        return QPointF(self.x, self.y)
+
     @staticmethod
     def from_tuple(t: tuple[float, float]) -> Vec2:
         return Vec2(t[0], t[1])
+
+    @staticmethod
+    def from_qpoint(p: "QPointF") -> Vec2:
+        return Vec2(p.x(), p.y())
 
 
 # ---------------------------------------------------------------------------
@@ -410,9 +423,20 @@ class AffineTransform:
     def to_tuple(self) -> tuple[float, float, float, float, float, float]:
         return (self.a, self.b, self.c, self.d, self.tx, self.ty)
 
+    def to_qtransform(self) -> "QTransform":
+        """Convert to PySide6 QTransform."""
+        from PySide6.QtGui import QTransform
+        return QTransform(self.a, self.b, self.c, self.d, self.tx, self.ty)
+
     @staticmethod
     def from_tuple(t: tuple[float, ...]) -> AffineTransform:
         return AffineTransform(t[0], t[1], t[2], t[3], t[4], t[5])
+
+    @staticmethod
+    def from_qtransform(t: "QTransform") -> AffineTransform:
+        return AffineTransform(
+            t.m11(), t.m12(), t.m21(), t.m22(), t.dx(), t.dy()
+        )
 
     def __repr__(self) -> str:
         return (

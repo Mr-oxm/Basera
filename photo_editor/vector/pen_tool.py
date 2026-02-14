@@ -176,9 +176,10 @@ class PenTool(Tool):
 
     @staticmethod
     def _rasterize_to_layer(doc: "Document") -> None:
-        """Update the layer's pixel cache from vector data (tight bbox)."""
+        """Update the layer's pixel cache and boundaries from vector data (tight bbox)."""
         from .rasterizer import rasterize_vector_layer_tight
-        rasterize_vector_layer_tight(doc)
+        # Force re-rasterize to update layer position and size
+        rasterize_vector_layer_tight(doc, force=True)
 
     # ---- State queries for UI overlay ---------------------------------------
 

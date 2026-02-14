@@ -202,6 +202,7 @@ class NodeTool(Tool):
             else:
                 node.set_out_handle(local_pt)
             sp.invalidate()
+            self._hit_object.effective_path().invalidate()
             self._hit_object.invalidate()
             self._throttled_rasterize(doc)
             return
@@ -222,10 +223,16 @@ class NodeTool(Tool):
                 except ValueError:
                     local_orig = orig_world
                     local_new = orig_world + delta
-                sp = obj.effective_path().sub_paths[si]
+                
+                # Careful: obj.effective_path() might regenerate if we called obj.invalidate() in loop?
+                # Actually obj.invalidate() clears cache. detach_shape() sets .path.
+                # So effective_path() returns .path.
+                path = obj.effective_path()
+                sp = path.sub_paths[si]
                 node = sp.nodes[ni]
                 node.set_position(local_new)
                 sp.invalidate()
+                path.invalidate()
                 obj.invalidate()
             self._throttled_rasterize(doc)
             return
@@ -234,7 +241,7 @@ class NodeTool(Tool):
         if self._marquee_start is not None and self._dragging:
             self._marquee_active = True
             self._marquee_current = pos
-
+    
     def on_release(self, doc: "Document", x: int, y: int) -> None:
         pos = Vec2(float(x), float(y))
 
@@ -295,7 +302,8 @@ class NodeTool(Tool):
                 to_remove = [i for i, n in enumerate(sp.nodes) if n.selected]
                 for idx in reversed(to_remove):
                     sp.remove_node(idx)
-                sp.invalidate()
+                if to_remove:
+                    sp.invalidate()
             # Remove empty sub-paths
             path.sub_paths = [sp for sp in path.sub_paths if sp.node_count > 0]
             path.invalidate()
@@ -322,7 +330,9 @@ class NodeTool(Tool):
         for obj in vl.selected_objects():
             obj.detach_shape()
             path = obj.effective_path()
+            obj_changed = False
             for sp in path.sub_paths:
+                sp_changed = False
                 for node in sp.nodes:
                     if node.selected:
                         if not changed:
@@ -337,8 +347,13 @@ class NodeTool(Tool):
                             direction = (node.out_handle - node.position).normalized()
                             in_len = node.in_handle.distance_to(node.position)
                             node.in_handle = node.position - direction * in_len
-                sp.invalidate()
-            obj.invalidate()
+                        sp_changed = True
+                        obj_changed = True
+                if sp_changed:
+                    sp.invalidate()
+            if obj_changed:
+                path.invalidate()
+                obj.invalidate()
 
         if changed:
             self._rasterize_to_layer(doc)
@@ -349,6 +364,15 @@ class NodeTool(Tool):
         vl = self._get_vector_layer(doc)
         if vl is None:
             return
+
+        def _point_line_distance(p: Vec2, a: Vec2, b: Vec2) -> float:
+            ab = b - a
+            d2 = ab.length_sq()
+            if d2 == 0:
+                return p.distance_to(a)
+            t = max(0.0, min(1.0, (p - a).dot(ab) / d2))
+            proj = a + ab * t
+            return p.distance_to(proj)
 
         for obj in vl.selected_objects():
             obj.detach_shape()
@@ -370,7 +394,6 @@ class NodeTool(Tool):
 
                 for seg_i, seg in enumerate(sp.segments):
                     if seg.seg_type == SegmentType.LINE:
-                        from ..vector.path import _point_line_distance
                         d = _point_line_distance(local_pt, start, seg.end)
                         if d < best_dist:
                             best_dist = d
@@ -398,6 +421,7 @@ class NodeTool(Tool):
                     if new_node:
                         new_node.selected = True
                     sp.invalidate()
+                    path.invalidate()
                     obj.invalidate()
                     self._rasterize_to_layer(doc)
                     return
@@ -543,7 +567,7 @@ class NodeTool(Tool):
     @staticmethod
     def _rasterize_to_layer(doc: "Document") -> None:
         from .rasterizer import rasterize_vector_layer_tight
-        rasterize_vector_layer_tight(doc)
+        rasterize_vector_layer_tight(doc, force=True)
 
     def _throttled_rasterize(self, doc: "Document") -> None:
         """Rasterize at most once per ``_rasterize_interval`` during drag."""

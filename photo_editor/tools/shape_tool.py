@@ -1,147 +1,165 @@
-"""Shape tool — draws rectangles, ellipses, lines, and polygons on the active layer."""
 
-import cv2
-import numpy as np
-
+import math
 from .tool_base import Tool
 from ..core.document import Document
-
+from ..core.enums import LayerType
+from ..vector.geometry import Vec2
+from ..vector.path import VectorPath, SubPath, PathNode, HandleMode
+from ..vector.scene import VectorObject, VectorLayer
+from ..vector.style import VectorStyle, VectorFill, VectorStroke, SolidPaint
+from ..vector.rasterizer import rasterize_vector_layer_tight
 
 class ShapeTool(Tool):
-    """Draw geometric shapes with fill and/or stroke."""
+    """Draw geometric shapes as VectorObjects."""
 
     def __init__(self) -> None:
         super().__init__("Shape")
         self.shape_type: str = "rect"  # "rect" | "ellipse" | "line" | "polygon"
-        self.fill_color: np.ndarray | None = np.array(
-            [0.0, 0.5, 1.0, 1.0], dtype=np.float32,
-        )
-        self.stroke_color: np.ndarray | None = np.array(
-            [0.0, 0.0, 0.0, 1.0], dtype=np.float32,
-        )
-        self.stroke_width: int = 2
+        self.fill_color: list[float] | None = [0.0, 0.5, 1.0, 1.0]
+        self.stroke_color: list[float] | None = [0.0, 0.0, 0.0, 1.0]
+        self.stroke_width: float = 2.0
         self.polygon_sides: int = 5
 
         self._start_x: int = 0
         self._start_y: int = 0
         self._dragging: bool = False
 
-    # ------------------------------------------------------------------
-    # Colour helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _to_bgra_255(color: np.ndarray):
-        """Convert float32 [R,G,B,A] → tuple (B,G,B,A) in 0-255 for cv2."""
-        c = np.clip(color * 255, 0, 255).astype(np.uint8)
-        return (int(c[2]), int(c[1]), int(c[0]), int(c[3]))
-
-    # ------------------------------------------------------------------
-    # Shape renderers — draw into an RGBA uint8 buffer then composite
-    # ------------------------------------------------------------------
-
-    def _draw_rect(self, buf: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
-        if self.fill_color is not None:
-            cv2.rectangle(buf, (x0, y0), (x1, y1), self._to_bgra_255(self.fill_color), -1)
-        if self.stroke_color is not None and self.stroke_width > 0:
-            cv2.rectangle(buf, (x0, y0), (x1, y1),
-                          self._to_bgra_255(self.stroke_color), self.stroke_width)
-
-    def _draw_ellipse(self, buf: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
-        cx = (x0 + x1) // 2
-        cy = (y0 + y1) // 2
-        rx = abs(x1 - x0) // 2
-        ry = abs(y1 - y0) // 2
-        if self.fill_color is not None:
-            cv2.ellipse(buf, (cx, cy), (rx, ry), 0, 0, 360,
-                        self._to_bgra_255(self.fill_color), -1)
-        if self.stroke_color is not None and self.stroke_width > 0:
-            cv2.ellipse(buf, (cx, cy), (rx, ry), 0, 0, 360,
-                        self._to_bgra_255(self.stroke_color), self.stroke_width)
-
-    def _draw_line(self, buf: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
-        color = self.stroke_color if self.stroke_color is not None else self.fill_color
-        if color is None:
-            return
-        thickness = max(1, self.stroke_width)
-        cv2.line(buf, (x0, y0), (x1, y1), self._to_bgra_255(color), thickness)
-
-    def _draw_polygon(self, buf: np.ndarray, x0: int, y0: int,
-                      x1: int, y1: int) -> None:
-        cx = (x0 + x1) / 2.0
-        cy = (y0 + y1) / 2.0
-        rx = abs(x1 - x0) / 2.0
-        ry = abs(y1 - y0) / 2.0
-        n = max(3, self.polygon_sides)
-        angles = np.linspace(- np.pi / 2, 2 * np.pi - np.pi / 2, n, endpoint=False)
-        pts = np.column_stack([
-            (cx + rx * np.cos(angles)).astype(np.int32),
-            (cy + ry * np.sin(angles)).astype(np.int32),
-        ]).reshape((-1, 1, 2))
-        if self.fill_color is not None:
-            cv2.fillPoly(buf, [pts], self._to_bgra_255(self.fill_color))
-        if self.stroke_color is not None and self.stroke_width > 0:
-            cv2.polylines(buf, [pts], True,
-                          self._to_bgra_255(self.stroke_color), self.stroke_width)
-
-    # ------------------------------------------------------------------
-    # Tool interface
-    # ------------------------------------------------------------------
-
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         self._start_x, self._start_y = x, y
         self._dragging = True
 
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
-        pass  # Live preview could be rendered here
+        pass
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         if not self._dragging:
             return
         self._dragging = False
 
-        sx, sy = self._start_x, self._start_y
-        ex, ey = x, y
-        # Determine bounding rect of the shape in document coords
-        rx, ry = min(sx, ex), min(sy, ey)
-        rw, rh = abs(ex - sx), abs(ey - sy)
-        if rw < 2 or rh < 2:
+        sx, sy = float(self._start_x), float(self._start_y)
+        ex, ey = float(x), float(y)
+        
+        if abs(ex - sx) < 2 and abs(ey - sy) < 2:
             return
 
-        # Add some padding for strokes
-        pad = self.stroke_width + 2
-        lx, ly = max(0, rx - pad), max(0, ry - pad)
-        lw, lh = rw + pad * 2, rh + pad * 2
+        # 1. Generate VectorPath based on shape type
+        path = self._create_path(sx, sy, ex, ey)
+        if not path:
+            return
 
-        # Create a new layer for the shape
-        from ..core.layer import Layer
-        from ..core.enums import LayerType
-        layer = Layer(name=f"Shape", width=lw, height=lh,
-                      layer_type=LayerType.RASTER)
-        layer.position = (lx, ly)
-        # pixels start as transparent zeros — perfect
+        # 2. Create Style
+        fills = []
+        if self.fill_color is not None:
+            # Assuming fill_color is [r, g, b, a]
+            c = self.fill_color
+            # Opacity is c[3]
+            paint = SolidPaint(color=(c[0], c[1], c[2]))
+            fills.append(VectorFill(paint, opacity=c[3]))
+            
+        strokes = []
+        if self.stroke_color is not None and self.stroke_width > 0:
+            c = self.stroke_color
+            paint = SolidPaint(color=(c[0], c[1], c[2]))
+            strokes.append(VectorStroke(paint, width=self.stroke_width, opacity=c[3]))
 
-        # Render shape into a BGRA uint8 buffer then convert to float RGBA
-        buf = np.zeros((lh, lw, 4), dtype=np.uint8)
-        # Convert document coords to layer-local coords
-        draw_sx, draw_sy = sx - lx, sy - ly
-        draw_ex, draw_ey = ex - lx, ey - ly
-        draw_fn = {
-            "rect": self._draw_rect,
-            "ellipse": self._draw_ellipse,
-            "line": self._draw_line,
-            "polygon": self._draw_polygon,
-        }.get(self.shape_type, self._draw_rect)
-        draw_fn(buf, draw_sx, draw_sy, draw_ex, draw_ey)
+        style = VectorStyle(fills=fills, strokes=strokes)
 
-        # Convert BGRA uint8 → RGBA float32
-        shape_rgba = np.zeros((lh, lw, 4), dtype=np.float32)
-        shape_rgba[..., 0] = buf[..., 2] / 255.0  # R
-        shape_rgba[..., 1] = buf[..., 1] / 255.0  # G
-        shape_rgba[..., 2] = buf[..., 0] / 255.0  # B
-        shape_rgba[..., 3] = buf[..., 3] / 255.0  # A
+        # 3. Create VectorObject
+        obj = VectorObject(name=f"{self.shape_type.capitalize()}", path=path, style=style)
+        obj.selected = True
 
-        layer.pixels = shape_rgba
-        doc.layers.add(layer)
+        # 4. Add to Vector Layer (ensure one exists)
+        vl = self._ensure_vector_layer(doc)
+        vl.add(obj)
+
         doc.save_snapshot("Draw Shape")
-        doc.mark_dirty()
+        
+        # 5. Force update bounds and pixels
+        rasterize_vector_layer_tight(doc, force=True)
+
+    def _ensure_vector_layer(self, doc: Document) -> VectorLayer:
+        layer = doc.layers.active_layer
+        if layer is None or layer.layer_type != LayerType.SHAPE:
+            layer = doc.add_vector_layer(name="Shapes")
+        
+        vl = getattr(layer, "_vector_data", None)
+        if vl is None:
+            vl = VectorLayer()
+            layer._vector_data = vl
+        return vl
+
+    def _create_path(self, x0: float, y0: float, x1: float, y1: float) -> VectorPath | None:
+        # Normalize bounds
+        left, right = min(x0, x1), max(x0, x1)
+        top, bottom = min(y0, y1), max(y0, y1)
+        w, h = right - left, bottom - top
+        
+        if self.shape_type == "rect":
+            # TL -> TR -> BR -> BL
+            nodes = [
+                PathNode(Vec2(left, top), mode=HandleMode.SHARP),
+                PathNode(Vec2(right, top), mode=HandleMode.SHARP),
+                PathNode(Vec2(right, bottom), mode=HandleMode.SHARP),
+                PathNode(Vec2(left, bottom), mode=HandleMode.SHARP),
+            ]
+            sp = SubPath(nodes, closed=True)
+            return VectorPath([sp])
+            
+        elif self.shape_type == "ellipse":
+            # Approximation with 4 bezier curves (kappa = 0.55228)
+            cx, cy = left + w/2, top + h/2
+            rx, ry = w/2, h/2
+            k = 0.55228475
+            ox, oy = rx * k, ry * k
+            
+            # 4 points: Right, Bottom, Left, Top
+            # 0: Right (cx+rx, cy)
+            p0 = PathNode(Vec2(cx + rx, cy), mode=HandleMode.SMOOTH)
+            p0.in_handle = Vec2(cx + rx, cy - oy)
+            p0.out_handle = Vec2(cx + rx, cy + oy)
+            
+            # 1: Bottom (cx, cy+ry)
+            p1 = PathNode(Vec2(cx, cy + ry), mode=HandleMode.SMOOTH)
+            p1.in_handle = Vec2(cx + ox, cy + ry)
+            p1.out_handle = Vec2(cx - ox, cy + ry)
+            
+            # 2: Left (cx-rx, cy)
+            p2 = PathNode(Vec2(cx - rx, cy), mode=HandleMode.SMOOTH)
+            p2.in_handle = Vec2(cx - rx, cy + oy)
+            p2.out_handle = Vec2(cx - rx, cy - oy)
+            
+            # 3: Top (cx, cy-ry)
+            p3 = PathNode(Vec2(cx, cy - ry), mode=HandleMode.SMOOTH)
+            p3.in_handle = Vec2(cx - ox, cy - ry)
+            p3.out_handle = Vec2(cx + ox, cy - ry)
+            
+            sp = SubPath([p0, p1, p2, p3], closed=True)
+            return VectorPath([sp])
+
+        elif self.shape_type == "line":
+            nodes = [
+                PathNode(Vec2(x0, y0), mode=HandleMode.SHARP),
+                PathNode(Vec2(x1, y1), mode=HandleMode.SHARP)
+            ]
+            sp = SubPath(nodes, closed=False)
+            return VectorPath([sp])
+
+        elif self.shape_type == "polygon":
+             cx, cy = left + w/2, top + h/2
+             rx, ry = w/2, h/2
+             n = max(3, self.polygon_sides)
+             import numpy as np # Keep locally if needed or rely on math
+             nodes = []
+             # Start angle -90 deg
+             start_angle = -math.pi / 2
+             for i in range(n):
+                 angle = start_angle + (2 * math.pi * i) / n
+                 px = cx + rx * math.cos(angle)
+                 py = cy + ry * math.sin(angle)
+                 nodes.append(PathNode(Vec2(px, py), mode=HandleMode.SHARP))
+             
+             sp = SubPath(nodes, closed=True)
+             return VectorPath([sp])
+             
+        return None
+

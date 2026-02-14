@@ -108,6 +108,8 @@ class MoveTool(Tool):
         self._float_dy: int = 0
         self._float_committed_dx: int = 0   # accumulated offset from prior drags
         self._float_committed_dy: int = 0
+        # Vector transform pivot
+        self._orig_center: tuple[float, float] = (0.0, 0.0)
 
     # ------------------------------------------------------------------
     # Floating selection helpers
@@ -499,9 +501,15 @@ class MoveTool(Tool):
                 self._orig_width = layer.width
                 self._orig_height = layer.height
 
-        else:  # MOVE — nothing extra needed
             self._orig_width = layer.width
             self._orig_height = layer.height
+
+        # Record original center (bbox center) for vector transform calculation
+        # Must be done for ALL modes so commit knows the pivot
+        self._orig_center = (
+            layer.position[0] + layer.width / 2.0,
+            layer.position[1] + layer.height / 2.0,
+        )
 
     def _setup_resize_anchor(self, layer) -> None:
         """Pre-compute the anchor screen position for a rotated resize."""
@@ -587,6 +595,15 @@ class MoveTool(Tool):
                 # ND system: angle already committed during drag via
                 # compute_display; _current_angle is 0 — no-op addition.
                 self._active_layer.transform_angle += self._current_angle
+                
+        # --- Vector Layer Commit ---
+        if self._active_layer is not None and self._mode != _Mode.NONE:
+            from ..core.enums import LayerType
+            if self._active_layer.layer_type == LayerType.SHAPE:
+                vl = getattr(self._active_layer, "_vector_data", None)
+                if vl:
+                    self._commit_vector_transform(doc, self._active_layer, vl)
+
         self._dragging = False
         self._orig_pixels = None
         self._mode = _Mode.NONE
@@ -595,19 +612,88 @@ class MoveTool(Tool):
         self._base_angle = 0.0
         self._active_layer = None
         self._is_rotated_resize = False
-        self._group_children = []
-        self._group_child_positions = {}
-        self._group_child_pixels = {}
-        self._group_orig_bbox = None
-        self._group_child_base_sx = {}
-        self._group_child_base_sy = {}
-        self._group_child_base_angle = {}
-        self._group_child_dims = {}
         self._mask_children = []
         self._mask_child_positions = {}
         self._mask_child_base_sx = {}
         self._mask_child_base_sy = {}
         self._mask_child_base_angle = {}
+
+    def _commit_vector_transform(self, doc: Document, layer, vl: object) -> None:
+        """Bake the temporary layer transform into the vector objects."""
+        from ..vector.geometry import AffineTransform, Vec2
+        from ..vector.rasterizer import rasterize_vector_layer_tight, set_auto_rasterize
+
+        mode = self._mode
+        
+        # 1. Calculate transformation components
+        
+        # Center translation
+        old_cx, old_cy = self._orig_center
+        new_cx = layer.position[0] + layer.width / 2.0
+        new_cy = layer.position[1] + layer.height / 2.0
+        
+        # Scale factor
+        sx, sy = 1.0, 1.0
+        if mode == _Mode.RESIZE:
+            if self._is_rotated_resize:
+                # Rotated: compare base (unrotated) dimensions
+                old_w = self._orig_width
+                old_h = self._orig_height
+                # Current base dimension = source_dim * scale
+                cur_w = layer.transform_scale_x * layer.source_width
+                cur_h = layer.transform_scale_y * layer.source_height
+                sx = cur_w / max(old_w, 1.0)
+                sy = cur_h / max(old_h, 1.0)
+            else:
+                # Non-rotated: compare visible dimensions
+                sx = layer.width / max(self._orig_width, 1.0)
+                sy = layer.height / max(self._orig_height, 1.0)
+
+        # Rotation
+        angle_deg = 0.0
+        if mode == _Mode.ROTATE:
+            angle_deg = layer.transform_angle - self._base_angle
+
+        # 2. Build AffineTransform
+        # T(-Old) * Scale * Rotate * T(New)
+        # Note: MoveTool Rotate keeps center fixed (New == Old), Resize moves center.
+        
+        xf = AffineTransform.translation(new_cx, new_cy)
+        
+        if angle_deg != 0.0:
+            xf = xf.rotate(math.radians(angle_deg))
+            
+        if sx != 1.0 or sy != 1.0:
+            xf = xf.scale(sx, sy)
+            
+        xf = xf.translate(-old_cx, -old_cy)
+
+        # 3. Apply to all vector objects
+        # We need to treat 'vl' as VectorLayer. It has .objects list.
+        # But we accept 'object' because type hints might be loose or circular logic.
+        for obj in getattr(vl, "objects", []):
+            # Apply xf AFTER obj.transform (obj.transform maps Local->OldWorld, xf maps OldWorld->NewWorld)
+            # AffineTransform.concat(other) means self @ other (self after other)
+            # So we want xf.concat(obj.transform) -> xf @ obj.transform
+            obj.transform = xf.concat(obj.transform)
+            obj.invalidate()
+
+        # 4. Reset layer raster transform logic
+        # Clear non-destructive source so rasterizer regenerates fresh
+        layer._source_pixels = None
+        layer._source_mask = None
+        layer.transform_scale_x = 1.0
+        layer.transform_scale_y = 1.0
+        layer.transform_angle = 0.0
+        layer.transform_base_w = 0
+        layer.transform_base_h = 0
+        layer._pixels_dirty = False
+        
+        # 5. Rasterize at new location
+        # Force rasterize to update layer.position/pixels
+        rasterize_vector_layer_tight(doc, layer=layer, force=True)
+
+
 
     # ------------------------------------------------------------------
     # Resize
