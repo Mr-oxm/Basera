@@ -501,9 +501,6 @@ class MoveTool(Tool):
                 self._orig_width = layer.width
                 self._orig_height = layer.height
 
-            self._orig_width = layer.width
-            self._orig_height = layer.height
-
         # Record original center (bbox center) for vector transform calculation
         # Must be done for ALL modes so commit knows the pivot
         self._orig_center = (
@@ -617,6 +614,15 @@ class MoveTool(Tool):
         self._mask_child_base_sx = {}
         self._mask_child_base_sy = {}
         self._mask_child_base_angle = {}
+        
+        self._group_children = []
+        self._group_child_positions = {}
+        self._group_child_pixels = {}
+        self._group_orig_bbox = None
+        self._group_child_base_sx = {}
+        self._group_child_base_sy = {}
+        self._group_child_base_angle = {}
+        self._group_child_dims = {}
 
     def _commit_vector_transform(self, doc: Document, layer, vl: object) -> None:
         """Bake the temporary layer transform into the vector objects."""
