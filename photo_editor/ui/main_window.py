@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self._h_ruler = HorizontalRuler()
         self._v_ruler = VerticalRuler()
         self._canvas = CanvasView(self)
+        self._canvas.set_tool_manager_ref(self._tools)
 
         grid.addWidget(self._ruler_corner, 0, 0)
         grid.addWidget(self._h_ruler, 0, 1)
@@ -184,6 +185,9 @@ class MainWindow(QMainWindow):
         a["save"].triggered.connect(self._on_save)
         a["save_as"].triggered.connect(self._on_save_as)
         a["export"].triggered.connect(self._on_save_as)
+        a["import_svg"].triggered.connect(self._on_import_svg)
+        a["export_svg"].triggered.connect(self._on_export_svg)
+        a["export_pdf"].triggered.connect(self._on_export_pdf)
         a["quit"].triggered.connect(self.close)
         a["undo"].triggered.connect(self._on_undo)
         a["redo"].triggered.connect(self._on_redo)
@@ -194,6 +198,7 @@ class MainWindow(QMainWindow):
         a["resize_canvas"].triggered.connect(self._on_resize_canvas)
         a["resize_image"].triggered.connect(self._on_resize_image)
         a["new_layer"].triggered.connect(self._on_add_layer)
+        a["new_vector_layer"].triggered.connect(self._on_add_vector_layer)
         a["new_group"].triggered.connect(self._on_add_group)
         a["dup_layer"].triggered.connect(self._on_dup_layer)
         a["del_layer"].triggered.connect(self._on_del_layer)
@@ -278,6 +283,8 @@ class MainWindow(QMainWindow):
         self._props_panel.crop_property_changed.connect(self._on_crop_prop_changed)
         self._props_panel.crop_apply.connect(self._on_crop_apply)
         self._props_panel.crop_cancel.connect(self._on_crop_cancel)
+        self._props_panel.vector_property_changed.connect(self._on_vector_prop_changed)
+        self._props_panel.vector_action.connect(self._on_vector_action)
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -293,6 +300,7 @@ class MainWindow(QMainWindow):
         self._canvas.tool_pressed.connect(self._on_canvas_press)
         self._canvas.tool_moved.connect(self._on_canvas_move)
         self._canvas.tool_released.connect(self._on_canvas_release)
+        self._canvas.tool_double_clicked.connect(self._on_canvas_double_click)
         # Widget-coord signals for the pan tool
         self._canvas.widget_pressed.connect(self._on_widget_press)
         self._canvas.widget_moved.connect(self._on_widget_move)
@@ -330,6 +338,7 @@ class MainWindow(QMainWindow):
         """
         if not self._doc:
             return
+        self._canvas.set_document_ref(self._doc)
         if invalidate:
             self._pipeline.invalidate(layer_id)
         result = self._pipeline.execute_to_uint8(self._doc)
@@ -533,6 +542,95 @@ class MainWindow(QMainWindow):
                 self._open_docs[idx] = (self._doc, path)
                 self._file_tabs.set_tab_text(idx, Path(path).name)
 
+    # ---- SVG / PDF import / export ------------------------------------------
+
+    def _on_import_svg(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+        try:
+            from ..vector.svg import import_svg
+            objects = import_svg(path)
+            if not objects:
+                QMessageBox.information(self, "Import SVG", "No vector objects found in SVG.")
+                return
+            # Determine canvas size from object bounding boxes
+            from ..vector.geometry import BBox
+            all_bb = BBox.empty()
+            for obj in objects:
+                all_bb = all_bb.union(obj.bbox())
+            w = max(int(all_bb.max_pt.x + 20), 200)
+            h = max(int(all_bb.max_pt.y + 20), 200)
+            if self._doc is None:
+                self._doc = Document(w, h, name=Path(path).stem)
+                self._open_docs.append((self._doc, path))
+                self._file_tabs.add_tab(Path(path).name, tooltip=path)
+            # Create a vector layer and add imported objects
+            layer = self._doc.add_vector_layer(name=Path(path).stem)
+            vl = layer._vector_data
+            for obj in objects:
+                vl.add(obj)
+            # Rasterize to pixels
+            from ..vector.rasterizer import VectorRasterizer
+            rasterizer = VectorRasterizer()
+            pixels = rasterizer.rasterize_layer(vl, layer.width, layer.height)
+            layer._pixels = pixels
+            self._refresh()
+            self._canvas.zoom_to_fit()
+            self._status.showMessage(f"Imported {len(objects)} objects from SVG", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Import SVG Error", str(exc))
+
+    def _on_export_svg(self) -> None:
+        if not self._doc:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+        try:
+            # Collect all vector objects from all layers
+            objects = []
+            for layer in self._doc.layers:
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    objects.extend(vl.objects)
+            if not objects:
+                QMessageBox.information(self, "Export SVG", "No vector objects to export.")
+                return
+            from ..vector.svg import export_svg
+            svg_str = export_svg(objects, self._doc.width, self._doc.height)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(svg_str)
+            self._status.showMessage(f"Exported {len(objects)} objects to SVG", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export SVG Error", str(exc))
+
+    def _on_export_pdf(self) -> None:
+        if not self._doc:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export PDF", "", "PDF Files (*.pdf)")
+        if not path:
+            return
+        try:
+            objects = []
+            for layer in self._doc.layers:
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    objects.extend(vl.objects)
+            if not objects:
+                QMessageBox.information(self, "Export PDF", "No vector objects to export.")
+                return
+            from ..vector.pdf import export_pdf_bytes
+            pdf_data = export_pdf_bytes(objects, self._doc.width, self._doc.height)
+            with open(path, "wb") as f:
+                f.write(pdf_data)
+            self._status.showMessage(f"Exported {len(objects)} objects to PDF", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export PDF Error", str(exc))
+
     # ---- Tab management -----------------------------------------------------
 
     def _on_tab_selected(self, index: int) -> None:
@@ -583,6 +681,11 @@ class MainWindow(QMainWindow):
     def _on_add_layer(self) -> None:
         if self._doc:
             self._doc.add_layer()
+            self._refresh()
+
+    def _on_add_vector_layer(self) -> None:
+        if self._doc:
+            self._doc.add_vector_layer()
             self._refresh()
 
     def _on_add_group(self) -> None:
@@ -1379,6 +1482,11 @@ class MainWindow(QMainWindow):
             tool = self._tools.active_tool
             if tool is not None and hasattr(tool, '_points') and tool._drawing:
                 self._canvas.set_lasso_points(list(tool._points))
+        elif tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
+            # Vector tools: update canvas for live overlay preview
+            self._canvas.update()
+            if self._dragging:
+                self._schedule_render()
         elif tool_type == ToolType.TEXT:
             # Update overlay to show drawing preview or editing state
             self._text_update_overlay()
@@ -1413,6 +1521,24 @@ class MainWindow(QMainWindow):
         # Update text overlay after release (may have created a new text layer)
         if tool_type == ToolType.TEXT:
             self._text_update_overlay()
+
+    # ---- Double-click handler ------------------------------------------------
+
+    def _on_canvas_double_click(self, x: int, y: int) -> None:
+        tool_type = self._tools.active_type
+        tool = self._tools.active_tool
+        # Pen tool: double-click finishes open path
+        if tool_type == ToolType.PEN and tool is not None:
+            if hasattr(tool, 'finish_open_path'):
+                tool.finish_open_path(self._doc)
+                self._refresh()
+                return
+        # Node tool: double-click inserts a node on the nearest segment
+        if tool_type == ToolType.NODE and tool is not None:
+            if hasattr(tool, 'insert_node_on_segment'):
+                tool.insert_node_on_segment(self._doc, x, y)
+                self._refresh()
+                return
 
     # ---- Properties panel ---------------------------------------------------
 
@@ -1463,12 +1589,21 @@ class MainWindow(QMainWindow):
             self._props_panel.set_gradient_mode(True, tool)
             return
 
+        # Vector tools use the vector properties bar
+        _VEC_TOOLS = {ToolType.PEN: "pen", ToolType.NODE: "node",
+                      ToolType.VECTOR_SHAPE: "shape"}
+        if tool_type in _VEC_TOOLS:
+            self._props_panel.clear()
+            self._props_panel.set_vector_mode(True, tool, mode=_VEC_TOOLS[tool_type])
+            return
+
         self._props_panel.set_text_mode(False)
         self._props_panel.set_gradient_mode(False)
         self._props_panel.set_move_mode(False)
         self._props_panel.set_crop_mode(False)
         self._props_panel.set_zoom_mode(False)
         self._props_panel.set_selection_mode(False)
+        self._props_panel.set_vector_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -1636,6 +1771,131 @@ class MainWindow(QMainWindow):
         if tool is None or self._tools.active_type != ToolType.CROP:
             return
         tool.cancel()
+
+    # ---- Vector tool property / action handlers -----------------------------
+
+    def _on_vector_prop_changed(self, key: str, value: object) -> None:
+        """Apply a property change from the vector properties bar to the active tool
+        AND to any currently selected VectorObject(s)."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        tt = self._tools.active_type
+
+        if key == "fill_color" and isinstance(value, tuple):
+            tool.fill_color = value
+        elif key == "stroke_color" and isinstance(value, tuple):
+            tool.stroke_color = value
+        elif key == "stroke_width":
+            tool.stroke_width = float(value)
+        elif key == "shape_type" and tt == ToolType.VECTOR_SHAPE:
+            from ..vector.shape_tool import VectorShapeType
+            name = str(value).upper().replace(" ", "_")
+            try:
+                tool.shape_type = VectorShapeType[name]
+            except KeyError:
+                pass
+            self._props_panel.vector_bar.set_shape_type(str(value))
+        elif key == "param_a" and tt == ToolType.VECTOR_SHAPE:
+            self._set_shape_param_a(tool, float(value))
+        elif key == "param_b" and tt == ToolType.VECTOR_SHAPE:
+            self._set_shape_param_b(tool, float(value))
+
+        # ---- Also propagate to selected VectorObjects on the active layer ---
+        if key in ("fill_color", "stroke_color", "stroke_width"):
+            self._apply_style_to_selected_objects(key, value)
+
+    def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
+        """Push a style property into every selected VectorObject across
+        ALL vector layers, then re-rasterize and schedule a render."""
+        doc = self._doc
+        if doc is None:
+            return
+
+        from ..vector.style import SolidPaint
+        from ..vector.rasterizer import rasterize_vector_layer_tight
+
+        any_changed = False
+        for layer in doc.layers.layers:
+            vl = getattr(layer, "_vector_data", None)
+            if vl is None:
+                continue
+
+            changed = False
+            for obj in vl.objects:
+                if not obj.selected:
+                    continue
+                if key == "fill_color" and isinstance(value, tuple):
+                    for fill in obj.style.fills:
+                        if isinstance(fill.paint, SolidPaint):
+                            fill.paint.color = value
+                            changed = True
+                elif key == "stroke_color" and isinstance(value, tuple):
+                    for stroke in obj.style.strokes:
+                        if isinstance(stroke.paint, SolidPaint):
+                            stroke.paint.color = value
+                            changed = True
+                elif key == "stroke_width":
+                    for stroke in obj.style.strokes:
+                        stroke.width = float(value)
+                        changed = True
+
+            if changed:
+                any_changed = True
+                # Rasterize this specific layer
+                rasterize_vector_layer_tight(doc, layer=layer)
+
+        if any_changed:
+            self._schedule_render()
+
+    def _set_shape_param_a(self, tool, val: float) -> None:
+        from ..vector.shape_tool import VectorShapeType
+        _map = {
+            VectorShapeType.RECTANGLE: "corner_radius",
+            VectorShapeType.POLYGON: "polygon_sides",
+            VectorShapeType.STAR: "star_points",
+            VectorShapeType.ARROW: "arrow_head_length",
+            VectorShapeType.CROSS: "cross_arm_ratio",
+            VectorShapeType.RING: "ring_thickness",
+            VectorShapeType.TRAPEZOID: "trapezoid_top_ratio",
+            VectorShapeType.PARALLELOGRAM: "parallelogram_skew",
+            VectorShapeType.CRESCENT: "crescent_offset",
+            VectorShapeType.SPEECH_BUBBLE: "speech_tail_position",
+        }
+        attr = _map.get(tool.shape_type)
+        if attr:
+            if attr in ("polygon_sides", "star_points"):
+                setattr(tool, attr, max(3, int(val)))
+            else:
+                setattr(tool, attr, val)
+
+    def _set_shape_param_b(self, tool, val: float) -> None:
+        from ..vector.shape_tool import VectorShapeType
+        _map = {
+            VectorShapeType.STAR: "star_inner_ratio",
+            VectorShapeType.ARROW: "arrow_shaft_width",
+        }
+        attr = _map.get(tool.shape_type)
+        if attr:
+            setattr(tool, attr, val)
+
+    def _on_vector_action(self, action: str) -> None:
+        """Handle action buttons from the vector properties bar."""
+        tool = self._tools.active_tool
+        if tool is None or self._doc is None:
+            return
+        tt = self._tools.active_type
+        if tt == ToolType.NODE:
+            if action == "delete_nodes":
+                tool.delete_selected_nodes(self._doc)
+            elif action == "break_path":
+                tool.break_path_at_node(self._doc)
+            elif action == "toggle_mode":
+                tool.toggle_node_mode(self._doc)
+            elif action == "select_all":
+                tool.select_all_nodes(self._doc)
+            self._schedule_render()
+            self._canvas.update()
 
     def _on_crop_execute(self, x: int, y: int, w: int, h: int, mode) -> None:
         """Execute the actual crop operation."""
@@ -2430,6 +2690,35 @@ class MainWindow(QMainWindow):
         key = event.key()
         mods = event.modifiers()
 
+        # ---- Vector tool key handling ----
+        tool_type = self._tools.active_type
+        tool = self._tools.active_tool
+
+        # Pen tool: Escape / Enter → finish open path
+        if tool_type == ToolType.PEN and tool is not None:
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if hasattr(tool, 'finish_open_path'):
+                    tool.finish_open_path(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+
+        # Node tool: Delete / Backspace → delete selected nodes
+        if tool_type == ToolType.NODE and tool is not None:
+            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if hasattr(tool, 'delete_selected_nodes'):
+                    tool.delete_selected_nodes(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+            # Tab → toggle node handle mode
+            if key == Qt.Key.Key_Tab:
+                if hasattr(tool, 'toggle_node_mode'):
+                    tool.toggle_node_mode(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+
         # Numpad digits (no modifiers) → opacity
         if not mods and self._handle_numpad_opacity(key):
             return
@@ -2480,6 +2769,9 @@ class MainWindow(QMainWindow):
         "tool_paint_bucket":    ToolType.PAINT_BUCKET,
         "tool_text":            ToolType.TEXT,
         "tool_shape":           ToolType.SHAPE,
+        "tool_pen":             ToolType.PEN,
+        "tool_node":            ToolType.NODE,
+        "tool_vector_shape":    ToolType.VECTOR_SHAPE,
         "tool_zoom":            ToolType.ZOOM,
         "tool_pan":             ToolType.PAN,
     }

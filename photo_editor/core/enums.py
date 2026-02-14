@@ -75,3 +75,7 @@ class ToolType(Enum):
     PAN = auto()
     CROP = auto()
     EYEDROPPER = auto()
+    # Vector tools
+    PEN = auto()
+    NODE = auto()
+    VECTOR_SHAPE = auto()

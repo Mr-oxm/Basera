@@ -77,6 +77,23 @@ class Document:
         self._dirty = True
         return layer
 
+    def add_vector_layer(self, name: str = "Vector Layer") -> Layer:
+        """Create a new layer with an empty VectorLayer scene graph.
+
+        Starts with a tiny 1×1 buffer — the first rasterize pass will resize
+        it to the tight bounding box of its contents.
+        """
+        from ..vector.scene import VectorLayer as VL
+        layer = Layer(
+            name=name, width=1, height=1,
+            layer_type=LayerType.SHAPE,
+        )
+        layer._vector_data = VL()
+        self.layers.add(layer)
+        self._snapshot(f"Add {name}")
+        self._dirty = True
+        return layer
+
     def remove_layer(self, layer_id: str) -> None:
         layer = self.layers.get(layer_id)
         if layer is None:
@@ -376,6 +393,10 @@ class Document:
             if layer.adjustment is not None:
                 meta["_adjustment_name"] = layer.adjustment.name
                 meta["_adjustment_params"] = dict(layer.adjustment_params)
+            # Save vector layer data if present
+            vd = getattr(layer, "_vector_data", None)
+            if vd is not None and hasattr(vd, "to_dict"):
+                meta["_vector_data"] = vd.to_dict()
             layer_metas.append(meta)
         state.metadata["_layer_order"] = [l.id for l in self.layers]
         state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
@@ -451,6 +472,14 @@ class Document:
                     if cls is not None:
                         layer._adjustment = cls()
                         layer._adjustment_params = dict(meta.get("_adjustment_params", {}))
+                # Restore vector layer data
+                vd_dict = meta.get("_vector_data")
+                if vd_dict is not None:
+                    try:
+                        from ..vector.scene import VectorLayer as VL
+                        layer._vector_data = VL.from_dict(vd_dict)
+                    except Exception:
+                        pass
                 new_stack.add(layer)
             new_stack.active_index = state.metadata.get("_active_index", 0)
             self.layers = new_stack
