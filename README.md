@@ -5,7 +5,7 @@
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
 > [!WARNING]
-> This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
+> This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, slow, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
 
 <img width="1919" height="992" alt="Screenshot 2026-02-10 211250" src="https://github.com/user-attachments/assets/e960e2ad-8b13-46a6-afc2-e2f562e7426f" />
 
