@@ -391,7 +391,7 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] PSD file import/export
 - [ ] RAW file support (via rawpy)
 - [ ] Brush engine with texture and dynamics
-- [ ] Vector layer rendering (SVG)
+- [ ] Vector layer rendering (SVG) (in the works)
 - [ ] Smart Object editing
 - [ ] Content-Aware Fill
 - [ ] Liquify tool
