@@ -390,8 +390,17 @@ class RenderEngine:
             # (they are applied in the main render loop)
             if layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
                 continue
+
             mask = MaskManager.get_combined_mask(layer, document.layers)
-            pixels = layer.pixels
+
+            # Handle nested groups recursively
+            if layer.layer_type == LayerType.GROUP:
+                pixels = self._render_group(layer, document, cw, ch)
+                position = (0, 0)
+            else:
+                pixels = layer.pixels
+                position = layer.position
+
             # Apply child adj/filter layers scoped to this layer
             if layer.id in adj_children:
                 pixels = pixels.copy()
@@ -403,7 +412,7 @@ class RenderEngine:
             if layer.styles:
                 pixels = StyleEngine.apply_styles(pixels, layer.styles)
             self._blending.blend_region_inplace(
-                canvas, pixels, layer.position,
+                canvas, pixels, position,
                 layer.blend_mode, layer.opacity, mask,
             )
         return canvas

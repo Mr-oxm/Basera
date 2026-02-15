@@ -27,6 +27,7 @@ from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
 from .panels.properties_panel import PropertiesPanel
+from .panels.transform_panel import TransformPanel
 from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
 from .theme import DARK_STYLESHEET
@@ -166,6 +167,11 @@ class MainWindow(QMainWindow):
         self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._color_dock)
         self._layers_dock.raise_()
+        
+        self._transform_panel = TransformPanel()
+        self._transform_dock = self._dock(self._transform_panel, "Transform", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._layers_dock, self._transform_dock)
+
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
 
@@ -285,6 +291,7 @@ class MainWindow(QMainWindow):
         self._props_panel.crop_cancel.connect(self._on_crop_cancel)
         self._props_panel.vector_property_changed.connect(self._on_vector_prop_changed)
         self._props_panel.vector_action.connect(self._on_vector_action)
+        self._transform_panel.value_changed.connect(lambda: self._refresh(invalidate=True))
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -345,6 +352,7 @@ class MainWindow(QMainWindow):
         self._canvas.set_image(result, force=invalidate)
         self._layers_panel.refresh(self._doc)
         self._history_panel.refresh(self._doc.history)
+        self._transform_panel.refresh(self._doc)
         self._update_selection_overlay()
         self._update_transform_box()
         self._update_rulers()
@@ -358,6 +366,7 @@ class MainWindow(QMainWindow):
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result, force=True)
         self._update_transform_box()
+        self._transform_panel.refresh(self._doc)
         self._update_rulers()
 
     def _refresh_lightweight(self) -> None:
@@ -393,6 +402,7 @@ class MainWindow(QMainWindow):
         self._panel_refresh_pending = False
         if self._doc:
             self._layers_panel.refresh(self._doc, thumbnails=False)
+            self._transform_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
 
     def _update_selection_overlay(self) -> None:
@@ -550,36 +560,110 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            from ..vector.svg import import_svg
-            objects = import_svg(path)
-            if not objects:
+            from ..vector.svg import import_svg, SVGGroup, SVGLeaf
+            from ..vector.geometry import BBox, AffineTransform, Vec2
+            from ..vector.rasterizer import rasterize_vector_layer_tight
+
+            root_node = import_svg(path)
+            if isinstance(root_node, SVGGroup) and not root_node.children:
                 QMessageBox.information(self, "Import SVG", "No vector objects found in SVG.")
                 return
-            # Determine canvas size from object bounding boxes
-            from ..vector.geometry import BBox
-            all_bb = BBox.empty()
-            for obj in objects:
-                all_bb = all_bb.union(obj.bbox())
-            w = max(int(all_bb.max_pt.x + 20), 200)
-            h = max(int(all_bb.max_pt.y + 20), 200)
+
+            # Helper to compute bbox of the entire tree
+            def _compute_bbox(node) -> BBox:
+                bb = BBox.empty()
+                if isinstance(node, SVGLeaf):
+                    bb = node.object.bbox()
+                elif isinstance(node, SVGGroup):
+                    for child in node.children:
+                        bb = bb.union(_compute_bbox(child))
+                return bb
+
+            all_bb = _compute_bbox(root_node)
+
+            # If this is a new document, determine dimensions from SVG
             if self._doc is None:
+                w = max(int(all_bb.max_pt.x + 20), 200)
+                h = max(int(all_bb.max_pt.y + 20), 200)
                 self._doc = Document(w, h, name=Path(path).stem)
                 self._open_docs.append((self._doc, path))
                 self._file_tabs.add_tab(Path(path).name, tooltip=path)
-            # Create a vector layer and add imported objects
-            layer = self._doc.add_vector_layer(name=Path(path).stem)
-            vl = layer._vector_data
-            for obj in objects:
-                vl.add(obj)
-            # Rasterize to pixels
-            from ..vector.rasterizer import VectorRasterizer
-            rasterizer = VectorRasterizer()
-            pixels = rasterizer.rasterize_layer(vl, layer.width, layer.height)
-            layer._pixels = pixels
+            
+            # --- Transform logic: Fit to canvas and Center ---
+            doc_w, doc_h = self._doc.width, self._doc.height
+            content_w, content_h = all_bb.width, all_bb.height
+            
+            scale = 1.0
+            if content_w > doc_w or content_h > doc_h:
+                scale_w = doc_w / content_w if content_w > 0 else 1.0
+                scale_h = doc_h / content_h if content_h > 0 else 1.0
+                scale = min(scale_w, scale_h) * 0.9
+
+            c_center = all_bb.center
+            doc_center = Vec2(doc_w / 2, doc_h / 2)
+            
+            xf = AffineTransform.translation(-c_center.x, -c_center.y) \
+                .concat(AffineTransform.scaling(scale)) \
+                .concat(AffineTransform.translation(doc_center.x, doc_center.y))
+
+            # Helper to apply transform to all leaves
+            def _apply_transform(node, transform: AffineTransform):
+                if isinstance(node, SVGLeaf):
+                    node.object.transform = transform.concat(node.object.transform)
+                elif isinstance(node, SVGGroup):
+                    for child in node.children:
+                        _apply_transform(child, transform)
+
+            _apply_transform(root_node, xf)
+
+            # Recursive helper to create layers
+            def _create_layers(node, parent_id: str | None = None) -> None:
+                if isinstance(node, SVGGroup):
+                    # For the root node (if it has name 'svg' or similar), usually we create a group
+                    # unless it's just a container. Let's act nicely and treat it as a group.
+                    # Exception: if it's the top-level SVG and we want to avoid double nesting?
+                    # The user prompt implies "colors as group", preserving structure.
+                    # So we create a group layer.
+                    
+                    # Ensure meaningful name
+                    name = node.name if node.name and node.name != "svg" else "Group"
+                    
+                    # Don't create a group for the top-level if we are just importing into existing?
+                    # Actually, better to contain the import in a group if it has multiple children.
+                    # But root_node IS the top level.
+                    
+                    layer = self._doc.add_group(name=name)
+                    if parent_id:
+                        self._doc.layers.reparent([layer.id], parent_id)
+                    
+                    for child in node.children:
+                        _create_layers(child, layer.id)
+                        
+                elif isinstance(node, SVGLeaf):
+                    layer = self._doc.add_vector_layer(name=node.name)
+                    layer._vector_data.add(node.object)
+                    if parent_id:
+                        self._doc.layers.reparent([layer.id], parent_id)
+                    rasterize_vector_layer_tight(self._doc, layer=layer, force=True)
+
+            # Optimisation: Pause panel updates during bulk creation
+            # (although add_group triggers snapshots... might be slow for big files.
+            # ideally we'd suspend history/snapshots, but that's out of scope).
+            
+            # Start creation
+            # If root has multiple children, pass root. If root is just a wrapper, maybe pass its children?
+            # Standard SVG parsing returns a root group corresponding to <svg>.
+            # If we pass root, we get one top-level group "svg" containing everything.
+            # This is cleaner than dumping 100 layers at top level.
+            _create_layers(root_node, parent_id=None)
+
             self._refresh()
             self._canvas.zoom_to_fit()
-            self._status.showMessage(f"Imported {len(objects)} objects from SVG", 3000)
+            self._status.showMessage("Imported SVG successfully", 3000)
+
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             QMessageBox.warning(self, "Import SVG Error", str(exc))
 
     def _on_export_svg(self) -> None:
@@ -789,6 +873,7 @@ class MainWindow(QMainWindow):
         if self._doc:
             self._doc.layers.active_index = stack_index
             self._update_transform_box()
+            self._transform_panel.refresh(self._doc)
 
     def _on_move_auto_select(self, stack_index: int) -> None:
         """Called by MoveTool when it auto-selects a different layer."""
@@ -796,6 +881,7 @@ class MainWindow(QMainWindow):
             return
         # Sync the layers panel highlight and transform box
         self._layers_panel.refresh(self._doc)
+        self._transform_panel.refresh(self._doc)
         self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:

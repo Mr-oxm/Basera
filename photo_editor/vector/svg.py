@@ -21,7 +21,9 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
 from typing import Sequence
+
 
 from .geometry import Vec2, AffineTransform
 from .path import (
@@ -38,6 +40,27 @@ from .shapes import RectangleShape, EllipseShape
 __all__ = ["export_svg", "import_svg", "path_to_svg_d", "svg_d_to_path"]
 
 _SVG_NS = "http://www.w3.org/2000/svg"
+
+
+# ---------------------------------------------------------------------------
+#  Hierarchical Import Types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SVGNode:
+    """Base class for SVG import hierarchy."""
+    name: str = "Node"
+    transform: AffineTransform = field(default_factory=AffineTransform.identity)
+
+@dataclass
+class SVGGroup(SVGNode):
+    """Represents a container (group or layer)."""
+    children: list[SVGNode] = field(default_factory=list)
+
+@dataclass
+class SVGLeaf(SVGNode):
+    """Represents a single vector object."""
+    object: VectorObject = field(default_factory=VectorObject)
 
 
 # ---------------------------------------------------------------------------
@@ -372,66 +395,95 @@ def _style_to_svg_attrs(style: VectorStyle) -> str:
 #  SVG import
 # ---------------------------------------------------------------------------
 
-def import_svg(filepath: str) -> list[VectorObject]:
-    """Import vector objects from an SVG file."""
+def import_svg(filepath: str) -> SVGNode:
+    """Import an SVG file into a hierarchical node structure.
+    
+    Returns a root ``SVGGroup`` containing the parsed objects and groups.
+    Transforms are baked into the leaf objects' geometry transforms, but
+    groups are preserved for organizational structure (Layers).
+    """
     tree = ET.parse(filepath)
     root = tree.getroot()
-    ns = {"svg": _SVG_NS}
-    objects: list[VectorObject] = []
-
-    for elem in root.iter():
-        tag = _strip_ns(elem.tag)
-        if tag == "path":
-            obj = _parse_path_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "rect":
-            obj = _parse_rect_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "circle":
-            obj = _parse_circle_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "ellipse":
-            obj = _parse_ellipse_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "polygon":
-            obj = _parse_polygon_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "polyline":
-            obj = _parse_polyline_element(elem)
-            if obj:
-                objects.append(obj)
-
-    return objects
+    return _import_element_recursive(root, AffineTransform.identity())
 
 
-def import_svg_string(svg_text: str) -> list[VectorObject]:
+def import_svg_string(svg_text: str) -> SVGNode:
     """Import from SVG string."""
     root = ET.fromstring(svg_text)
-    objects: list[VectorObject] = []
-    for elem in root.iter():
-        tag = _strip_ns(elem.tag)
-        if tag == "path":
-            obj = _parse_path_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "rect":
-            obj = _parse_rect_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "circle":
-            obj = _parse_circle_element(elem)
-            if obj:
-                objects.append(obj)
-        elif tag == "ellipse":
-            obj = _parse_ellipse_element(elem)
-            if obj:
-                objects.append(obj)
-    return objects
+    return _import_element_recursive(root, AffineTransform.identity())
+
+
+def _import_element_recursive(elem: ET.Element, parent_xf: AffineTransform) -> SVGNode:
+    """Recursively parse an SVG element and its children."""
+    tag = _strip_ns(elem.tag)
+    
+    # Parse element-level transform
+    # Note: SVG transform attribute applies to the element and its children.
+    # We bake this into the accumulated transform passed down.
+    local_xf = _parse_transform(elem.get("transform", ""))
+    current_xf = parent_xf.concat(local_xf)
+    
+    # Identify element ID/Name
+    name = elem.get("id", tag)
+
+    # 1. Container elements
+    if tag in ("g", "svg", "a", "defs", "symbol"): 
+        # Note: defs/symbol shouldn't render directly but for simplicity 
+        # we parse them as groups (though usually they are referenced).
+        # Standard SVG readers usually hide defs. 
+        # For now, treat 'g' and 'svg' as groups. 'defs' we might ideally skip 
+        # unless referenced, but let's just parse 'g' and 'svg' as visible groups.
+        if tag in ("defs", "symbol"):
+            # Skip non-rendering definitions for now (simple parser)
+            return SVGGroup(name=name + " (Defs)")
+            
+        group = SVGGroup(name=name)
+        # Recurse
+        for child in elem:
+            # We don't assume child inherits formatting from parent in this simple parser
+            # (CSS inheritance is complex), but we DO inherit transform via current_xf.
+            node = _import_element_recursive(child, current_xf)
+            # Only add nodes that contain content
+            if isinstance(node, SVGGroup) and not node.children:
+                continue
+            if isinstance(node, SVGLeaf) and node.object.effective_path().is_empty and not node.object.shape:
+                continue
+            group.children.append(node)
+        return group
+
+    # 2. Graphic elements
+    obj: VectorObject | None = None
+    if tag == "path":
+        obj = _parse_path_element(elem)
+    elif tag == "rect":
+        obj = _parse_rect_element(elem)
+    elif tag == "circle":
+        obj = _parse_circle_element(elem)
+    elif tag == "ellipse":
+        obj = _parse_ellipse_element(elem)
+    elif tag == "polygon":
+        obj = _parse_polygon_element(elem)
+    elif tag == "polyline":
+        obj = _parse_polyline_element(elem)
+        
+    if obj:
+        # The object parser grabbed the local transform already? 
+        # Let's check _parse_path_element etc below.
+        # They do: xf = _parse_transform(elem.get("transform", ""))
+        # We need to Combine parent_xf with the object's local transform.
+        # The _parse_* functions return an object with 'transform' set to local only.
+        # So we overwrite/combine it here.
+        
+        # Actually, let's check _parse_path_element implementation:
+        # returns VectorObject(..., transform=xf) 
+        # So obj.transform is currently just the element's local transform.
+        # We need to apply parent_xf to it.
+        
+        obj.transform = parent_xf.concat(obj.transform)
+        return SVGLeaf(name=obj.name, object=obj)
+
+    # Fallback for unknown/empty
+    return SVGGroup(name=f"Empty ({tag})")
 
 
 # ---------------------------------------------------------------------------
@@ -649,8 +701,6 @@ def _parse_points(s: str) -> list[Vec2]:
     """Parse SVG points attribute (space/comma-separated x,y pairs)."""
     nums = [float(v) for v in s.replace(",", " ").split() if v]
     points: list[Vec2] = []
-    for i in range(0, len(nums) - 1, 2):
-        points.append(Vec2(nums[i], nums[i + 1]))
     return points
 
 
@@ -659,3 +709,6 @@ def _strip_ns(tag: str) -> str:
     if "}" in tag:
         return tag.split("}", 1)[1]
     return tag
+
+
+

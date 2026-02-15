@@ -1434,8 +1434,10 @@ class LayersPanel(QWidget):
                 for child in reversed(children_of[lid]):
                     result.append((child, indent))
                     # Recurse: show mask/adj children of group's raster children
+                    child_is_group = child.layer_type == LayerType.GROUP
+                    child_collapsed = child_is_group and child.id in collapsed
                     _emit_children(child.id, indent + 1, result,
-                                   is_group=False, group_collapsed=False)
+                                   is_group=child_is_group, group_collapsed=child_collapsed)
 
         result: list[tuple] = []
         for layer in reversed(layers):
