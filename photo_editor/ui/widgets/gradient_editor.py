@@ -385,6 +385,12 @@ class GradientEditor(QWidget):
     def _emit_gradient(self) -> None:
         self.gradient_changed.emit(self.gradient())
 
+    def set_gradient_type(self, type_name: str) -> None:
+        """Set gradient type by name (Linear, Radial, Conical, Diamond)."""
+        idx = self._type_combo.findText(type_name)
+        if idx >= 0:
+            self._type_combo.setCurrentIndex(idx)
+
     def _reverse(self) -> None:
         stops = self._bar.stops
         reversed_stops = [

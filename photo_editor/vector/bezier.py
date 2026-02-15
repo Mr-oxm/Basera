@@ -24,10 +24,98 @@ from typing import Sequence
 
 from .geometry import Vec2, BBox
 
-__all__ = ["CubicBezier", "QuadraticBezier"]
+__all__ = ["Curve", "LineSegment", "CubicBezier", "QuadraticBezier"]
 
 # Flatness threshold for adaptive subdivision (in document units squared)
 _FLATNESS_SQ = 0.25  # ≈ 0.5 px
+
+
+# ---------------------------------------------------------------------------
+#  Curve Protocol
+# ---------------------------------------------------------------------------
+
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class Curve(Protocol):
+    """Protocol for parametric curves C(t) where t ∈ [0, 1]."""
+
+    def point_at(self, t: float) -> Vec2: ...
+    
+    def tangent_at(self, t: float) -> Vec2: ...
+    
+    def normal_at(self, t: float) -> Vec2: ...
+    
+    def bbox(self) -> BBox: ...
+    
+    def length(self) -> float: ...
+    
+    def split_at(self, t: float) -> tuple[Curve, Curve]: ...
+    
+    def reversed(self) -> Curve: ...
+    
+    def transformed(self, xf) -> Curve: ...
+    
+    def nearest_point(self, target: Vec2) -> tuple[float, Vec2]: ...
+
+    def flatten(self, tolerance: float = 0.5) -> list[Vec2]: ...
+
+
+# ---------------------------------------------------------------------------
+#  Line Segment
+# ---------------------------------------------------------------------------
+
+class LineSegment:
+    """Linear segment P0→P1."""
+    
+    __slots__ = ("p0", "p1")
+
+    def __init__(self, p0: Vec2, p1: Vec2) -> None:
+        self.p0 = p0
+        self.p1 = p1
+
+    def point_at(self, t: float) -> Vec2:
+        return self.p0.lerp(self.p1, t)
+
+    def tangent_at(self, t: float) -> Vec2:
+        return self.p1 - self.p0
+
+    def normal_at(self, t: float) -> Vec2:
+        return (self.p1 - self.p0).perpendicular().normalized()
+
+    def bbox(self) -> BBox:
+        return BBox.from_points([self.p0, self.p1])
+
+    def length(self) -> float:
+        return self.p0.distance_to(self.p1)
+    
+    # Alias for arc_length to match protocol if needed, though protocol says length
+    def arc_length(self, tolerance: float = 0.5) -> float:
+        return self.length()
+
+    def split_at(self, t: float) -> tuple[LineSegment, LineSegment]:
+        mid = self.point_at(t)
+        return (LineSegment(self.p0, mid), LineSegment(mid, self.p1))
+
+    def reversed(self) -> LineSegment:
+        return LineSegment(self.p1, self.p0)
+
+    def transformed(self, xf) -> LineSegment:
+        return LineSegment(xf.apply(self.p0), xf.apply(self.p1))
+
+    def nearest_point(self, target: Vec2) -> tuple[float, Vec2]:
+        ab = self.p1 - self.p0
+        d2 = ab.length_sq()
+        if d2 == 0:
+            return 0.0, self.p0
+        t = max(0.0, min(1.0, (target - self.p0).dot(ab) / d2))
+        return t, self.p0 + ab * t
+
+    def flatten(self, tolerance: float = 0.5) -> list[Vec2]:
+        return [self.p0, self.p1]
+
+    def __repr__(self) -> str:
+        return f"LineSegment({self.p0}, {self.p1})"
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +242,12 @@ class CubicBezier:
         )
 
     # ---- Arc length ---------------------------------------------------------
+
+    # ---- Arc length ---------------------------------------------------------
+
+    def length(self) -> float:
+        """Approximate arc length via adaptive subdivision."""
+        return self._arc_len_recursive(0.25, 0) # Default tolerance squared
 
     def arc_length(self, tolerance: float = 0.5) -> float:
         """Approximate arc length via adaptive subdivision."""
@@ -436,6 +530,28 @@ class QuadraticBezier:
 
     def flatten(self, tolerance: float = 0.5) -> list[Vec2]:
         return self.to_cubic().flatten(tolerance)
+
+    def normal_at(self, t: float) -> Vec2:
+        return self.tangent_at(t).perpendicular().normalized()
+
+    def length(self) -> float:
+        return self.to_cubic().length()
+    
+    def arc_length(self, tolerance: float = 0.5) -> float:
+        return self.to_cubic().arc_length(tolerance)
+
+    def reversed(self) -> QuadraticBezier:
+        return QuadraticBezier(self.p2, self.p1, self.p0)
+
+    def transformed(self, xf) -> QuadraticBezier:
+        return QuadraticBezier(
+            xf.apply(self.p0),
+            xf.apply(self.p1),
+            xf.apply(self.p2),
+        )
+
+    def nearest_point(self, target: Vec2) -> tuple[float, Vec2]:
+        return self.to_cubic().nearest_point(target)
 
     def __repr__(self) -> str:
         return f"QuadraticBezier({self.p0}, {self.p1}, {self.p2})"

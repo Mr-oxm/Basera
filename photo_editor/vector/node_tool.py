@@ -392,28 +392,14 @@ class NodeTool(Tool):
                 if start is None:
                     continue
 
-                for seg_i, seg in enumerate(sp.segments):
-                    if seg.seg_type == SegmentType.LINE:
-                        d = _point_line_distance(local_pt, start, seg.end)
-                        if d < best_dist:
-                            best_dist = d
-                            best_seg = seg_i
-                            total = start.distance_to(seg.end)
-                            if total > 1e-9:
-                                best_t = max(0.1, min(0.9, start.distance_to(local_pt) / total))
-                        start = seg.end
-                    elif seg.seg_type == SegmentType.CUBIC:
-                        from ..vector.bezier import CubicBezier
-                        bez = CubicBezier(start, seg.cp1, seg.cp2, seg.end)
-                        t, nearest = bez.nearest_point(local_pt)
-                        d = local_pt.distance_to(nearest)
-                        if d < best_dist:
-                            best_dist = d
-                            best_seg = seg_i
-                            best_t = max(0.05, min(0.95, t))
-                        start = seg.end
-                    elif seg.seg_type == SegmentType.CLOSE:
-                        start = sp.origin
+                for seg_i, curve in enumerate(sp.iter_curves()):
+                    t, nearest = curve.nearest_point(local_pt)
+                    d = local_pt.distance_to(nearest)
+                    if d < best_dist:
+                        best_dist = d
+                        best_seg = seg_i
+                        # Clamp t to avoid trivial splits at endpoints
+                        best_t = max(0.05, min(0.95, t))
 
                 if best_seg >= 0 and best_dist < self.stroke_tolerance * 3:
                     doc.save_snapshot("Node: insert")

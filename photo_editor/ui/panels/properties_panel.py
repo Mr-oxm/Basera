@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 
 from ..widgets.color_dropdown import ColorDropdown
 from ..widgets.gradient_editor import GradientEditor
+from ...core.color import Color, ColorFill, LinearGradient, RadialGradient
+from ...core.color_engine import ConicalGradient, DiamondGradient
+from ...vector.style import FillPaint, SolidPaint, GradientPaint, GradientType, GradientStop as VecGradientStop
 
 
 # ============================================================================
@@ -1341,20 +1344,22 @@ class VectorPropertiesBar(QWidget):
         lbl_fill = QLabel("Fill")
         lbl_fill.setStyleSheet(_LABEL)
         layout.addWidget(lbl_fill)
-        self._fill_btn = ColorDropdown(show_gradient=False, parent=self)
+        self._fill_btn = ColorDropdown(show_gradient=True, parent=self)
         self._fill_btn.setFixedSize(24, 24)
         self._fill_btn.color_changed.connect(self._on_fill_changed)
         self._fill_btn.color_committed.connect(self._on_fill_changed)
+        self._fill_btn.gradient_changed.connect(self._on_fill_gradient_changed)
         layout.addWidget(self._fill_btn)
 
         # ---- Stroke colour ----
         lbl_stroke = QLabel("Stroke")
         lbl_stroke.setStyleSheet(_LABEL)
         layout.addWidget(lbl_stroke)
-        self._stroke_btn = ColorDropdown(show_gradient=False, parent=self)
+        self._stroke_btn = ColorDropdown(show_gradient=True, parent=self)
         self._stroke_btn.setFixedSize(24, 24)
         self._stroke_btn.color_changed.connect(self._on_stroke_changed)
         self._stroke_btn.color_committed.connect(self._on_stroke_changed)
+        self._stroke_btn.gradient_changed.connect(self._on_stroke_gradient_changed)
         layout.addWidget(self._stroke_btn)
 
         # ---- Stroke width ----
@@ -1537,10 +1542,16 @@ class VectorPropertiesBar(QWidget):
     def set_fill_color(self, r: float, g: float, b: float, a: float) -> None:
         from ...core.color import Color
         self._fill_btn.set_color(Color(r, g, b, a))
+    
+    def set_fill_paint(self, paint: FillPaint) -> None:
+        self._fill_btn.set_paint(paint)
 
     def set_stroke_color(self, r: float, g: float, b: float, a: float) -> None:
         from ...core.color import Color
         self._stroke_btn.set_color(Color(r, g, b, a))
+
+    def set_stroke_paint(self, paint: FillPaint) -> None:
+        self._stroke_btn.set_paint(paint)
 
     def set_stroke_width(self, val: float) -> None:
         self._stroke_w.blockSignals(True)
@@ -1553,10 +1564,21 @@ class VectorPropertiesBar(QWidget):
         """Populate widget values from the active vector tool."""
         self.set_mode(mode)
         if mode in ("pen", "shape", "node"):
-            fc = getattr(tool, "fill_color", (0.7, 0.7, 0.9, 1.0))
-            self.set_fill_color(*fc)
-            sc = getattr(tool, "stroke_color", (0.0, 0.0, 0.0, 1.0))
-            self.set_stroke_color(*sc)
+            # Try full paint first, then fallback to color tuple
+            fp = getattr(tool, "fill_paint", None)
+            if fp:
+                self.set_fill_paint(fp)
+            else:
+                fc = getattr(tool, "fill_color", (0.7, 0.7, 0.9, 1.0))
+                self.set_fill_color(*fc)
+
+            sp = getattr(tool, "stroke_paint", None)
+            if sp:
+                self.set_stroke_paint(sp)
+            else:
+                sc = getattr(tool, "stroke_color", (0.0, 0.0, 0.0, 1.0))
+                self.set_stroke_color(*sc)
+            
             sw = getattr(tool, "stroke_width", 2.0)
             self.set_stroke_width(sw)
         if mode == "shape":
@@ -1603,6 +1625,39 @@ class VectorPropertiesBar(QWidget):
     def _on_stroke_changed(self, color) -> None:
         self.property_changed.emit("stroke_color",
             (color.r, color.g, color.b, color.a))
+
+    def _on_fill_gradient_changed(self, fill_obj: ColorFill) -> None:
+        paint = self._convert_to_vector_paint(fill_obj)
+        self.property_changed.emit("fill_paint", paint)
+        
+    def _on_stroke_gradient_changed(self, fill_obj: ColorFill) -> None:
+        paint = self._convert_to_vector_paint(fill_obj)
+        self.property_changed.emit("stroke_paint", paint)
+
+    def _convert_to_vector_paint(self, fill: ColorFill) -> FillPaint:
+        """Convert core ColorFill to vector GradientPaint."""
+        if isinstance(fill, (LinearGradient, RadialGradient, ConicalGradient, DiamondGradient)):
+            # Determine type
+            gtype = GradientType.LINEAR
+            if isinstance(fill, RadialGradient): gtype = GradientType.RADIAL
+            elif isinstance(fill, ConicalGradient): gtype = GradientType.CONICAL
+            elif isinstance(fill, DiamondGradient): gtype = GradientType.DIAMOND
+            
+            # Convert stops
+            stops = [
+                VecGradientStop(s.position, (s.color.r, s.color.g, s.color.b, s.color.a)) 
+                for s in fill.stops
+            ]
+            
+            # Create GradientPaint (defaulting coords)
+            return GradientPaint(
+                gradient_type=gtype,
+                stops=stops,
+                # Start/End are not fully exposed in the generic editor for vector context yet
+                # We retain defaults or need more logic to retrieve them?
+                # For now, 0,0->1,0 default.
+            )
+        return SolidPaint((0,0,0,1))
 
 
 # ============================================================================

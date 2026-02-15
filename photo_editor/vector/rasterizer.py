@@ -160,7 +160,7 @@ class VectorRasterizer:
             if not fill.visible or fill.opacity <= 0:
                 continue
                 
-            brush = self._create_brush(fill.paint, fill.opacity)
+            brush = self._create_brush(fill.paint, fill.opacity, obj)
             painter.setBrush(brush)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPath(path)
@@ -170,41 +170,65 @@ class VectorRasterizer:
             if not stroke.visible or stroke.opacity <= 0 or stroke.width <= 0:
                 continue
                 
-            pen = self._create_pen(stroke)
+            pen = self._create_pen(stroke, obj)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
             
         painter.restore()
 
-    def _create_brush(self, paint: object, opacity: float) -> QBrush:
+    def _create_brush(
+        self,
+        paint: object,
+        opacity: float,
+        obj: "VectorObject | None" = None,
+    ) -> QBrush:
         if isinstance(paint, SolidPaint):
             c = paint.color
-            # vector color is (r, g, b) float 0..1 usually? Or uint8?
-            # existing code: color = np.array(fill.paint.color, dtype=np.float32)
-            # Assuming float 0..1 tuple
             color = QColor.fromRgbF(c[0], c[1], c[2], opacity)
             return QBrush(color)
             
         elif isinstance(paint, GradientPaint):
-            if paint.gradient_type == GradientType.LINEAR:
-                grad = QLinearGradient(paint.start.to_qpoint(), paint.end.to_qpoint())
+            # Use the path's local bbox for gradient coords so the gradient
+            # always aligns with and covers the path (fixes offset + single-color).
+            bb = obj.local_bbox() if obj else None
+            if bb is not None and not bb.is_empty:
+                if paint.gradient_type == GradientType.LINEAR:
+                    start_pt = bb.min_pt
+                    end_pt = bb.max_pt
+                else:
+                    start_pt = bb.center
+                    end_pt = bb.center
+                    radius = max(bb.width, bb.height) / 2 * 1.5
             else:
-                grad = QRadialGradient(paint.start.to_qpoint(), paint.radius)
+                start_pt = paint.start
+                end_pt = paint.end
+                radius = paint.radius
+            
+            if paint.gradient_type == GradientType.LINEAR:
+                grad = QLinearGradient(start_pt.to_qpoint(), end_pt.to_qpoint())
+            else:
+                grad = QRadialGradient(start_pt.to_qpoint(), radius)
+                grad.setCenter(start_pt.to_qpoint())
+                grad.setFocalPoint(end_pt.to_qpoint())
                 
-            # Sample stops from paint.stops (assuming standard structure)
-            # paint.stops is likely list of (offset, color)
             for stop in paint.stops:
-                offset, color = stop
-                qc = QColor.fromRgbF(color[0], color[1], color[2], opacity)
-                grad.setColorAt(offset, qc)
+                qc = QColor.fromRgbF(
+                    stop.color[0], stop.color[1], stop.color[2],
+                    opacity * stop.color[3],
+                )
+                grad.setColorAt(stop.offset, qc)
                 
             return QBrush(grad)
             
         return QBrush(Qt.BrushStyle.SolidPattern)
 
-    def _create_pen(self, stroke: VectorStroke) -> QPen:
-        brush = self._create_brush(stroke.paint, stroke.opacity)
+    def _create_pen(
+        self,
+        stroke: VectorStroke,
+        obj: "VectorObject | None" = None,
+    ) -> QPen:
+        brush = self._create_brush(stroke.paint, stroke.opacity, obj)
         pen = QPen(brush, stroke.width)
         
         # Cap

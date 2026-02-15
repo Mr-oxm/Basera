@@ -640,11 +640,32 @@ class MainWindow(QMainWindow):
                         _create_layers(child, layer.id)
                         
                 elif isinstance(node, SVGLeaf):
+                    obj = node.object
                     layer = self._doc.add_vector_layer(name=node.name)
-                    layer._vector_data.add(node.object)
+                    layer._vector_data.add(obj)
                     if parent_id:
                         self._doc.layers.reparent([layer.id], parent_id)
+                    # Apply element-level opacity from SVG
+                    layer.opacity = getattr(obj, "opacity", 1.0)
                     rasterize_vector_layer_tight(self._doc, layer=layer, force=True)
+                    # Create filter layer if object has SVG filter (e.g. feGaussianBlur)
+                    svg_filt = getattr(obj, "svg_filter", None)
+                    if svg_filt and svg_filt.get("type") == "gaussian_blur":
+                        from .filter_runner import _filter_name_map
+                        filt_cls = _filter_name_map().get("Gaussian Blur")
+                        if filt_cls is not None:
+                            filt = filt_cls()
+                            std_dev = svg_filt.get("std_deviation", 0.0)
+                            # Map SVG stdDeviation to our radius param (radius ≈ 2*sigma)
+                            radius = max(0.1, std_dev * 2.0)
+                            filt_layer = self._doc.add_layer(
+                                name="Gaussian Blur", layer_type=LayerType.FILTER
+                            )
+                            filt_layer.adjustment = filt
+                            filt_layer.adjustment_params = {"radius": radius}
+                            filt_layer.parent_id = layer.id
+                            layer.children.append(filt_layer.id)
+                            self._doc.layers.reposition_before(filt_layer.id, layer.id)
 
             # Optimisation: Pause panel updates during bulk creation
             # (although add_group triggers snapshots... might be slow for big files.
@@ -1886,9 +1907,13 @@ class MainWindow(QMainWindow):
             self._set_shape_param_a(tool, float(value))
         elif key == "param_b" and tt == ToolType.VECTOR_SHAPE:
             self._set_shape_param_b(tool, float(value))
+        elif key == "fill_paint":
+            tool.fill_paint = value
+        elif key == "stroke_paint":
+            tool.stroke_paint = value
 
         # ---- Also propagate to selected VectorObjects on the active layer ---
-        if key in ("fill_color", "stroke_color", "stroke_width"):
+        if key in ("fill_color", "stroke_color", "stroke_width", "fill_paint", "stroke_paint"):
             self._apply_style_to_selected_objects(key, value)
 
     def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
@@ -1898,7 +1923,7 @@ class MainWindow(QMainWindow):
         if doc is None:
             return
 
-        from ..vector.style import SolidPaint
+        from ..vector.style import SolidPaint, GradientPaint
         from ..vector.rasterizer import rasterize_vector_layer_tight
 
         any_changed = False
@@ -1925,14 +1950,64 @@ class MainWindow(QMainWindow):
                     for stroke in obj.style.strokes:
                         stroke.width = float(value)
                         changed = True
+                elif key == "fill_paint":
+                    paint = value
+                    if isinstance(paint, GradientPaint):
+                        paint = self._gradient_to_object_space(paint, obj)
+                    if obj.style.fills:
+                        obj.style.fills[0].paint = paint
+                    else:
+                        obj.style.add_fill()
+                        obj.style.fills[0].paint = paint
+                    obj.invalidate()
+                    changed = True
+                elif key == "stroke_paint":
+                    paint = value
+                    if isinstance(paint, GradientPaint):
+                        paint = self._gradient_to_object_space(paint, obj)
+                    if obj.style.strokes:
+                        obj.style.strokes[0].paint = paint
+                    else:
+                        obj.style.add_stroke()
+                        obj.style.strokes[0].paint = paint
+                    obj.invalidate()
+                    changed = True
 
             if changed:
                 any_changed = True
-                # Rasterize this specific layer
                 rasterize_vector_layer_tight(doc, layer=layer)
 
         if any_changed:
             self._schedule_render()
+
+    def _gradient_to_object_space(
+        self, paint: "GradientPaint", obj: "VectorObject"
+    ) -> "GradientPaint":
+        """Set gradient start/end to cover the object's bounding box."""
+        from ..vector.style import GradientPaint, GradientType
+        from ..vector.geometry import Vec2
+
+        bb = obj.local_bbox()
+        if bb.is_empty:
+            return paint
+        if paint.gradient_type == GradientType.LINEAR:
+            return GradientPaint(
+                gradient_type=GradientType.LINEAR,
+                stops=paint.stops,
+                start=Vec2(bb.min_pt.x, bb.min_pt.y),
+                end=Vec2(bb.max_pt.x, bb.max_pt.y),
+            )
+        # Radial: center at bbox center, radius to cover
+        cx = (bb.min_pt.x + bb.max_pt.x) / 2
+        cy = (bb.min_pt.y + bb.max_pt.y) / 2
+        r = max(bb.width, bb.height) / 2
+        return GradientPaint(
+            gradient_type=GradientType.RADIAL,
+            stops=paint.stops,
+            start=Vec2(cx, cy),
+            end=Vec2(cx, cy),
+            radius=r,
+        )
 
     def _set_shape_param_a(self, tool, val: float) -> None:
         from ..vector.shape_tool import VectorShapeType

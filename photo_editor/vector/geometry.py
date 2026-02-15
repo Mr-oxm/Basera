@@ -73,6 +73,12 @@ class Vec2:
     def __hash__(self) -> int:
         return hash((self.x, self.y))
 
+    def __copy__(self) -> "Vec2":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "Vec2":
+        return self
+
     def __repr__(self) -> str:
         return f"Vec2({self.x:.6g}, {self.y:.6g})"
 
@@ -275,6 +281,12 @@ class BBox:
     def __hash__(self) -> int:
         return hash((self.min_pt, self.max_pt))
 
+    def __copy__(self) -> "BBox":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "BBox":
+        return self
+
 
 # ---------------------------------------------------------------------------
 # 2D Affine Transform
@@ -372,6 +384,33 @@ class AffineTransform:
     def determinant(self) -> float:
         return self.a * self.d - self.b * self.c
 
+    def max_scale_factor(self) -> float:
+        """Calculate the maximum scaling factor of the transform."""
+        # For M = [[a, b], [c, d]], we want sqrt(max_eigenvalue(M^T M)).
+        # M^T M = [[a^2+c^2, ab+cd], [ab+cd, b^2+d^2]]
+        # Let A = a^2 + c^2, B = b^2 + d^2, C = ab + cd
+        # Tr = A + B
+        # Det = AB - C^2 = (ad - bc)^2
+        # lambda = (Tr + sqrt(Tr^2 - 4*Det)) / 2
+        
+        aa = self.a * self.a
+        bb = self.b * self.b
+        cc = self.c * self.c
+        dd = self.d * self.d
+        
+        trace = aa + bb + cc + dd
+        det = self.a * self.d - self.b * self.c
+        det_sq = det * det
+        
+        # Discriminant of characteristic equation
+        # (Tr)^2 - 4*Det_sq
+        disc = trace * trace - 4 * det_sq
+        if disc < 0:
+            disc = 0  # Should not happen for symmetric matrix
+            
+        lambda_max = (trace + math.sqrt(disc)) * 0.5
+        return math.sqrt(lambda_max)
+
     def inverse(self) -> AffineTransform:
         det = self.determinant()
         if abs(det) < 1e-15:
@@ -424,9 +463,14 @@ class AffineTransform:
         return (self.a, self.b, self.c, self.d, self.tx, self.ty)
 
     def to_qtransform(self) -> "QTransform":
-        """Convert to PySide6 QTransform."""
+        """Convert to PySide6 QTransform.
+
+        Qt uses: x' = m11*x + m21*y + dx, y' = m12*x + m22*y + dy.
+        Our AffineTransform: x' = a*x + b*y + tx, y' = c*x + d*y + ty.
+        So m11=a, m21=b, m12=c, m22=d. QTransform(m11, m12, m21, m22, dx, dy).
+        """
         from PySide6.QtGui import QTransform
-        return QTransform(self.a, self.b, self.c, self.d, self.tx, self.ty)
+        return QTransform(self.a, self.c, self.b, self.d, self.tx, self.ty)
 
     @staticmethod
     def from_tuple(t: tuple[float, ...]) -> AffineTransform:
@@ -434,8 +478,9 @@ class AffineTransform:
 
     @staticmethod
     def from_qtransform(t: "QTransform") -> AffineTransform:
+        """Extract AffineTransform from QTransform (inverse of to_qtransform)."""
         return AffineTransform(
-            t.m11(), t.m12(), t.m21(), t.m22(), t.dx(), t.dy()
+            t.m11(), t.m21(), t.m12(), t.m22(), t.dx(), t.dy()
         )
 
     def __repr__(self) -> str:
@@ -459,3 +504,9 @@ class AffineTransform:
 
     def __hash__(self) -> int:
         return hash((self.a, self.b, self.c, self.d, self.tx, self.ty))
+
+    def __copy__(self) -> "AffineTransform":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "AffineTransform":
+        return self

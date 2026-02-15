@@ -18,7 +18,7 @@ from PySide6.QtGui import QPainterPath, QPainterPathStroker
 from PySide6.QtCore import QPointF, Qt
 
 from .geometry import Vec2, BBox, AffineTransform
-from .bezier import CubicBezier
+from .bezier import CubicBezier, LineSegment, Curve
 
 if TYPE_CHECKING:
     pass
@@ -249,6 +249,27 @@ class SubPath:
             return PathSegment(SegmentType.CUBIC, b.position, cp1, cp2)
         return PathSegment(SegmentType.LINE, b.position)
 
+    def iter_curves(self) -> Iterator[Curve]:
+        """Yield geometric curves for this sub-path."""
+        n = len(self._nodes)
+        if n < 2 and not self.closed:
+            return
+
+        def make_curve(a: PathNode, b: PathNode) -> Curve:
+            has_out = a.out_handle is not None and not a.out_handle.approx_eq(a.position)
+            has_in = b.in_handle is not None and not b.in_handle.approx_eq(b.position)
+            if has_out or has_in:
+                cp1 = a.out_handle if has_out else a.position
+                cp2 = b.in_handle if has_in else b.position
+                return CubicBezier(a.position, cp1, cp2, b.position)
+            return LineSegment(a.position, b.position)
+
+        for i in range(n - 1):
+            yield make_curve(self._nodes[i], self._nodes[i+1])
+
+        if self.closed and n >= 2:
+            yield make_curve(self._nodes[-1], self._nodes[0])
+
     # ---- QPainterPath Integration -------------------------------------------
 
     @property
@@ -296,35 +317,70 @@ class SubPath:
     # ---- Geometry delegated to Qt -------------------------------------------
 
     def bbox(self) -> BBox:
-        r = self.qpath.boundingRect()
-        return BBox(Vec2(r.left(), r.top()), Vec2(r.right(), r.bottom()))
+        if not self._nodes:
+            return BBox.empty()
+        
+        # Use simple point bounds if single point or no curves?
+        # Actually iter_curves yields nothing if < 2 nodes and not closed.
+        if len(self._nodes) == 1:
+            p = self._nodes[0].position
+            return BBox(p, p)
+            
+        box = BBox.empty()
+        # Initialize with first point to avoid empty box issues if needed, 
+        # but iter_curves bbox union should work.
+        # Actually bbox.union(empty) returns other.
+        # Curves cover the path. 
+        # But if we have lone points, they are not curves.
+        # But SubPath usually implies connected.
+        
+        has_curves = False
+        for c in self.iter_curves():
+            if not has_curves:
+                box = c.bbox()
+                has_curves = True
+            else:
+                box = box.union(c.bbox())
+        
+        if not has_curves and self._nodes:
+             # Fallback for single point or degenerate
+             p = self._nodes[0].position
+             return BBox(p, p)
+             
+        return box
 
     def flatten(self, tolerance: float = 0.5) -> list[Vec2]:
-        # tolerance is ignored by QPainterPath.toSubpathPolygons (it uses internal Qt logic)
-        # We could use simplified() but that changes topology. 
-        # toSubpathPolygons returns QList<QPolygonF>
-        polys = self.qpath.toSubpathPolygons()
-        if not polys:
-            return []
-        # Return the first polygon (SubPath is one contour)
-        # Note: Qt's flattening might be different than the iterative recursive one.
-        # If strict tolerance is needed this might be an issue, but usually Qt is good.
-        pts = [Vec2.from_qpoint(p) for p in polys[0]]
+        pts: list[Vec2] = []
+        first = True
+        for c in self.iter_curves():
+            sub = c.flatten(tolerance)
+            if not first:
+                # Skip the first point as it duplicates the last point of previous curve
+                sub = sub[1:]
+            pts.extend(sub)
+            first = False
+        
+        if not pts and self._nodes:
+             pts = [n.position for n in self._nodes]
+             
         return pts
 
     def arc_length(self, tolerance: float = 0.5) -> float:
-        return self.qpath.length()
+        return sum(c.length() for c in self.iter_curves())
 
     def hit_test_stroke(self, point: Vec2, tolerance: float = 3.0) -> float | None:
-        stroker = QPainterPathStroker()
-        stroker.setWidth(tolerance * 2)
-        stroker.setCapStyle(Qt.RoundCap)
-        stroke_path = stroker.createStroke(self.qpath)
-        if stroke_path.contains(point.to_qpoint()):
-            # QPainterPath doesn't give distance easily.
-            # Return a dummy small distance if hit.
-            return 0.0
-        return None
+        best_dist = float("inf")
+        hit = False
+        
+        for c in self.iter_curves():
+            t, nearest = c.nearest_point(point)
+            d = nearest.distance_to(point)
+            if d <= tolerance:
+                hit = True
+                if d < best_dist:
+                    best_dist = d
+        
+        return best_dist if hit else None
 
     def contains_point(self, point: Vec2, fill_rule: FillRule = FillRule.NON_ZERO) -> bool:
         # fill_rule ignored for single subpath hit test usually, but we set it anyway
@@ -416,15 +472,15 @@ class VectorPath:
     def bbox(self) -> BBox:
         if self.is_empty:
             return BBox.empty()
-        r = self.qpath.boundingRect()
-        return BBox(Vec2(r.left(), r.top()), Vec2(r.right(), r.bottom()))
+        
+        box = BBox.empty()
+        for sp in self.sub_paths:
+            box = box.union(sp.bbox())
+            
+        return box
 
     def flatten(self, tolerance: float = 0.5) -> list[list[Vec2]]:
-        polys = self.qpath.toSubpathPolygons()
-        result = []
-        for poly in polys:
-            result.append([Vec2.from_qpoint(p) for p in poly])
-        return result
+        return [sp.flatten(tolerance) for sp in self.sub_paths]
 
     def transformed(self, xf: AffineTransform) -> VectorPath:
         new_subs = [sp.transformed(xf) for sp in self.sub_paths]
@@ -440,10 +496,13 @@ class VectorPath:
         return self.qpath.contains(point.to_qpoint())
 
     def hit_test_stroke(self, point: Vec2, tolerance: float = 3.0) -> bool:
-        stroker = QPainterPathStroker()
-        stroker.setWidth(tolerance * 2)
-        stroke_path = stroker.createStroke(self.qpath)
-        return stroke_path.contains(point.to_qpoint())
+        # Check against each subpath
+        for sp in self.sub_paths:
+            for c in sp.iter_curves():
+                t, nearest = c.nearest_point(point)
+                if nearest.distance_to(point) <= tolerance:
+                    return True
+        return False
 
     # ---- Serialization helpers ----------------------------------------------
 

@@ -64,6 +64,10 @@ class VectorObject:
     visible: bool = True
     locked: bool = False
     selected: bool = False
+    # Whole-object opacity (0..1), used when importing from SVG
+    opacity: float = 1.0
+    # SVG filter to apply (e.g. {"type": "gaussian_blur", "std_deviation": 4.13})
+    svg_filter: dict | None = None
 
     # Cache
     _cached_path: VectorPath | None = field(default=None, repr=False, init=False)
@@ -110,10 +114,11 @@ class VectorObject:
         """AABB in layer coordinates, including stroke expansion."""
         p = self.transformed_path()
         bb = p.bbox()
-        # Expand by half the maximum stroke width
+        # Expand by half the maximum stroke width, scaled by the transform
         sw = self.style.max_stroke_width() * 0.5
         if sw > 0:
-            bb = bb.expanded(sw)
+            scale = self.transform.max_scale_factor()
+            bb = bb.expanded(sw * scale)
         return bb
 
     def local_bbox(self) -> BBox:
@@ -216,9 +221,12 @@ class VectorObject:
             "id": self.id,
             "visible": self.visible,
             "locked": self.locked,
+            "opacity": self.opacity,
             "transform": self.transform.to_tuple(),
             "style": self.style.to_dict(),
         }
+        if self.svg_filter is not None:
+            d["svg_filter"] = self.svg_filter
         if self.path is not None:
             d["path"] = self.path.to_dict()
         if self.shape is not None:
@@ -231,10 +239,12 @@ class VectorObject:
             name=d.get("name", "Path"),
             visible=d.get("visible", True),
             locked=d.get("locked", False),
+            opacity=d.get("opacity", 1.0),
             transform=AffineTransform.from_tuple(d.get("transform", (1, 0, 0, 1, 0, 0))),
             style=VectorStyle.from_dict(d.get("style", {})),
         )
         obj.id = d.get("id", obj.id)
+        obj.svg_filter = d.get("svg_filter")
         if "path" in d:
             obj.path = VectorPath.from_dict(d["path"])
         if "shape" in d:

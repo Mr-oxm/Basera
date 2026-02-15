@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
 )
 
-from ...core.color import Color
+from ...core.color import Color, GradientStop
 from ...core.color_engine import ColorManager
+from ...vector.style import FillPaint, SolidPaint, GradientPaint, GradientType
 from .color_sliders import ColorSliders
 from .color_wheel import ColorWheel
 from .gradient_editor import GradientEditor
@@ -197,6 +198,44 @@ class _ColorPopup(QWidget):
         self._sliders.set_color(c)
         if self._wheel:
             self._wheel.set_color(c)
+        self._updating = False
+
+    def set_paint(self, paint: FillPaint) -> None:
+        """Set the active paint (Solid or Gradient)."""
+        self._updating = True
+        
+        if isinstance(paint, SolidPaint):
+            c = Color(*paint.color)
+            self._sliders.set_color(c)
+            if self._wheel:
+                self._wheel.set_color(c)
+            
+            # If we are on Gradient tab, maybe switch to Color or Swatches?
+            # Prefer Color tab if coming from Gradient
+            if self._tabs.currentIndex() == 2:
+                self._tabs.setCurrentIndex(1)
+                
+        elif isinstance(paint, GradientPaint):
+            if self._gradient:
+                # Convert stops
+                core_stops = [
+                    GradientStop(s.offset, Color(*s.color)) 
+                    for s in paint.stops
+                ]
+                self._gradient.set_stops(core_stops)
+                
+                # Set Type
+                t_map = {
+                    GradientType.LINEAR: "Linear",
+                    GradientType.RADIAL: "Radial",
+                    GradientType.CONICAL: "Conical",
+                    GradientType.DIAMOND: "Diamond",
+                }
+                if paint.gradient_type in t_map:
+                    self._gradient.set_gradient_type(t_map[paint.gradient_type])
+                
+                self._tabs.setCurrentIndex(2)
+        
         self._updating = False
 
     def set_active_tab(self, index: int) -> None:
@@ -381,6 +420,19 @@ class ColorDropdown(QWidget):
         self._btn.set_color(c)
         if self._popup and self._popup.isVisible():
             self._popup.set_color(c)
+
+    def set_paint(self, paint: FillPaint) -> None:
+        if isinstance(paint, SolidPaint):
+            self.set_color(Color(*paint.color))
+        elif isinstance(paint, GradientPaint):
+            # Update button to show safe fallback or maybe a gradient icon?
+            # For now, show effective color at 0.5
+            eff = paint.color_at(0.5)
+            self._color = Color(*eff)
+            self._btn.set_color(self._color)
+            
+        self._ensure_popup()
+        self._popup.set_paint(paint)
 
     # ---- Popup management ---------------------------------------------------
 
