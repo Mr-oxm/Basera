@@ -13,6 +13,7 @@ from ..core.enums import LayerType
 from ..core.layer import Layer
 from ..core.layer_stack import LayerStack
 from ..masks.mask_manager import MaskManager
+from ..styles.style_engine import StyleEngine
 
 
 class Compositor:
@@ -151,6 +152,9 @@ class Compositor:
                         if adj is not None:
                             group_img = adj.apply(group_img, adj_layer.adjustment_params)
                     np.clip(group_img, 0, 1, out=group_img)
+                if layer.styles:
+                    group_img = StyleEngine.apply_styles(group_img, layer.styles)
+                    np.clip(group_img, 0, 1, out=group_img)
                 # Apply mask layers attached to the group
                 group_mask = self._get_effective_mask(layer, stack)
                 if group_mask is not None:
@@ -178,6 +182,8 @@ class Compositor:
 
             # Apply child adjustment/filter layers to this layer's pixels
             pixels = layer.pixels
+            if layer.styles:
+                pixels = StyleEngine.apply_styles(pixels, layer.styles)
             blend_pos = layer.position
             if layer.id in adj_children:
                 pixels, pad = self._apply_filters_padded(
@@ -205,7 +211,7 @@ class Compositor:
                     layer.blend_mode, layer.opacity, mask,
                 )
                 if layer.id in needs_placed:
-                    prev_img = self._place(layer, width, height)
+                    prev_img = self._place_pixels(pixels, blend_pos, width, height)
                 else:
                     prev_img = None
 
@@ -249,6 +255,8 @@ class Compositor:
             mask = self._get_effective_mask(layer, stack)
             # Apply child adj/filter layers scoped to this layer
             pixels = layer.pixels
+            if layer.styles:
+                pixels = StyleEngine.apply_styles(pixels, layer.styles)
             blend_pos = layer.position
             if layer.id in adj_children:
                 pixels, pad = self._apply_filters_padded(
@@ -300,6 +308,8 @@ class Compositor:
             pixels = layer.pixels
         if pixels is None or pixels.size == 0:
             return None
+        if layer.styles:
+            pixels = StyleEngine.apply_styles(pixels, layer.styles)
         if layer.id in adj_children:
             pixels, _pad = self._apply_filters_padded(
                 pixels, adj_children[layer.id],
