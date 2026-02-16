@@ -1,63 +1,55 @@
 # Photo Editor
 
-> **v0.2.0-alpha** — Text layers, adjustment layers, layer styles, and major UI improvements. Still experimental—expect bugs.
+> **v0.3.0-alpha** — Vector layers, SVG support, advanced masking, retouching tools, and major UI improvements.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
 > [!WARNING]
-> This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, slow, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
+> This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
 
-<img width="1919" height="992" alt="Screenshot 2026-02-10 211250" src="https://github.com/user-attachments/assets/e960e2ad-8b13-46a6-afc2-e2f562e7426f" />
+### v0.3.0
+<img width="1919" height="992" alt="v0.3.0 Screenshot" src="INSERT_V03_IMAGE_LINK_HERE" />
+
+### v0.2.0
+<img width="1919" height="992" alt="v0.2.0 Screenshot" src="https://github.com/user-attachments/assets/e960e2ad-8b13-46a6-afc2-e2f562e7426f" />
+
+### v0.1.0
+<img width="1919" height="992" alt="v0.1.0 Screenshot" src="INSERT_V01_IMAGE_LINK_HERE" />
 
 
 ---
 
-## What's New in v0.2.0
+## What's New in v0.3.0
 
-### Text Layers
-- **Full text properties support**: font family, size, bold, italic, underline, alignment, color, letter spacing, line height
-- Rich text editing with real-time preview
-- Text layer manipulation and transformation
+### Vector Revolution
+- **Full Vector Support**: SVG import/export and scalable vector layers
+- **Pen Tool**: Create precise paths and shapes using Bezier curves
+- **Node Tool**: Edit paths, manipulate nodes, and adjust curves
+- **Shape Tools**: Rectangle, Ellipse, Polygon and customizable shapes
 
-### Redesigned Color System
-- **Color wheel picker** for intuitive color selection
-- HSV/RGB/Hex input modes
-- Live color preview and history
-- Improved color panel with swatches
+### Advanced Selection & Masking
+- **New Selection Tools**: Lasso, Magic Wand, Rectangle & Ellipse Select
+- **Masking System**: Create masks from selections, paint directly on masks to hide/reveal content
+- **Refined Selection workflow**: Visual indicators and better interaction
 
-### Layers Panel Overhaul
-- **Editable adjustment layers** — non-destructive color grading directly in the layer stack
-- **Filter layers** — apply filters as stackable, editable layers
-- **Layer effects/styles** — Color Overlay, Stroke, Drop Shadow, Glow, and more
-- **Group layers** with proper nested compositing
-- **Lock layers** to prevent accidental edits
-- Drag-and-drop layer reordering
+### Retouching Power
+- **Healing Brush**: Remove blemishes and unwanted objects seamlessly
+- **Clone Stamp**: Duplicate parts of an image with precision
 
-### Real-Time Previews
-- **Blending modes** — hover to preview before applying
-- **Brush and Eraser** — see stroke preview as you paint
-- **Layer styles** — live preview of effects as you adjust parameters
+### Enhanced UI & Panels
+- **Transform Panel**: Precise numerical control over position, size, and rotation
+- **Rulers & Guides**: Drag guides from rulers for precise alignment
+- **Improved Workspace**: Better panel organization and visual feedback
 
-### Multi-Project Support
-- Open and switch between **multiple documents** in the same session
-- **Projects bar** for quick navigation between open files
-- Per-project undo/redo stacks
-
-### UI Improvements
-- **Properties bar** (formerly Properties panel) — streamlined, context-aware controls
-- **Improved toolbar** with tool grouping and new icons
-- **Enhanced color panel** with color wheel
-- Better spacing, alignment, and visual hierarchy across all panels
-
-### Working Tools
-- **Gradient tool** with real-time manipulation and live preview
-- **Eyedropper tool** now fully functional
+### Previous v0.2.0 Highlights
+- **Text Layers**: Rich text editing with real-time preview
+- **Redesigned Color System**: Color wheel, HSV/RGB/Hex modes
+- **Layers Panel Overhaul**: Group layers, adjustment layers, layer effects
+- **Multi-Project Support**: Tabs for multiple open documents
 
 ### Still Not Working
-- Healing Brush and Clone Stamp (source point selection broken)
-- Shape tool (drawing primitives not implemented)
 - Crop tool (selection → crop pipeline incomplete)
-- Advanced selection tools (Lasso, Magic Wand, etc.) — only Move tool is functional
+- Brush engine pressure sensitivity (partial support)
 
 ---
 
@@ -84,6 +76,7 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 |---|---|
 | `core/` | Data models — Layer, Document, Selection, History, Canvas state, enums |
 | `engine/` | Render engine, pipeline orchestrator, tile cache, compositor |
+| `vector/` | Vector engine & tools (SVG, shapes, paths, pen/node tools) |
 | `blending/` | 28 blend modes + extensible registry + engine |
 | `effects/` | Effect base class and pipeline |
 | `adjustments/` | 15 non-destructive adjustments (Brightness, Levels, Curves…) |
@@ -100,7 +93,7 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 ## Features
 
 ### Layer System
-- **Raster, Text, Shape, Adjustment, Group, Smart Object** (architecture-ready)
+- **Raster, Vector, Text, Shape, Adjustment, Group, Smart Object** (architecture-ready)
 - **Text layers** with full typography controls (font, bold, italic, alignment, spacing, color)
 - Opacity, visibility, locking, reordering, clipping masks
 - Layer masks with feather, grow, shrink, refine
@@ -138,7 +131,7 @@ Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturatio
 - Opening an image creates an "Open Image" base state — undo never goes back to a blank canvas
 
 ### Drawing Tools (14)
-Brush · Eraser · Clone Stamp · Healing Brush · **Gradient** · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · **Text** · Shape · **Move** (with integrated Transform) · **Eyedropper**
+Brush · Eraser · Clone Stamp · Healing Brush · **Gradient** · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · **Text** · **Pen** · **Node** · Shape · **Move** (with integrated Transform) · **Eyedropper**
 
 ### Layer Styles (10)
 Drop Shadow · Inner Shadow · Outer Glow · Inner Glow · Bevel & Emboss · Satin · **Color Overlay** · Gradient Overlay · Pattern Overlay · **Stroke**
@@ -159,10 +152,10 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ### UI
 - Professional dark theme
-- Dockable panels (Layers, History, Adjustments, **Properties Bar**, Color)
+- Dockable panels (Layers, History, Adjustments, **Properties Bar**, Color, **Transform**)
 - **Projects bar** for multi-document navigation
 - Full menu bar with keyboard shortcuts
-- Zoomable canvas with pan (middle-click) and scroll-wheel zoom
+- Zoomable canvas with pan (middle-click), scroll-wheel zoom, and **rulers/guides**
 - Transparency checkerboard
 - Status bar with cursor position, zoom level, document info
 - Drag & drop image loading
@@ -280,6 +273,12 @@ photo_editor/
 │   ├── render_engine.py
 │   ├── render_pipeline.py
 │   └── tile_cache.py
+├── vector/                  # Vector engine & tools
+│   ├── svg.py               # SVG import/export
+│   ├── shapes.py            # Shape primitives
+│   ├── path.py              # Bezier path logic
+│   ├── pen_tool.py          # Pen tool implementation
+│   └── node_tool.py         # Node editing tool
 ├── blending/                # 28 blend modes + engine
 │   ├── blend_modes.py       # Registry
 │   ├── blending_engine.py   # Compositor
@@ -297,7 +296,13 @@ photo_editor/
 │   ├── distort/
 │   ├── stylize/
 │   └── render/
-├── tools/                   # Interactive tools (Move, Brush, Gradient, Eyedropper, Text)
+├── tools/                   # Interactive tools
+│   ├── brush.py
+│   ├── clone_stamp.py
+│   ├── healing_brush.py
+│   ├── selection_tools.py
+│   ├── shape_tool.py
+│   └── text_tool.py
 ├── styles/                  # 10 layer styles + engine
 ├── effects/                 # Effect pipeline
 ├── masks/                   # Mask manager & operations
@@ -315,7 +320,10 @@ photo_editor/
 │   │   ├── adjustments_panel.py
 │   │   ├── properties_bar.py
 │   │   ├── color_panel.py
+│   │   ├── transform_panel.py
 │   │   └── projects_bar.py
+│   ├── widgets/
+│   │   └── rulers.py
 │   └── dialogs/
 │       ├── new_document.py
 │       ├── filter_dialog.py
@@ -359,16 +367,16 @@ This is an early alpha — the following are known problems that need to be addr
 - [x] ~~Deleting layers sometimes leaves stale render artifacts~~ (fixed — full structural undo rebuilds the stack)
 
 ### Masking
-- [ ] Layer masks do not paint or preview correctly in many scenarios
-- [ ] Mask feathering and refinement produce inconsistent results
+- [x] ~~Layer masks do not paint or preview correctly in many scenarios~~ (fixed — full masking support)
+- [x] ~~Mask feathering and refinement produce inconsistent results~~ (fixed)
 - [ ] No quick mask mode for visual mask editing
 
 ### Tools
 - [x] ~~**Move tool** is not working — cannot drag layers on the canvas~~ (fixed — full move/resize/rotate via bounding box)
-- [ ] **Clone Stamp and Healing Brush** are not functional — source point selection broken
-- [ ] **Shape tool** not implemented
+- [x] ~~**Clone Stamp and Healing Brush** are not functional~~ (fixed — fully implemented)
+- [x] ~~**Shape tool** not implemented~~ (fixed — Rectangle, Ellipse, Polygon, etc.)
 - [ ] **Crop tool** incomplete — selection-to-crop pipeline missing
-- [ ] **Selection tools** (Lasso, Magic Wand, etc.) have no visible selection box / marching ants indicator
+- [x] ~~**Selection tools** (Lasso, Magic Wand, etc.) have no visible selection box / marching ants indicator~~ (fixed — new selection engine)
 - [ ] Text tool has limited editing — no in-canvas text reflow
 - [ ] Brush engine lacks pressure sensitivity and dynamics
 - [x] ~~Transform handles are not rendered on the canvas~~ (fixed — bounding box with 8 handles, rotates with content)
@@ -391,7 +399,7 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] PSD file import/export
 - [ ] RAW file support (via rawpy)
 - [ ] Brush engine with texture and dynamics
-- [ ] Vector layer rendering (SVG) (in the works)
+- [x] ~~Vector layer rendering (SVG)~~ (v0.3.0)
 - [ ] Smart Object editing
 - [ ] Content-Aware Fill
 - [ ] Liquify tool
