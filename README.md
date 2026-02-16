@@ -41,6 +41,9 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 - **Rulers & Guides**: Drag guides from rulers for precise alignment
 - **Improved Workspace**: Better panel organization and visual feedback
 
+### Tool Enhancements
+- **Crop Tool**: Now fully functional at both layer and canvas levels
+
 ### Previous v0.2.0 Highlights
 - **Text Layers**: Rich text editing with real-time preview
 - **Redesigned Color System**: Color wheel, HSV/RGB/Hex modes
@@ -48,7 +51,6 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 - **Multi-Project Support**: Tabs for multiple open documents
 
 ### Still Not Working
-- Crop tool (selection → crop pipeline incomplete)
 - Brush engine pressure sensitivity (partial support)
 
 ---
@@ -130,8 +132,8 @@ Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturatio
 - History panel with click-to-jump navigation
 - Opening an image creates an "Open Image" base state — undo never goes back to a blank canvas
 
-### Drawing Tools (14)
-Brush · Eraser · Clone Stamp · Healing Brush · **Gradient** · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · **Text** · **Pen** · **Node** · Shape · **Move** (with integrated Transform) · **Eyedropper**
+### Drawing Tools (15)
+Brush · Eraser · Clone Stamp · Healing Brush · **Gradient** · Paint Bucket · Rectangle Select · Ellipse Select · Lasso · Magic Wand · **Text** · **Pen** · **Node** · Shape · **Move** (with integrated Transform) · **Eyedropper** · **Crop**
 
 ### Layer Styles (10)
 Drop Shadow · Inner Shadow · Outer Glow · Inner Glow · Bevel & Emboss · Satin · **Color Overlay** · Gradient Overlay · Pattern Overlay · **Stroke**
@@ -375,7 +377,7 @@ This is an early alpha — the following are known problems that need to be addr
 - [x] ~~**Move tool** is not working — cannot drag layers on the canvas~~ (fixed — full move/resize/rotate via bounding box)
 - [x] ~~**Clone Stamp and Healing Brush** are not functional~~ (fixed — fully implemented)
 - [x] ~~**Shape tool** not implemented~~ (fixed — Rectangle, Ellipse, Polygon, etc.)
-- [ ] **Crop tool** incomplete — selection-to-crop pipeline missing
+- [x] ~~**Crop tool** incomplete — selection-to-crop pipeline missing~~ (fixed — works on layer and canvas level)
 - [x] ~~**Selection tools** (Lasso, Magic Wand, etc.) have no visible selection box / marching ants indicator~~ (fixed — new selection engine)
 - [ ] Text tool has limited editing — no in-canvas text reflow
 - [ ] Brush engine lacks pressure sensitivity and dynamics
