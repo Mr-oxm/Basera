@@ -8,13 +8,13 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 > This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
 
 ### v0.3.0
-<img width="1919" height="992" alt="v0.3.0 Screenshot" src="INSERT_V03_IMAGE_LINK_HERE" />
+<img width="1919" height="990" alt="Screenshot 2026-02-16 221017" src="https://github.com/user-attachments/assets/ff11c565-47d9-4877-b1bc-538bf4efb923" />
 
 ### v0.2.0
 <img width="1919" height="992" alt="v0.2.0 Screenshot" src="https://github.com/user-attachments/assets/e960e2ad-8b13-46a6-afc2-e2f562e7426f" />
 
 ### v0.1.0
-<img width="1919" height="992" alt="v0.1.0 Screenshot" src="INSERT_V01_IMAGE_LINK_HERE" />
+<img width="1919" height="992" alt="image" src="https://github.com/user-attachments/assets/0b87d5d4-9866-4eff-b81a-6ad657589609" />
 
 
 ---
