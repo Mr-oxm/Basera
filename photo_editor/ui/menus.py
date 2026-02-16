@@ -39,11 +39,14 @@ class EditorMenuBar(QMenuBar):
         m = self.addMenu("&File")
         self._add(m, "new", "&New…")
         self._add(m, "open", "&Open…")
+        self._add(m, "import_svg", "Import &SVG…")
         self._add(m, "place_image", "&Place Image as Layer…")
         m.addSeparator()
         self._add(m, "save", "&Save")
         self._add(m, "save_as", "Save &As…")
         self._add(m, "export", "&Export…")
+        self._add(m, "export_svg", "Export S&VG…")
+        self._add(m, "export_pdf", "Export &PDF…")
         m.addSeparator()
         self._add(m, "quit", "&Quit")
 
@@ -73,6 +76,7 @@ class EditorMenuBar(QMenuBar):
     def _layer_menu(self) -> None:
         m = self.addMenu("&Layer")
         self._add(m, "new_layer", "&New Layer")
+        self._add(m, "new_vector_layer", "New &Vector Layer")
         self._add(m, "new_group", "New &Group")
         self._add(m, "dup_layer", "&Duplicate Layer")
         self._add(m, "del_layer", "De&lete Layer")

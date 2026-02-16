@@ -24,6 +24,9 @@ from ..tools.zoom_tool import ZoomTool
 from ..tools.pan_tool import PanTool
 from ..tools.eyedropper import EyedropperTool
 from ..tools.crop_tool import CropTool
+from ..vector.pen_tool import PenTool
+from ..vector.node_tool import NodeTool
+from ..vector.shape_tool import VectorShapeTool
 
 
 class ToolManager:
@@ -49,6 +52,9 @@ class ToolManager:
             ToolType.PAN: PanTool(),
             ToolType.EYEDROPPER: EyedropperTool(),
             ToolType.CROP: CropTool(),
+            ToolType.PEN: PenTool(),
+            ToolType.NODE: NodeTool(),
+            ToolType.VECTOR_SHAPE: VectorShapeTool(),
         }
         self._active_type = ToolType.BRUSH
 

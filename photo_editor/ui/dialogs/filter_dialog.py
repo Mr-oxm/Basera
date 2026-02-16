@@ -150,7 +150,10 @@ class FilterDialog(QDialog):
 
     def _set(self, key: str, value: object) -> None:
         orig = self._flat.get(key)
-        if isinstance(orig, int) and isinstance(value, (int, float)):
+        # IMPORTANT: check bool BEFORE int because bool is a subclass of int
+        if isinstance(orig, bool):
+            self._flat[key] = bool(value)
+        elif isinstance(orig, int) and isinstance(value, (int, float)):
             self._flat[key] = int(value)
         else:
             self._flat[key] = value

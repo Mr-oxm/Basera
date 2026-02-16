@@ -116,6 +116,9 @@ _CURSORS: dict[ToolType, Qt.CursorShape] = {
     ToolType.PAN: Qt.CursorShape.OpenHandCursor,
     ToolType.EYEDROPPER: Qt.CursorShape.CrossCursor,
     ToolType.CROP: Qt.CursorShape.CrossCursor,
+    ToolType.PEN: Qt.CursorShape.CrossCursor,
+    ToolType.NODE: Qt.CursorShape.ArrowCursor,
+    ToolType.VECTOR_SHAPE: Qt.CursorShape.CrossCursor,
 }
 
 # Cursor shapes for bounding-box handles
@@ -131,6 +134,52 @@ _HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
 }
 
 _HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
+
+# Rotation cursor: a small circular-arrow icon built from scratch
+_ROTATE_CURSOR_CACHE: QCursor | None = None
+
+def _build_rotate_cursor() -> QCursor:
+    """Build a custom rotation cursor (circular arrow)."""
+    global _ROTATE_CURSOR_CACHE
+    if _ROTATE_CURSOR_CACHE is not None:
+        return _ROTATE_CURSOR_CACHE
+    size = 24
+    pm = QPixmap(size, size)
+    pm.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    # Draw a circular arc arrow
+    center = size / 2
+    radius = 8.0
+    # Arc
+    pen = QPen(QColor(0, 0, 0), 2.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    from PySide6.QtCore import QRectF as _QRectF
+    arc_rect = _QRectF(center - radius, center - radius, radius * 2, radius * 2)
+    p.drawArc(arc_rect, 30 * 16, 270 * 16)  # 270 degree arc
+    # White inner arc for contrast
+    pen2 = QPen(QColor(255, 255, 255), 1.2)
+    pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen2)
+    p.drawArc(arc_rect, 30 * 16, 270 * 16)
+    # Arrowhead at the end of the arc
+    import math as _math
+    end_angle = _math.radians(30)
+    ex = center + radius * _math.cos(end_angle)
+    ey = center - radius * _math.sin(end_angle)
+    p.setPen(QPen(QColor(0, 0, 0), 2.5))
+    p.setBrush(QColor(0, 0, 0))
+    from PySide6.QtGui import QPolygonF as _QPolyF
+    arrow = _QPolyF()
+    arrow.append(QPointF(ex, ey))
+    arrow.append(QPointF(ex + 4, ey - 3))
+    arrow.append(QPointF(ex + 1, ey + 4))
+    p.drawPolygon(arrow)
+    p.end()
+    _ROTATE_CURSOR_CACHE = QCursor(pm, size // 2, size // 2)
+    return _ROTATE_CURSOR_CACHE
+
 
 
 class CanvasView(_BASE_CLASS):
@@ -154,6 +203,7 @@ class CanvasView(_BASE_CLASS):
     guide_grabbed = Signal(object)          # Guide
     guide_drag_moved = Signal(object, float)  # Guide, new doc position
     guide_drag_released = Signal(object, float, bool)  # Guide, pos, delete?
+    tool_double_clicked = Signal(int, int)  # doc x, doc y
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -228,6 +278,10 @@ class CanvasView(_BASE_CLASS):
         # Guide dragging on canvas
         self._dragging_canvas_guide = None  # Guide being dragged on canvas
         self._guide_snap_px = 6  # pixel hit-test distance for guides
+
+        # References set by MainWindow for vector overlay drawing
+        self._doc_ref = None          # Document | None
+        self._tool_manager_ref = None  # ToolManager | None
 
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -594,6 +648,10 @@ class CanvasView(_BASE_CLASS):
         if self._guide_lines or self._preview_guide is not None:
             self._draw_guides(p, dr)
 
+        # Vector object overlay (node handles, path outlines)
+        if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
+            self._draw_vector_overlay(p, dr)
+
         p.end()
 
     # ---- Marching ants (selection contour) -----------------------------------
@@ -742,6 +800,18 @@ class CanvasView(_BASE_CLASS):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(-hw, -hh, br.width(), br.height()))
 
+        # Rotation handle: line from top-center upward + circle node
+        rh_offset = 20.0   # screen-space offset above the box
+        rh_x, rh_y = 0, -hh - rh_offset
+        # Connecting line
+        p.setPen(QPen(QColor(0, 150, 255), 1.0))
+        p.drawLine(QPointF(0, -hh), QPointF(rh_x, rh_y))
+        # Rotation circle node
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(0, 150, 255), 1.5))
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(QPointF(rh_x, rh_y), 5.0, 5.0)
+
         # Handle squares
         hs = 7
         handle_pts = [
@@ -775,6 +845,13 @@ class CanvasView(_BASE_CLASS):
             ry = px * math.sin(rad) + py * math.cos(rad)
             px, py = rx, ry
 
+        # Rotation handle node (above top-center)
+        rh_offset = 20.0
+        rh_x, rh_y = 0, -hh - rh_offset
+        if abs(px - rh_x) <= _HANDLE_HIT and abs(py - rh_y) <= _HANDLE_HIT:
+            self.setCursor(QCursor(_build_rotate_cursor()))
+            return
+
         # Hit-test against centered handle positions
         local_handles = [
             ("TL", -hw, -hh), ("T", 0, -hh), ("TR", hw, -hh),
@@ -789,7 +866,8 @@ class CanvasView(_BASE_CLASS):
         if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         else:
-            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            # Outside the box = rotation zone
+            self.setCursor(_build_rotate_cursor())
 
     # ---- Brush cursor drawing -----------------------------------------------
 
@@ -1034,6 +1112,190 @@ class CanvasView(_BASE_CLASS):
                 if abs(pos.x() - wx) <= snap:
                     return g
         return None
+
+    # ---- Vector overlay drawing ---------------------------------------------
+
+    def set_document_ref(self, doc) -> None:
+        """Store a reference to the active Document for overlay drawing."""
+        self._doc_ref = doc
+
+    def set_tool_manager_ref(self, tm) -> None:
+        """Store a reference to the ToolManager for overlay state."""
+        self._tool_manager_ref = tm
+
+    def _draw_vector_overlay(self, p: QPainter, dr: QRectF) -> None:
+        """Draw path outlines, node handles, pen preview, and marquee for vector layers."""
+        doc = self._doc_ref
+        if doc is None or self._doc_w == 0 or self._doc_h == 0:
+            return
+        layer = doc.layers.active_layer
+        if layer is None:
+            return
+        vl = getattr(layer, "_vector_data", None)
+        if vl is None:
+            return
+        try:
+            from ..vector.path import SegmentType, HandleMode
+        except ImportError:
+            return
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        sx = dr.width() / self._doc_w
+        sy = dr.height() / self._doc_h
+
+        def _to_screen(dx: float, dy: float) -> QPointF:
+            return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
+
+        # ---- Colors & pens ----
+        accent = QColor(100, 180, 255)
+        accent_dim = QColor(100, 180, 255, 100)
+        white = QColor(255, 255, 255)
+        black = QColor(0, 0, 0)
+
+        path_pen = QPen(accent, 1.0, Qt.PenStyle.SolidLine)
+        path_pen.setCosmetic(True)
+        path_pen_sel = QPen(accent, 1.5, Qt.PenStyle.SolidLine)
+        path_pen_sel.setCosmetic(True)
+        handle_pen = QPen(accent_dim, 0.8, Qt.PenStyle.SolidLine)
+        handle_pen.setCosmetic(True)
+        preview_pen = QPen(QColor(100, 180, 255, 120), 1.0, Qt.PenStyle.DashLine)
+        preview_pen.setCosmetic(True)
+
+        is_pen_tool = self._current_tool_type == ToolType.PEN
+        is_node_tool = self._current_tool_type == ToolType.NODE
+        show_nodes = self._current_tool_type in (ToolType.PEN, ToolType.NODE)
+
+        for obj in vl.objects:
+            if not obj.visible:
+                continue
+            is_obj_selected = obj.selected
+            path = obj.transformed_path()
+
+            for sp in path.sub_paths:
+                if not sp.nodes:
+                    continue
+
+                # ---- Draw path segments ----
+                pp = QPainterPath()
+                origin = sp.nodes[0].position
+                pp.moveTo(_to_screen(origin.x, origin.y))
+                for seg in sp.segments:
+                    if seg.seg_type == SegmentType.LINE:
+                        pp.lineTo(_to_screen(seg.end.x, seg.end.y))
+                    elif seg.seg_type == SegmentType.CUBIC:
+                        pp.cubicTo(
+                            _to_screen(seg.cp1.x, seg.cp1.y),
+                            _to_screen(seg.cp2.x, seg.cp2.y),
+                            _to_screen(seg.end.x, seg.end.y),
+                        )
+                    elif seg.seg_type == SegmentType.CLOSE:
+                        pp.closeSubpath()
+                p.setPen(path_pen_sel if is_obj_selected else path_pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(pp)
+
+                # ---- Draw nodes and handles ----
+                if show_nodes and (is_obj_selected or is_pen_tool):
+                    for node in sp.nodes:
+                        np_ = _to_screen(node.position.x, node.position.y)
+                        node_sel = getattr(node, "selected", False)
+
+                        # Handle lines + control point circles (only for selected nodes)
+                        if node_sel:
+                            if node.in_handle and not node.in_handle.approx_eq(node.position):
+                                hp = _to_screen(node.in_handle.x, node.in_handle.y)
+                                p.setPen(handle_pen)
+                                p.drawLine(np_, hp)
+                                p.setPen(QPen(accent, 0.8))
+                                p.setBrush(QColor(100, 180, 255, 150))
+                                p.drawEllipse(hp, 3, 3)
+                            if node.out_handle and not node.out_handle.approx_eq(node.position):
+                                hp = _to_screen(node.out_handle.x, node.out_handle.y)
+                                p.setPen(handle_pen)
+                                p.drawLine(np_, hp)
+                                p.setPen(QPen(accent, 0.8))
+                                p.setBrush(QColor(100, 180, 255, 150))
+                                p.drawEllipse(hp, 3, 3)
+
+                        # Anchor point — shape indicates handle mode
+                        p.setPen(QPen(accent, 1.2))
+                        mode = getattr(node, "mode", None)
+                        if node_sel:
+                            p.setBrush(accent)
+                        else:
+                            p.setBrush(white)
+
+                        if mode == HandleMode.SHARP:
+                            # Square for sharp corners
+                            p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
+                        elif mode == HandleMode.SMOOTH:
+                            # Circle for smooth
+                            p.drawEllipse(np_, 3.5, 3.5)
+                        elif mode == HandleMode.SYMMETRIC:
+                            # Diamond for symmetric
+                            diamond = QPainterPath()
+                            diamond.moveTo(np_.x(), np_.y() - 4)
+                            diamond.lineTo(np_.x() + 4, np_.y())
+                            diamond.lineTo(np_.x(), np_.y() + 4)
+                            diamond.lineTo(np_.x() - 4, np_.y())
+                            diamond.closeSubpath()
+                            p.drawPath(diamond)
+                        else:
+                            p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
+
+        # ---- Pen tool: live preview line from last node to cursor ----
+        if is_pen_tool and self._tool_manager_ref is not None:
+            from ..vector.pen_tool import PenTool
+            tool = self._tool_manager_ref.active_tool
+            if isinstance(tool, PenTool) and tool.is_drawing and tool.preview_point:
+                nodes = tool.current_nodes
+                if nodes:
+                    last = nodes[-1]
+                    last_screen = _to_screen(last.position.x, last.position.y)
+                    preview_screen = _to_screen(tool.preview_point.x, tool.preview_point.y)
+                    p.setPen(preview_pen)
+                    if last.out_handle and not last.out_handle.approx_eq(last.position):
+                        # Draw cubic preview from last node's out_handle
+                        cp1 = _to_screen(last.out_handle.x, last.out_handle.y)
+                        preview_pp = QPainterPath()
+                        preview_pp.moveTo(last_screen)
+                        preview_pp.cubicTo(cp1, preview_screen, preview_screen)
+                        p.drawPath(preview_pp)
+                    else:
+                        p.drawLine(last_screen, preview_screen)
+
+                    # Close-path indicator: circle around first node when near
+                    if len(nodes) >= 3:
+                        first = nodes[0]
+                        first_screen = _to_screen(first.position.x, first.position.y)
+                        from ..vector.geometry import Vec2
+                        dist = Vec2(tool.preview_point.x, tool.preview_point.y).distance_to(first.position)
+                        if dist < 8.0:
+                            p.setPen(QPen(QColor(50, 200, 100), 1.5))
+                            p.setBrush(Qt.BrushStyle.NoBrush)
+                            p.drawEllipse(first_screen, 6, 6)
+
+        # ---- Node tool: marquee selection rectangle ----
+        if is_node_tool and self._tool_manager_ref is not None:
+            from ..vector.node_tool import NodeTool
+            tool = self._tool_manager_ref.active_tool
+            if isinstance(tool, NodeTool):
+                mrect = tool.marquee_rect
+                if mrect is not None:
+                    s, e = mrect
+                    ss = _to_screen(s.x, s.y)
+                    se = _to_screen(e.x, e.y)
+                    marquee_pen = QPen(accent, 1.0, Qt.PenStyle.DashLine)
+                    marquee_pen.setCosmetic(True)
+                    p.setPen(marquee_pen)
+                    p.setBrush(QColor(100, 180, 255, 30))
+                    p.drawRect(QRectF(ss, se).normalized())
+
+
+
+        p.restore()
 
     # ---- Text overlay drawing -----------------------------------------------
 
@@ -1359,3 +1621,8 @@ class CanvasView(_BASE_CLASS):
             dx, dy = self._canvas_to_doc(event.position())
             self.tool_released.emit(dx, dy)
             self._drag_rect = None
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            dx, dy = self._canvas_to_doc(event.position())
+            self.tool_double_clicked.emit(dx, dy)

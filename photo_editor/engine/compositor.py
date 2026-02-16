@@ -13,6 +13,7 @@ from ..core.enums import LayerType
 from ..core.layer import Layer
 from ..core.layer_stack import LayerStack
 from ..masks.mask_manager import MaskManager
+from ..styles.style_engine import StyleEngine
 
 
 class Compositor:
@@ -20,6 +21,54 @@ class Compositor:
 
     def __init__(self) -> None:
         self._blending = BlendingEngine()
+
+    @staticmethod
+    def _calc_filter_padding(adj_layers: list[Layer]) -> int:
+        """Return the pixel padding needed for blur filter overflow.
+
+        When a blur filter is applied to a layer, the blurred result
+        extends beyond the original layer boundary.  We need to pad
+        the pixel buffer *before* applying the filter so the blur has
+        room to extend.  The padding is derived from the filter's
+        radius / distance / amount parameter.
+        """
+        pad = 0
+        for adj_layer in adj_layers:
+            if adj_layer.layer_type != LayerType.FILTER:
+                continue
+            params = adj_layer.adjustment_params or {}
+            r = params.get("radius",
+                    params.get("distance",
+                    params.get("amount", 0)))
+            try:
+                pad = max(pad, int(float(r) * 3) + 4)
+            except (TypeError, ValueError):
+                pass
+        return pad
+
+    def _apply_filters_padded(
+        self, pixels: np.ndarray, adj_layers: list[Layer],
+    ) -> tuple[np.ndarray, int]:
+        """Apply adj/filter layers to *pixels*, adding blur padding.
+
+        Returns (result_pixels, padding) where *padding* is the number
+        of pixels added on each side.  The caller must offset the blend
+        position by ``-padding`` on both axes to compensate.
+        """
+        pad = self._calc_filter_padding(adj_layers)
+        if pad > 0:
+            h, w = pixels.shape[:2]
+            padded = np.zeros((h + 2 * pad, w + 2 * pad, 4), dtype=np.float32)
+            padded[pad:pad + h, pad:pad + w] = pixels
+            pixels = padded
+        else:
+            pixels = pixels.copy()
+        for adj_layer in adj_layers:
+            adj = adj_layer.adjustment
+            if adj is not None:
+                pixels = adj.apply(pixels, adj_layer.adjustment_params)
+        np.clip(pixels, 0, 1, out=pixels)
+        return pixels, pad
 
     def _get_effective_mask(self, layer: Layer, stack: LayerStack) -> np.ndarray | None:
         """Compute the combined mask for *layer*.
@@ -103,6 +152,9 @@ class Compositor:
                         if adj is not None:
                             group_img = adj.apply(group_img, adj_layer.adjustment_params)
                     np.clip(group_img, 0, 1, out=group_img)
+                if layer.styles:
+                    group_img = StyleEngine.apply_styles(group_img, layer.styles)
+                    np.clip(group_img, 0, 1, out=group_img)
                 # Apply mask layers attached to the group
                 group_mask = self._get_effective_mask(layer, stack)
                 if group_mask is not None:
@@ -130,16 +182,19 @@ class Compositor:
 
             # Apply child adjustment/filter layers to this layer's pixels
             pixels = layer.pixels
+            if layer.styles:
+                pixels = StyleEngine.apply_styles(pixels, layer.styles)
+            blend_pos = layer.position
             if layer.id in adj_children:
-                pixels = pixels.copy()
-                for adj_layer in adj_children[layer.id]:
-                    adj = adj_layer.adjustment
-                    if adj is not None:
-                        pixels = adj.apply(pixels, adj_layer.adjustment_params)
-                np.clip(pixels, 0, 1, out=pixels)
+                pixels, pad = self._apply_filters_padded(
+                    pixels, adj_children[layer.id],
+                )
+                if pad > 0:
+                    blend_pos = (layer.position[0] - pad,
+                                 layer.position[1] - pad)
 
             if layer.clipping_mask and prev_img is not None:
-                placed = self._place_pixels(pixels, layer.position, width, height)
+                placed = self._place_pixels(pixels, blend_pos, width, height)
                 placed[..., 3:4] *= prev_img[..., 3:4]
                 placed_mask = (
                     self._place_mask_combined(layer, stack, width, height)
@@ -152,11 +207,11 @@ class Compositor:
                 prev_img = placed
             else:
                 self._blending.blend_region_inplace(
-                    canvas, pixels, layer.position,
+                    canvas, pixels, blend_pos,
                     layer.blend_mode, layer.opacity, mask,
                 )
                 if layer.id in needs_placed:
-                    prev_img = self._place(layer, width, height)
+                    prev_img = self._place_pixels(pixels, blend_pos, width, height)
                 else:
                     prev_img = None
 
@@ -200,15 +255,125 @@ class Compositor:
             mask = self._get_effective_mask(layer, stack)
             # Apply child adj/filter layers scoped to this layer
             pixels = layer.pixels
+            if layer.styles:
+                pixels = StyleEngine.apply_styles(pixels, layer.styles)
+            blend_pos = layer.position
             if layer.id in adj_children:
-                pixels = pixels.copy()
-                for adj_layer in adj_children[layer.id]:
-                    adj = adj_layer.adjustment
-                    if adj is not None:
-                        pixels = adj.apply(pixels, adj_layer.adjustment_params)
-                np.clip(pixels, 0, 1, out=pixels)
+                pixels, pad = self._apply_filters_padded(
+                    pixels, adj_children[layer.id],
+                )
+                if pad > 0:
+                    blend_pos = (layer.position[0] - pad,
+                                 layer.position[1] - pad)
             self._blending.blend_region_inplace(
-                canvas, pixels, layer.position,
+                canvas, pixels, blend_pos,
+                layer.blend_mode, layer.opacity, mask,
+            )
+        return canvas
+
+    def _layer_bounds(self, layer: Layer, stack: LayerStack) -> tuple[float, float, float, float] | None:
+        """Return (min_x, min_y, max_x, max_y) for a layer, including nested groups."""
+        if layer.layer_type == LayerType.GROUP:
+            min_x, min_y = float("inf"), float("inf")
+            max_x, max_y = float("-inf"), float("-inf")
+            found = False
+            for child in stack:
+                if child.parent_id != layer.id or not child.visible:
+                    continue
+                if child.layer_type in (LayerType.MASK, LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                cb = self._layer_bounds(child, stack)
+                if cb is None:
+                    continue
+                cx0, cy0, cx1, cy1 = cb
+                min_x = min(min_x, cx0)
+                min_y = min(min_y, cy0)
+                max_x = max(max_x, cx1)
+                max_y = max(max_y, cy1)
+                found = True
+            return (min_x, min_y, max_x, max_y) if found else None
+        try:
+            lx, ly = layer.position
+            lh, lw = layer.pixels.shape[:2]
+            return (float(lx), float(ly), float(lx + lw), float(ly + lh))
+        except (AttributeError, IndexError):
+            return None
+
+    def _get_layer_pixels(self, layer: Layer, stack: LayerStack,
+                          adj_children: dict) -> np.ndarray | None:
+        """Get pixels for a layer; for groups, recursively composite."""
+        if layer.layer_type == LayerType.GROUP:
+            pixels = self.composite_group_tight(layer, stack)
+        else:
+            pixels = layer.pixels
+        if pixels is None or pixels.size == 0:
+            return None
+        if layer.styles:
+            pixels = StyleEngine.apply_styles(pixels, layer.styles)
+        if layer.id in adj_children:
+            pixels, _pad = self._apply_filters_padded(
+                pixels, adj_children[layer.id],
+            )
+        return pixels
+
+    def composite_group_tight(self, group: Layer, stack: LayerStack) -> np.ndarray | None:
+        """Composite a group's children into a tight bounding-box buffer.
+
+        Recursively composites nested groups so a group can contain groups.
+        Returns a float32 RGBA array of shape (H, W, 4), or None if the
+        group has no visible children. Used for group layer thumbnails.
+        """
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        found = False
+        for layer in stack:
+            if layer.parent_id != group.id or not layer.visible:
+                continue
+            if layer.layer_type in (LayerType.MASK, LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            bounds = self._layer_bounds(layer, stack)
+            if bounds is None:
+                continue
+            cx0, cy0, cx1, cy1 = bounds
+            min_x = min(min_x, cx0)
+            min_y = min(min_y, cy0)
+            max_x = max(max_x, cx1)
+            max_y = max(max_y, cy1)
+            found = True
+        if not found:
+            return None
+        bw = max(1, int(max_x - min_x))
+        bh = max(1, int(max_y - min_y))
+
+        canvas = np.zeros((bh, bw, 4), dtype=np.float32)
+        group_child_ids = {l.id for l in stack if l.parent_id == group.id}
+        mask_ids = {mid for l in stack if l.parent_id == group.id for mid in l.mask_layers}
+        adj_children: dict[str, list] = {}
+        adj_child_ids: set[str] = set()
+        for layer in stack:
+            if (layer.parent_id and layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+                    and layer.visible and layer.parent_id in group_child_ids):
+                adj_children.setdefault(layer.parent_id, []).append(layer)
+                adj_child_ids.add(layer.id)
+        for layer in stack:
+            if layer.parent_id != group.id or not layer.visible:
+                continue
+            if layer.id in mask_ids or layer.layer_type == LayerType.MASK:
+                continue
+            if layer.id in adj_child_ids or layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            bounds = self._layer_bounds(layer, stack)
+            if bounds is None:
+                continue
+            cx0, cy0, _, _ = bounds
+            rel_x = int(cx0 - min_x)
+            rel_y = int(cy0 - min_y)
+            mask = self._get_effective_mask(layer, stack)
+            pixels = self._get_layer_pixels(layer, stack, adj_children)
+            if pixels is None or pixels.size == 0:
+                continue
+            self._blending.blend_region_inplace(
+                canvas, pixels, (rel_x, rel_y),
                 layer.blend_mode, layer.opacity, mask,
             )
         return canvas

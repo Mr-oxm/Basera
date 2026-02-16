@@ -64,11 +64,20 @@ _TOOL_GROUPS: list[tuple[str, str, list[tuple[ToolType, str, str]]]] = [
         (ToolType.GRADIENT, "Gradient", "G"),
         (ToolType.PAINT_BUCKET, "Paint Bucket", "K"),
     ]),
-    ("text", "T", [
-        (ToolType.TEXT, "Text", "T"),
+    ("pen", "P", [
+        (ToolType.PEN, "Pen", "P"),
+    ]),
+    ("node", "A", [
+        (ToolType.NODE, "Node", "A"),
     ]),
     ("shape", "U", [
         (ToolType.SHAPE, "Shape", "U"),
+    ]),
+    ("vector_shape", "Shift+U", [
+        (ToolType.VECTOR_SHAPE, "Vector Shape", "Shift+U"),
+    ]),
+    ("text", "T", [
+        (ToolType.TEXT, "Text", "T"),
     ]),
     ("navigate", "Z", [
         (ToolType.ZOOM, "Zoom", "Z"),
@@ -360,6 +369,70 @@ def _ico_pan() -> QIcon:
     return QIcon(pix)
 
 
+def _ico_pen() -> QIcon:
+    """Pen tool icon — a nib drawing a curved path."""
+    pix, p = _px()
+    pen = _pen(width=1.4)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    # Draw a Bézier curve
+    path = QPainterPath()
+    path.moveTo(5, 19)
+    path.cubicTo(8, 6, 16, 18, 19, 5)
+    p.drawPath(path)
+    # Anchor dots
+    p.setBrush(QBrush(_CLR))
+    p.drawEllipse(QPointF(5, 19), 2.0, 2.0)
+    p.drawEllipse(QPointF(19, 5), 2.0, 2.0)
+    p.end()
+    return QIcon(pix)
+
+
+def _ico_node() -> QIcon:
+    """Node tool icon — cursor arrow with a node point."""
+    pix, p = _px()
+    p.setPen(_pen(width=1.3))
+    p.setBrush(QBrush(QColor(200, 200, 200, 80)))
+    # Arrow shape
+    path = QPainterPath()
+    path.moveTo(5, 4)
+    path.lineTo(5, 18)
+    path.lineTo(9, 14)
+    path.lineTo(13, 20)
+    path.lineTo(15, 19)
+    path.lineTo(11, 13)
+    path.lineTo(16, 13)
+    path.closeSubpath()
+    p.drawPath(path)
+    # Small diamond node at bottom-right
+    p.setBrush(QBrush(QColor(100, 180, 255)))
+    p.setPen(_pen(width=1.0))
+    nd = QPainterPath()
+    nd.moveTo(19, 16)
+    nd.lineTo(22, 19)
+    nd.lineTo(19, 22)
+    nd.lineTo(16, 19)
+    nd.closeSubpath()
+    p.drawPath(nd)
+    p.end()
+    return QIcon(pix)
+
+
+def _ico_vector_shape() -> QIcon:
+    """Vector shape tool icon — rectangle with node handles."""
+    pix, p = _px()
+    p.setPen(_pen(width=1.3))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRect(QRectF(5, 5, 14, 14))
+    # Corner node handles
+    p.setBrush(QBrush(QColor(100, 180, 255)))
+    p.setPen(_pen(width=0.8))
+    for x, y in [(5, 5), (19, 5), (5, 19), (19, 19)]:
+        p.drawRect(QRectF(x - 2, y - 2, 4, 4))
+    p.end()
+    return QIcon(pix)
+
+
 _ICON_MAP: dict[ToolType, callable] = {
     ToolType.MOVE: _ico_move,
     ToolType.RECT_SELECT: _ico_rect_select,
@@ -376,6 +449,9 @@ _ICON_MAP: dict[ToolType, callable] = {
     ToolType.PAINT_BUCKET: _ico_paint_bucket,
     ToolType.TEXT: _ico_text,
     ToolType.SHAPE: _ico_shape,
+    ToolType.PEN: _ico_pen,
+    ToolType.NODE: _ico_node,
+    ToolType.VECTOR_SHAPE: _ico_vector_shape,
     ToolType.ZOOM: _ico_zoom,
     ToolType.PAN: _ico_pan,
 }

@@ -15,10 +15,15 @@ class MotionBlur(Filter):
         Blur distance in pixels, range [1, 200].
     angle : float
         Angle of motion in degrees, range [0, 360].
+    preserve_alpha : bool
+        If True the original alpha channel is kept unchanged.
     """
 
     def __init__(self) -> None:
-        super().__init__("Motion Blur", {"distance": 10, "angle": 0.0})
+        super().__init__(
+            "Motion Blur",
+            {"distance": 10, "angle": 0.0, "preserve_alpha": False},
+        )
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -48,15 +53,17 @@ class MotionBlur(Filter):
 
     # ------------------------------------------------------------------
     def apply(self, image: np.ndarray, params: dict) -> np.ndarray:
-        rgb = self._rgb(image)
-        alpha = self._alpha(image)
-
         distance = int(params.get("distance", self.default_params["distance"]))
         angle = float(params.get("angle", self.default_params["angle"]))
         distance = max(1, min(distance, 200))
         angle = angle % 360.0
+        preserve = bool(params.get("preserve_alpha",
+                                   self.default_params["preserve_alpha"]))
 
         kernel = self._build_motion_kernel(distance, angle)
-        blurred = cv2.filter2D(rgb.astype(np.float32), -1, kernel)
 
-        return self._merge(blurred, alpha)
+        # Work in premultiplied-alpha space to avoid dark fringe
+        pm, orig_alpha = self._premultiply(image)
+        blurred = cv2.filter2D(pm, -1, kernel)
+
+        return self._unpremultiply(blurred, orig_alpha, preserve)

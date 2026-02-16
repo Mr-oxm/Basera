@@ -5,8 +5,8 @@ Modern pill-based layout with subtle depth cues and clean typography.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QStatusBar, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QStatusBar, QWidget
 
 # ── tiny helpers ────────────────────────────────────────────────────────
 
@@ -55,6 +55,9 @@ def _dot_sep() -> QLabel:
 class EditorStatusBar(QStatusBar):
     """Bottom status bar with contextual information pills."""
 
+    # Emitted when the user toggles auto-rasterize on/off
+    auto_rasterize_changed = Signal(bool)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setSizeGripEnabled(False)
@@ -91,10 +94,27 @@ class EditorStatusBar(QStatusBar):
         hr.setContentsMargins(0, 0, 6, 0)
         hr.setSpacing(5)
 
+        # Auto-rasterize toggle for vector layers
+        self._auto_rasterize_cb = QCheckBox("Auto-Rasterize")
+        self._auto_rasterize_cb.setChecked(True)
+        self._auto_rasterize_cb.setToolTip(
+            "When checked, vector layers are continuously rasterized.\n"
+            "Uncheck to view curves only (better performance)."
+        )
+        self._auto_rasterize_cb.setStyleSheet(
+            "QCheckBox { color: #999; font-size: 10px; spacing: 4px; background: transparent; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 2px; "
+            "border: 1px solid #666; background: #383838; }"
+            "QCheckBox::indicator:checked { background: #4a6fa5; border-color: #5a8abf; }"
+        )
+        self._auto_rasterize_cb.toggled.connect(self.auto_rasterize_changed.emit)
+
         self._pos_pill = _pill("x: 0  y: 0", _DIM_PILL)
         self._zoom_pill = _pill("100 %")
 
         hr.addStretch()
+        hr.addWidget(self._auto_rasterize_cb)
+        hr.addWidget(_dot_sep())
         hr.addWidget(self._pos_pill)
         hr.addWidget(_dot_sep())
         hr.addWidget(self._zoom_pill)
@@ -117,3 +137,12 @@ class EditorStatusBar(QStatusBar):
 
     def set_tool(self, name: str) -> None:
         self._tool_pill.setText(name)
+
+    @property
+    def auto_rasterize(self) -> bool:
+        """Whether vector layers should be continuously rasterized."""
+        return self._auto_rasterize_cb.isChecked()
+
+    @auto_rasterize.setter
+    def auto_rasterize(self, value: bool) -> None:
+        self._auto_rasterize_cb.setChecked(value)

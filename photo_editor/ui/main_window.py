@@ -27,6 +27,7 @@ from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
 from .panels.properties_panel import PropertiesPanel
+from .panels.transform_panel import TransformPanel
 from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
 from .theme import DARK_STYLESHEET
@@ -81,6 +82,9 @@ class MainWindow(QMainWindow):
         self._panel_refresh_timer.setSingleShot(True)
         self._panel_refresh_timer.timeout.connect(self._do_deferred_panel_refresh)
         self._panel_refresh_pending = False
+        
+        # Track whether text editing is active to manage conflicting shortcuts
+        self._text_editing_active = False
 
         self._shortcut_mgr = ShortcutManager.instance()
 
@@ -136,6 +140,7 @@ class MainWindow(QMainWindow):
         self._h_ruler = HorizontalRuler()
         self._v_ruler = VerticalRuler()
         self._canvas = CanvasView(self)
+        self._canvas.set_tool_manager_ref(self._tools)
 
         grid.addWidget(self._ruler_corner, 0, 0)
         grid.addWidget(self._h_ruler, 0, 1)
@@ -165,6 +170,11 @@ class MainWindow(QMainWindow):
         self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._color_dock)
         self._layers_dock.raise_()
+        
+        self._transform_panel = TransformPanel()
+        self._transform_dock = self._dock(self._transform_panel, "Transform", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._layers_dock, self._transform_dock)
+
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
 
@@ -184,6 +194,9 @@ class MainWindow(QMainWindow):
         a["save"].triggered.connect(self._on_save)
         a["save_as"].triggered.connect(self._on_save_as)
         a["export"].triggered.connect(self._on_save_as)
+        a["import_svg"].triggered.connect(self._on_import_svg)
+        a["export_svg"].triggered.connect(self._on_export_svg)
+        a["export_pdf"].triggered.connect(self._on_export_pdf)
         a["quit"].triggered.connect(self.close)
         a["undo"].triggered.connect(self._on_undo)
         a["redo"].triggered.connect(self._on_redo)
@@ -194,6 +207,7 @@ class MainWindow(QMainWindow):
         a["resize_canvas"].triggered.connect(self._on_resize_canvas)
         a["resize_image"].triggered.connect(self._on_resize_image)
         a["new_layer"].triggered.connect(self._on_add_layer)
+        a["new_vector_layer"].triggered.connect(self._on_add_vector_layer)
         a["new_group"].triggered.connect(self._on_add_group)
         a["dup_layer"].triggered.connect(self._on_dup_layer)
         a["del_layer"].triggered.connect(self._on_del_layer)
@@ -278,6 +292,9 @@ class MainWindow(QMainWindow):
         self._props_panel.crop_property_changed.connect(self._on_crop_prop_changed)
         self._props_panel.crop_apply.connect(self._on_crop_apply)
         self._props_panel.crop_cancel.connect(self._on_crop_cancel)
+        self._props_panel.vector_property_changed.connect(self._on_vector_prop_changed)
+        self._props_panel.vector_action.connect(self._on_vector_action)
+        self._transform_panel.value_changed.connect(lambda: self._refresh(invalidate=True))
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -293,6 +310,7 @@ class MainWindow(QMainWindow):
         self._canvas.tool_pressed.connect(self._on_canvas_press)
         self._canvas.tool_moved.connect(self._on_canvas_move)
         self._canvas.tool_released.connect(self._on_canvas_release)
+        self._canvas.tool_double_clicked.connect(self._on_canvas_double_click)
         # Widget-coord signals for the pan tool
         self._canvas.widget_pressed.connect(self._on_widget_press)
         self._canvas.widget_moved.connect(self._on_widget_move)
@@ -330,12 +348,14 @@ class MainWindow(QMainWindow):
         """
         if not self._doc:
             return
+        self._canvas.set_document_ref(self._doc)
         if invalidate:
             self._pipeline.invalidate(layer_id)
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result, force=invalidate)
         self._layers_panel.refresh(self._doc)
         self._history_panel.refresh(self._doc.history)
+        self._transform_panel.refresh(self._doc)
         self._update_selection_overlay()
         self._update_transform_box()
         self._update_rulers()
@@ -349,6 +369,7 @@ class MainWindow(QMainWindow):
         result = self._pipeline.execute_to_uint8(self._doc)
         self._canvas.set_image(result, force=True)
         self._update_transform_box()
+        self._transform_panel.refresh(self._doc)
         self._update_rulers()
 
     def _refresh_lightweight(self) -> None:
@@ -384,6 +405,7 @@ class MainWindow(QMainWindow):
         self._panel_refresh_pending = False
         if self._doc:
             self._layers_panel.refresh(self._doc, thumbnails=False)
+            self._transform_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
 
     def _update_selection_overlay(self) -> None:
@@ -533,6 +555,194 @@ class MainWindow(QMainWindow):
                 self._open_docs[idx] = (self._doc, path)
                 self._file_tabs.set_tab_text(idx, Path(path).name)
 
+    # ---- SVG / PDF import / export ------------------------------------------
+
+    def _on_import_svg(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+        try:
+            from ..vector.svg import import_svg, SVGGroup, SVGLeaf
+            from ..vector.geometry import BBox, AffineTransform, Vec2
+            from ..vector.rasterizer import rasterize_vector_layer_tight
+
+            root_node = import_svg(path)
+            if isinstance(root_node, SVGGroup) and not root_node.children:
+                QMessageBox.information(self, "Import SVG", "No vector objects found in SVG.")
+                return
+
+            # Helper to compute bbox of the entire tree
+            def _compute_bbox(node) -> BBox:
+                bb = BBox.empty()
+                if isinstance(node, SVGLeaf):
+                    bb = node.object.bbox()
+                elif isinstance(node, SVGGroup):
+                    for child in node.children:
+                        bb = bb.union(_compute_bbox(child))
+                return bb
+
+            all_bb = _compute_bbox(root_node)
+
+            # If this is a new document, determine dimensions from SVG
+            if self._doc is None:
+                w = max(int(all_bb.max_pt.x + 20), 200)
+                h = max(int(all_bb.max_pt.y + 20), 200)
+                self._doc = Document(w, h, name=Path(path).stem)
+                self._open_docs.append((self._doc, path))
+                self._file_tabs.add_tab(Path(path).name, tooltip=path)
+            
+            # --- Transform logic: Fit to canvas and Center ---
+            doc_w, doc_h = self._doc.width, self._doc.height
+            content_w, content_h = all_bb.width, all_bb.height
+            
+            scale = 1.0
+            if content_w > doc_w or content_h > doc_h:
+                scale_w = doc_w / content_w if content_w > 0 else 1.0
+                scale_h = doc_h / content_h if content_h > 0 else 1.0
+                scale = min(scale_w, scale_h) * 0.9
+
+            c_center = all_bb.center
+            doc_center = Vec2(doc_w / 2, doc_h / 2)
+            
+            xf = AffineTransform.translation(-c_center.x, -c_center.y) \
+                .concat(AffineTransform.scaling(scale)) \
+                .concat(AffineTransform.translation(doc_center.x, doc_center.y))
+
+            # Helper to apply transform to all leaves
+            def _apply_transform(node, transform: AffineTransform):
+                if isinstance(node, SVGLeaf):
+                    node.object.transform = transform.concat(node.object.transform)
+                elif isinstance(node, SVGGroup):
+                    for child in node.children:
+                        _apply_transform(child, transform)
+
+            _apply_transform(root_node, xf)
+
+            # Recursive helper to create layers
+            def _create_layers(node, parent_id: str | None = None) -> None:
+                if isinstance(node, SVGGroup):
+                    # For the root node (if it has name 'svg' or similar), usually we create a group
+                    # unless it's just a container. Let's act nicely and treat it as a group.
+                    # Exception: if it's the top-level SVG and we want to avoid double nesting?
+                    # The user prompt implies "colors as group", preserving structure.
+                    # So we create a group layer.
+                    
+                    # Ensure meaningful name
+                    name = node.name if node.name and node.name != "svg" else "Group"
+                    
+                    # Don't create a group for the top-level if we are just importing into existing?
+                    # Actually, better to contain the import in a group if it has multiple children.
+                    # But root_node IS the top level.
+                    
+                    layer = self._doc.add_group(name=name)
+                    if parent_id:
+                        self._doc.layers.reparent([layer.id], parent_id)
+                    
+                    for child in node.children:
+                        _create_layers(child, layer.id)
+                        
+                elif isinstance(node, SVGLeaf):
+                    obj = node.object
+                    layer = self._doc.add_vector_layer(name=node.name)
+                    layer._vector_data.add(obj)
+                    if parent_id:
+                        self._doc.layers.reparent([layer.id], parent_id)
+                    # Apply element-level opacity from SVG
+                    layer.opacity = getattr(obj, "opacity", 1.0)
+                    rasterize_vector_layer_tight(self._doc, layer=layer, force=True)
+                    # Create filter layer if object has SVG filter (e.g. feGaussianBlur)
+                    svg_filt = getattr(obj, "svg_filter", None)
+                    if svg_filt and svg_filt.get("type") == "gaussian_blur":
+                        from .filter_runner import _filter_name_map
+                        filt_cls = _filter_name_map().get("Gaussian Blur")
+                        if filt_cls is not None:
+                            filt = filt_cls()
+                            std_dev = svg_filt.get("std_deviation", 0.0)
+                            preserve_alpha = svg_filt.get("preserve_alpha", False)
+                            # Map SVG stdDeviation to our radius param (radius ≈ 2*sigma)
+                            radius = max(0.1, std_dev * 2.0)
+                            filt_layer = self._doc.add_layer(
+                                name="Gaussian Blur", layer_type=LayerType.FILTER
+                            )
+                            filt_layer.adjustment = filt
+                            filt_layer.adjustment_params = {
+                                "radius": radius,
+                                "preserve_alpha": preserve_alpha,
+                            }
+                            filt_layer.parent_id = layer.id
+                            layer.children.append(filt_layer.id)
+                            self._doc.layers.reposition_before(filt_layer.id, layer.id)
+
+            # Optimisation: Pause panel updates during bulk creation
+            # (although add_group triggers snapshots... might be slow for big files.
+            # ideally we'd suspend history/snapshots, but that's out of scope).
+            
+            # Start creation
+            # If root has multiple children, pass root. If root is just a wrapper, maybe pass its children?
+            # Standard SVG parsing returns a root group corresponding to <svg>.
+            # If we pass root, we get one top-level group "svg" containing everything.
+            # This is cleaner than dumping 100 layers at top level.
+            _create_layers(root_node, parent_id=None)
+
+            self._refresh()
+            self._canvas.zoom_to_fit()
+            self._status.showMessage("Imported SVG successfully", 3000)
+
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.warning(self, "Import SVG Error", str(exc))
+
+    def _on_export_svg(self) -> None:
+        if not self._doc:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export SVG", "", "SVG Files (*.svg)")
+        if not path:
+            return
+        try:
+            # Collect all vector objects from all layers
+            objects = []
+            for layer in self._doc.layers:
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    objects.extend(vl.objects)
+            if not objects:
+                QMessageBox.information(self, "Export SVG", "No vector objects to export.")
+                return
+            from ..vector.svg import export_svg
+            svg_str = export_svg(objects, self._doc.width, self._doc.height)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(svg_str)
+            self._status.showMessage(f"Exported {len(objects)} objects to SVG", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export SVG Error", str(exc))
+
+    def _on_export_pdf(self) -> None:
+        if not self._doc:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export PDF", "", "PDF Files (*.pdf)")
+        if not path:
+            return
+        try:
+            objects = []
+            for layer in self._doc.layers:
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    objects.extend(vl.objects)
+            if not objects:
+                QMessageBox.information(self, "Export PDF", "No vector objects to export.")
+                return
+            from ..vector.pdf import export_pdf_bytes
+            pdf_data = export_pdf_bytes(objects, self._doc.width, self._doc.height)
+            with open(path, "wb") as f:
+                f.write(pdf_data)
+            self._status.showMessage(f"Exported {len(objects)} objects to PDF", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Export PDF Error", str(exc))
+
     # ---- Tab management -----------------------------------------------------
 
     def _on_tab_selected(self, index: int) -> None:
@@ -585,6 +795,11 @@ class MainWindow(QMainWindow):
             self._doc.add_layer()
             self._refresh()
 
+    def _on_add_vector_layer(self) -> None:
+        if self._doc:
+            self._doc.add_vector_layer()
+            self._refresh()
+
     def _on_add_group(self) -> None:
         if not self._doc:
             return
@@ -594,7 +809,7 @@ class MainWindow(QMainWindow):
             self._doc.group_selected_layers(selected)
         else:
             self._doc.add_group()
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_dup_layer(self) -> None:
@@ -686,6 +901,7 @@ class MainWindow(QMainWindow):
         if self._doc:
             self._doc.layers.active_index = stack_index
             self._update_transform_box()
+            self._transform_panel.refresh(self._doc)
 
     def _on_move_auto_select(self, stack_index: int) -> None:
         """Called by MoveTool when it auto-selects a different layer."""
@@ -693,6 +909,7 @@ class MainWindow(QMainWindow):
             return
         # Sync the layers panel highlight and transform box
         self._layers_panel.refresh(self._doc)
+        self._transform_panel.refresh(self._doc)
         self._update_transform_box()
 
     def _on_opacity(self, val: float) -> None:
@@ -782,7 +999,7 @@ class MainWindow(QMainWindow):
         new_stack_order = list(reversed(remaining))
         self._doc.layers.reorder_by_ids(new_stack_order)
         self._doc.save_snapshot("Reorder Layers")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
@@ -791,7 +1008,7 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, group_id)
         self._doc.save_snapshot("Move to Group")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_layers_unparented(self, layer_ids: list[str]) -> None:
@@ -800,7 +1017,7 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, None)
         self._doc.save_snapshot("Remove from Group")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
@@ -826,7 +1043,7 @@ class MainWindow(QMainWindow):
         # Reposition just before the target in the stack
         self._doc.layers.reposition_before(mask_id, target_id)
         self._doc.save_snapshot("Attach Mask to Layer")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_adj_filter_dropped_on_layer(self, adj_id: str, target_id: str) -> None:
@@ -849,7 +1066,7 @@ class MainWindow(QMainWindow):
         # Reposition just before the target in the stack
         self._doc.layers.reposition_before(adj_id, target_id)
         self._doc.save_snapshot("Attach Adjustment to Layer")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_toggle_vis_selected(self) -> None:
@@ -1379,6 +1596,11 @@ class MainWindow(QMainWindow):
             tool = self._tools.active_tool
             if tool is not None and hasattr(tool, '_points') and tool._drawing:
                 self._canvas.set_lasso_points(list(tool._points))
+        elif tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
+            # Vector tools: update canvas for live overlay preview
+            self._canvas.update()
+            if self._dragging:
+                self._schedule_render()
         elif tool_type == ToolType.TEXT:
             # Update overlay to show drawing preview or editing state
             self._text_update_overlay()
@@ -1413,6 +1635,33 @@ class MainWindow(QMainWindow):
         # Update text overlay after release (may have created a new text layer)
         if tool_type == ToolType.TEXT:
             self._text_update_overlay()
+        # Re-sync vector properties bar so color dropdowns reflect the
+        # selected object's fill/stroke (e.g. after clicking a new path)
+        _VEC_TOOLS = {ToolType.PEN: "pen", ToolType.NODE: "node",
+                      ToolType.VECTOR_SHAPE: "shape"}
+        if tool_type in _VEC_TOOLS:
+            tool = self._tools.active_tool
+            if tool is not None:
+                self._props_panel.vector_bar.sync_from_tool(
+                    tool, _VEC_TOOLS[tool_type])
+
+    # ---- Double-click handler ------------------------------------------------
+
+    def _on_canvas_double_click(self, x: int, y: int) -> None:
+        tool_type = self._tools.active_type
+        tool = self._tools.active_tool
+        # Pen tool: double-click finishes open path
+        if tool_type == ToolType.PEN and tool is not None:
+            if hasattr(tool, 'finish_open_path'):
+                tool.finish_open_path(self._doc)
+                self._refresh()
+                return
+        # Node tool: double-click inserts a node on the nearest segment
+        if tool_type == ToolType.NODE and tool is not None:
+            if hasattr(tool, 'insert_node_on_segment'):
+                tool.insert_node_on_segment(self._doc, x, y)
+                self._refresh()
+                return
 
     # ---- Properties panel ---------------------------------------------------
 
@@ -1463,12 +1712,21 @@ class MainWindow(QMainWindow):
             self._props_panel.set_gradient_mode(True, tool)
             return
 
+        # Vector tools use the vector properties bar
+        _VEC_TOOLS = {ToolType.PEN: "pen", ToolType.NODE: "node",
+                      ToolType.VECTOR_SHAPE: "shape"}
+        if tool_type in _VEC_TOOLS:
+            self._props_panel.clear()
+            self._props_panel.set_vector_mode(True, tool, mode=_VEC_TOOLS[tool_type])
+            return
+
         self._props_panel.set_text_mode(False)
         self._props_panel.set_gradient_mode(False)
         self._props_panel.set_move_mode(False)
         self._props_panel.set_crop_mode(False)
         self._props_panel.set_zoom_mode(False)
         self._props_panel.set_selection_mode(False)
+        self._props_panel.set_vector_mode(False)
         self._props_panel.clear()
         self._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in self._tools.get_properties().items():
@@ -1636,6 +1894,194 @@ class MainWindow(QMainWindow):
         if tool is None or self._tools.active_type != ToolType.CROP:
             return
         tool.cancel()
+
+    # ---- Vector tool property / action handlers -----------------------------
+
+    def _on_vector_prop_changed(self, key: str, value: object) -> None:
+        """Apply a property change from the vector properties bar to the active tool
+        AND to any currently selected VectorObject(s)."""
+        tool = self._tools.active_tool
+        if tool is None:
+            return
+        tt = self._tools.active_type
+
+        if key == "fill_color" and isinstance(value, tuple):
+            tool.fill_color = value
+        elif key == "stroke_color" and isinstance(value, tuple):
+            tool.stroke_color = value
+        elif key == "stroke_width":
+            tool.stroke_width = float(value)
+        elif key == "shape_type" and tt == ToolType.VECTOR_SHAPE:
+            from ..vector.shape_tool import VectorShapeType
+            name = str(value).upper().replace(" ", "_")
+            try:
+                tool.shape_type = VectorShapeType[name]
+            except KeyError:
+                pass
+            self._props_panel.vector_bar.set_shape_type(str(value))
+        elif key == "param_a" and tt == ToolType.VECTOR_SHAPE:
+            self._set_shape_param_a(tool, float(value))
+        elif key == "param_b" and tt == ToolType.VECTOR_SHAPE:
+            self._set_shape_param_b(tool, float(value))
+        elif key == "fill_paint":
+            tool.fill_paint = value
+        elif key == "stroke_paint":
+            tool.stroke_paint = value
+
+        # ---- Also propagate to selected VectorObjects on the active layer ---
+        if key in ("fill_color", "stroke_color", "stroke_width", "fill_paint", "stroke_paint"):
+            self._apply_style_to_selected_objects(key, value)
+
+    def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
+        """Push a style property into every selected VectorObject across
+        ALL vector layers, then re-rasterize and schedule a render."""
+        doc = self._doc
+        if doc is None:
+            return
+
+        from ..vector.style import SolidPaint, GradientPaint
+        from ..vector.rasterizer import rasterize_vector_layer_tight
+
+        any_changed = False
+        for layer in doc.layers.layers:
+            vl = getattr(layer, "_vector_data", None)
+            if vl is None:
+                continue
+
+            changed = False
+            for obj in vl.objects:
+                if not obj.selected:
+                    continue
+                if key == "fill_color" and isinstance(value, tuple):
+                    for fill in obj.style.fills:
+                        if isinstance(fill.paint, SolidPaint):
+                            fill.paint.color = value
+                            changed = True
+                elif key == "stroke_color" and isinstance(value, tuple):
+                    for stroke in obj.style.strokes:
+                        if isinstance(stroke.paint, SolidPaint):
+                            stroke.paint.color = value
+                            changed = True
+                elif key == "stroke_width":
+                    for stroke in obj.style.strokes:
+                        stroke.width = float(value)
+                        changed = True
+                elif key == "fill_paint":
+                    paint = value
+                    if isinstance(paint, GradientPaint):
+                        paint = self._gradient_to_object_space(paint, obj)
+                    if obj.style.fills:
+                        obj.style.fills[0].paint = paint
+                    else:
+                        obj.style.add_fill()
+                        obj.style.fills[0].paint = paint
+                    obj.invalidate()
+                    changed = True
+                elif key == "stroke_paint":
+                    paint = value
+                    if isinstance(paint, GradientPaint):
+                        paint = self._gradient_to_object_space(paint, obj)
+                    if obj.style.strokes:
+                        obj.style.strokes[0].paint = paint
+                    else:
+                        obj.style.add_stroke()
+                        obj.style.strokes[0].paint = paint
+                    obj.invalidate()
+                    changed = True
+
+            if changed:
+                any_changed = True
+                rasterize_vector_layer_tight(doc, layer=layer)
+
+        if any_changed:
+            self._schedule_render()
+
+    def _gradient_to_object_space(
+        self, paint: "GradientPaint", obj: "VectorObject"
+    ) -> "GradientPaint":
+        """Set gradient start/end to cover the object's bounding box."""
+        from ..vector.style import GradientPaint, GradientType
+        from ..vector.geometry import Vec2
+
+        bb = obj.local_bbox()
+        if bb.is_empty:
+            return paint
+        if paint.gradient_type == GradientType.LINEAR:
+            return GradientPaint(
+                gradient_type=GradientType.LINEAR,
+                stops=paint.stops,
+                start=Vec2(bb.min_pt.x, bb.min_pt.y),
+                end=Vec2(bb.max_pt.x, bb.max_pt.y),
+            )
+        # Radial: center at bbox center, radius to cover
+        cx = (bb.min_pt.x + bb.max_pt.x) / 2
+        cy = (bb.min_pt.y + bb.max_pt.y) / 2
+        r = max(bb.width, bb.height) / 2
+        return GradientPaint(
+            gradient_type=GradientType.RADIAL,
+            stops=paint.stops,
+            start=Vec2(cx, cy),
+            end=Vec2(cx, cy),
+            radius=r,
+        )
+
+    def _set_shape_param_a(self, tool, val: float) -> None:
+        from ..vector.shape_tool import VectorShapeType
+        _map = {
+            VectorShapeType.RECTANGLE: "corner_radius",
+            VectorShapeType.POLYGON: "polygon_sides",
+            VectorShapeType.STAR: "star_points",
+            VectorShapeType.ARROW: "arrow_head_length",
+            VectorShapeType.CROSS: "cross_arm_ratio",
+            VectorShapeType.RING: "ring_thickness",
+            VectorShapeType.TRAPEZOID: "trapezoid_top_ratio",
+            VectorShapeType.PARALLELOGRAM: "parallelogram_skew",
+            VectorShapeType.CRESCENT: "crescent_offset",
+            VectorShapeType.SPEECH_BUBBLE: "speech_tail_position",
+        }
+        attr = _map.get(tool.shape_type)
+        if attr:
+            if attr in ("polygon_sides", "star_points"):
+                setattr(tool, attr, max(3, int(val)))
+            else:
+                setattr(tool, attr, val)
+
+    def _set_shape_param_b(self, tool, val: float) -> None:
+        from ..vector.shape_tool import VectorShapeType
+        _map = {
+            VectorShapeType.STAR: "star_inner_ratio",
+            VectorShapeType.ARROW: "arrow_shaft_width",
+        }
+        attr = _map.get(tool.shape_type)
+        if attr:
+            setattr(tool, attr, val)
+
+    def _on_vector_action(self, action: str) -> None:
+        """Handle action buttons from the vector properties bar."""
+        tool = self._tools.active_tool
+        if tool is None or self._doc is None:
+            return
+        tt = self._tools.active_type
+        if tt == ToolType.NODE:
+            if action == "delete_nodes":
+                tool.delete_selected_nodes(self._doc)
+            elif action == "break_path":
+                tool.break_path_at_node(self._doc)
+            elif action == "toggle_mode":
+                tool.toggle_node_mode(self._doc)
+            elif action == "set_sharp":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SHARP)
+            elif action == "set_smooth":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SMOOTH)
+            elif action == "set_symmetric":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SYMMETRIC)
+            elif action == "select_all":
+                tool.select_all_nodes(self._doc)
+            self._schedule_render()
+            self._canvas.update()
 
     def _on_crop_execute(self, x: int, y: int, w: int, h: int, mode) -> None:
         """Execute the actual crop operation."""
@@ -1881,7 +2327,7 @@ class MainWindow(QMainWindow):
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
@@ -1899,7 +2345,7 @@ class MainWindow(QMainWindow):
         else:
             # Cancelled — restore original params
             layer.adjustment_params = old_params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             self._refresh()
 
@@ -1956,7 +2402,7 @@ class MainWindow(QMainWindow):
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
@@ -1971,7 +2417,7 @@ class MainWindow(QMainWindow):
             self._refresh()
         else:
             layer.adjustment_params = old_params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             self._refresh()
 
@@ -2060,6 +2506,9 @@ class MainWindow(QMainWindow):
         """Sync the text editing overlay state to the canvas."""
         tool = self._tools.active_tool
         if tool is None or self._tools.active_type != ToolType.TEXT:
+            if self._text_editing_active:
+                self._text_editing_active = False
+                self._update_text_editing_shortcuts(False)
             self._canvas.set_text_editing(False)
             self._canvas.set_text_box(None)
             self._canvas.set_text_draw_rect(None)
@@ -2067,6 +2516,9 @@ class MainWindow(QMainWindow):
 
         # Drawing preview
         if tool.is_drawing:
+            if self._text_editing_active:
+                self._text_editing_active = False
+                self._update_text_editing_shortcuts(False)
             self._canvas.set_text_editing(False)
             self._canvas.set_text_box(None)
             self._canvas.set_text_draw_rect(tool.draw_rect)
@@ -2074,8 +2526,14 @@ class MainWindow(QMainWindow):
 
         self._canvas.set_text_draw_rect(None)
 
+        # Update persistent text editing state
+        is_editing = (tool.is_editing and tool.text_data is not None)
+        if self._text_editing_active != is_editing:
+            self._text_editing_active = is_editing
+            self._update_text_editing_shortcuts(is_editing)
+
         # Editing mode
-        if tool.is_editing and tool.text_data is not None:
+        if is_editing:
             td = tool.text_data
             self._canvas.set_text_editing(True)
             box = tool.editing_box()
@@ -2152,6 +2610,12 @@ class MainWindow(QMainWindow):
         tool = self._tools.active_tool
         if tool is not None and hasattr(tool, "commit_editing"):
             tool.commit_editing(self._doc)
+        
+        # Re-enable shortcuts
+        if self._text_editing_active:
+            self._text_editing_active = False
+            self._update_text_editing_shortcuts(False)
+
         self._canvas.set_text_editing(False)
         self._canvas.set_text_box(None)
         self._canvas.set_text_draw_rect(None)
@@ -2430,6 +2894,35 @@ class MainWindow(QMainWindow):
         key = event.key()
         mods = event.modifiers()
 
+        # ---- Vector tool key handling ----
+        tool_type = self._tools.active_type
+        tool = self._tools.active_tool
+
+        # Pen tool: Escape / Enter → finish open path
+        if tool_type == ToolType.PEN and tool is not None:
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if hasattr(tool, 'finish_open_path'):
+                    tool.finish_open_path(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+
+        # Node tool: Delete / Backspace → delete selected nodes
+        if tool_type == ToolType.NODE and tool is not None:
+            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if hasattr(tool, 'delete_selected_nodes'):
+                    tool.delete_selected_nodes(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+            # Tab → toggle node handle mode
+            if key == Qt.Key.Key_Tab:
+                if hasattr(tool, 'toggle_node_mode'):
+                    tool.toggle_node_mode(self._doc)
+                    self._refresh()
+                    event.accept()
+                    return
+
         # Numpad digits (no modifiers) → opacity
         if not mods and self._handle_numpad_opacity(key):
             return
@@ -2480,6 +2973,9 @@ class MainWindow(QMainWindow):
         "tool_paint_bucket":    ToolType.PAINT_BUCKET,
         "tool_text":            ToolType.TEXT,
         "tool_shape":           ToolType.SHAPE,
+        "tool_pen":             ToolType.PEN,
+        "tool_node":            ToolType.NODE,
+        "tool_vector_shape":    ToolType.VECTOR_SHAPE,
         "tool_zoom":            ToolType.ZOOM,
         "tool_pan":             ToolType.PAN,
     }
@@ -2552,6 +3048,29 @@ class MainWindow(QMainWindow):
             sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
             sc.activated.connect(self._shortcut_toggle_fullscreen)
             self._active_shortcuts.append(sc)
+
+    def _update_text_editing_shortcuts(self, editing: bool) -> None:
+        """Disable single-key shortcuts during text editing to prevent conflicts."""
+        if not hasattr(self, "_active_shortcuts"):
+            return
+
+        for sc in self._active_shortcuts:
+            if not editing:
+                sc.setEnabled(True)
+                continue
+
+            # If editing, disable shortcuts that don't have Ctrl/Alt/Meta
+            # (i.e. disable simple typing keys like 'V', 'T', 'Shift+U', 'Delete')
+            seq_str = sc.key().toString(QKeySequence.SequenceFormat.PortableText)
+            
+            # We consider a shortcut "safe" (non-conflicting with typing) if it require modifiers
+            # that are not typically used for character input (Ctrl, Alt, Meta).
+            # Shift IS used for typing (uppercase), so Shift-only shortcuts are unsafe.
+            is_safe = ("Ctrl+" in seq_str or 
+                       "Alt+" in seq_str or 
+                       "Meta+" in seq_str)
+            
+            sc.setEnabled(is_safe)
 
     # ---- Shortcut callbacks -------------------------------------------------
 

@@ -64,6 +64,10 @@ class Layer:
         self._source_pixels: np.ndarray | None = None
         self._source_mask: np.ndarray | None = None
         self._pixels_dirty: bool = False
+        # --- Vector layer data ---
+        # When layer_type == SHAPE, this holds the VectorLayer scene graph.
+        # The rasterizer converts vector data → _pixels on demand.
+        self._vector_data: object | None = None  # VectorLayer instance
 
     # ---- Pixel data ---------------------------------------------------------
 
@@ -297,6 +301,9 @@ class Layer:
         if self._adjustment is not None:
             new._adjustment = self._adjustment
             new._adjustment_params = dict(self._adjustment_params)
+        # Copy vector layer data
+        if self._vector_data is not None:
+            new._vector_data = self._vector_data  # VectorLayer is serializable
         return new
 
     def fill(self, color: np.ndarray) -> None:

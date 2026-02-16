@@ -18,22 +18,29 @@ class SurfaceBlur(Filter):
     threshold : int
         Colour-difference threshold, range [1, 255].
         Pixels with colour differences above this are not blurred together.
+    preserve_alpha : bool
+        If True the original alpha channel is kept unchanged.
     """
 
     def __init__(self) -> None:
-        super().__init__("Surface Blur", {"radius": 5, "threshold": 15})
+        super().__init__(
+            "Surface Blur",
+            {"radius": 5, "threshold": 15, "preserve_alpha": False},
+        )
 
     def apply(self, image: np.ndarray, params: dict) -> np.ndarray:
-        rgb = self._rgb(image)
-        alpha = self._alpha(image)
-
         radius = int(params.get("radius", self.default_params["radius"]))
         threshold = int(params.get("threshold", self.default_params["threshold"]))
         radius = max(1, min(radius, 100))
         threshold = max(1, min(threshold, 255))
+        preserve = bool(params.get("preserve_alpha",
+                                   self.default_params["preserve_alpha"]))
+
+        # Premultiply to avoid dark fringe
+        pm, orig_alpha = self._premultiply(image)
 
         # Convert to 0-255 for bilateral filter, which works best in uint8.
-        rgb_u8 = np.clip(rgb * 255, 0, 255).astype(np.uint8)
+        pm_u8 = np.clip(pm * 255, 0, 255).astype(np.uint8)
 
         # Diameter: OpenCV bilateral uses d = 2*radius + 1 when d > 0.
         d = 2 * radius + 1
@@ -43,7 +50,17 @@ class SurfaceBlur(Filter):
         sigma_color = float(threshold)
         sigma_space = float(radius)
 
-        blurred_u8 = cv2.bilateralFilter(rgb_u8, d, sigma_color, sigma_space)
+        # bilateralFilter only handles 1- or 3-channel; split RGBA
+        blurred_rgb = cv2.bilateralFilter(pm_u8[..., :3], d, sigma_color, sigma_space)
+        # Blur the alpha with a plain Gaussian to keep it smooth
+        ksize = int(np.ceil(radius * 3)) | 1
+        ksize = max(3, ksize)
+        blurred_a = cv2.GaussianBlur(pm_u8[..., 3:4], (ksize, ksize), sigma_space)
 
-        blurred = blurred_u8.astype(np.float32) / 255.0
-        return self._merge(blurred, alpha)
+        blurred = np.concatenate(
+            [blurred_rgb.astype(np.float32) / 255.0,
+             blurred_a.astype(np.float32) / 255.0],
+            axis=-1,
+        )
+
+        return self._unpremultiply(blurred, orig_alpha, preserve)

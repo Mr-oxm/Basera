@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
 )
 
-from ...core.color import Color
+from ...core.color import Color, GradientStop
 from ...core.color_engine import ColorManager
+from ...vector.style import FillPaint, SolidPaint, GradientPaint, GradientType
 from .color_sliders import ColorSliders
 from .color_wheel import ColorWheel
 from .gradient_editor import GradientEditor
@@ -199,6 +200,44 @@ class _ColorPopup(QWidget):
             self._wheel.set_color(c)
         self._updating = False
 
+    def set_paint(self, paint: FillPaint) -> None:
+        """Set the active paint (Solid or Gradient)."""
+        self._updating = True
+        
+        if isinstance(paint, SolidPaint):
+            c = Color(*paint.color)
+            self._sliders.set_color(c)
+            if self._wheel:
+                self._wheel.set_color(c)
+            
+            # If we are on Gradient tab, maybe switch to Color or Swatches?
+            # Prefer Color tab if coming from Gradient
+            if self._tabs.currentIndex() == 2:
+                self._tabs.setCurrentIndex(1)
+                
+        elif isinstance(paint, GradientPaint):
+            if self._gradient:
+                # Convert stops
+                core_stops = [
+                    GradientStop(s.offset, Color(*s.color)) 
+                    for s in paint.stops
+                ]
+                self._gradient.set_stops(core_stops)
+                
+                # Set Type
+                t_map = {
+                    GradientType.LINEAR: "Linear",
+                    GradientType.RADIAL: "Radial",
+                    GradientType.CONICAL: "Conical",
+                    GradientType.DIAMOND: "Diamond",
+                }
+                if paint.gradient_type in t_map:
+                    self._gradient.set_gradient_type(t_map[paint.gradient_type])
+                
+                self._tabs.setCurrentIndex(2)
+        
+        self._updating = False
+
     def set_active_tab(self, index: int) -> None:
         """Programmatically switch to the tab at *index*."""
         if 0 <= index < self._tabs.count():
@@ -245,13 +284,14 @@ class _ColorPopup(QWidget):
 # ============================================================================
 
 class _ColorButton(QWidget):
-    """Small rounded-rect button showing the current color."""
+    """Small rounded-rect button showing the current color or gradient."""
 
     clicked = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._color = Color.black()
+        self._gradient: GradientPaint | None = None
         self._hovered = False
         self.setFixedSize(32, 24)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -260,6 +300,11 @@ class _ColorButton(QWidget):
 
     def set_color(self, c: Color) -> None:
         self._color = c
+        self._gradient = None
+        self.update()
+
+    def set_gradient(self, grad: GradientPaint) -> None:
+        self._gradient = grad
         self.update()
 
     def paintEvent(self, ev: QPaintEvent) -> None:
@@ -281,11 +326,26 @@ class _ColorButton(QWidget):
                 p.fillRect(x, y, cs, cs, c)
         p.setClipping(False)
 
-        # Color fill
-        r, g, b, a = self._color.to_rgb8()
-        p.setBrush(QColor(r, g, b, a))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(rect, radius, radius)
+        if self._gradient is not None and self._gradient.stops:
+            # Render gradient preview
+            from PySide6.QtGui import QLinearGradient
+            grad = QLinearGradient(rect.left(), rect.center().y(),
+                                   rect.right(), rect.center().y())
+            for stop in self._gradient.stops:
+                r8, g8, b8, a8 = (int(stop.color[0] * 255),
+                                   int(stop.color[1] * 255),
+                                   int(stop.color[2] * 255),
+                                   int(stop.color[3] * 255) if len(stop.color) > 3 else 255)
+                grad.setColorAt(stop.position, QColor(r8, g8, b8, a8))
+            p.setBrush(grad)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(rect, radius, radius)
+        else:
+            # Color fill
+            r, g, b, a = self._color.to_rgb8()
+            p.setBrush(QColor(r, g, b, a))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(rect, radius, radius)
 
         # Border
         border = QColor(140, 180, 220) if self._hovered else QColor(70, 70, 70)
@@ -381,6 +441,18 @@ class ColorDropdown(QWidget):
         self._btn.set_color(c)
         if self._popup and self._popup.isVisible():
             self._popup.set_color(c)
+
+    def set_paint(self, paint: FillPaint) -> None:
+        if isinstance(paint, SolidPaint):
+            self.set_color(Color(*paint.color))
+        elif isinstance(paint, GradientPaint):
+            # Show gradient preview in button
+            eff = paint.color_at(0.5)
+            self._color = Color(*eff)
+            self._btn.set_gradient(paint)
+            
+        self._ensure_popup()
+        self._popup.set_paint(paint)
 
     # ---- Popup management ---------------------------------------------------
 

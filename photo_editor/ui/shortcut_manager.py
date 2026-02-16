@@ -106,6 +106,9 @@ _PHOTOSHOP_PRESET: Dict[str, str] = {
     "tool_paint_bucket":        "K",
     "tool_text":                "T",
     "tool_shape":               "U",
+    "tool_pen":                 "P",
+    "tool_node":                "A",
+    "tool_vector_shape":        "Shift+U",
     "tool_zoom":                "Z",
     "tool_pan":                 "H",
 
@@ -200,6 +203,9 @@ _AFFINITY_PRESET: Dict[str, str] = {
     "tool_paint_bucket":        "K",
     "tool_text":                "T",
     "tool_shape":               "U",
+    "tool_pen":                 "P",
+    "tool_node":                "A",
+    "tool_vector_shape":        "Shift+U",
     "tool_zoom":                "Z",
     "tool_pan":                 "H",
 
@@ -300,6 +306,9 @@ ACTION_REGISTRY: List[Tuple[str, str, str]] = [
     ("Tools",   "tool_paint_bucket",    "Paint Bucket"),
     ("Tools",   "tool_text",            "Text"),
     ("Tools",   "tool_shape",           "Shape"),
+    ("Tools",   "tool_pen",             "Pen Tool"),
+    ("Tools",   "tool_node",            "Node Tool"),
+    ("Tools",   "tool_vector_shape",    "Vector Shape"),
     ("Tools",   "tool_zoom",            "Zoom"),
     ("Tools",   "tool_pan",             "Pan"),
 
