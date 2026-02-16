@@ -408,6 +408,7 @@ class SubPath:
                 in_handle=xf.apply(node.in_handle) if node.in_handle else None,
                 out_handle=xf.apply(node.out_handle) if node.out_handle else None,
                 mode=node.mode,
+                selected=node.selected,
             )
             new_nodes.append(new_node)
         return SubPath(new_nodes, self.closed)

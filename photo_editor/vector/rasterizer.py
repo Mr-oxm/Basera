@@ -309,3 +309,12 @@ def rasterize_vector_layer_tight(
     layer.pixels = pixels
     layer.position = (x0, y0)
     layer._pixels_dirty = False
+
+    # Update parent group bbox when vector layer content changes
+    if getattr(layer, "parent_id", None):
+        stack = getattr(doc, "layers", None)
+        if stack is not None:
+            from ..core.enums import LayerType
+            parent = stack.get(layer.parent_id)
+            if parent is not None and getattr(parent, "layer_type", None) == LayerType.GROUP:
+                stack.update_group_bbox(parent)

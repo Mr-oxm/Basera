@@ -656,13 +656,17 @@ class MainWindow(QMainWindow):
                         if filt_cls is not None:
                             filt = filt_cls()
                             std_dev = svg_filt.get("std_deviation", 0.0)
+                            preserve_alpha = svg_filt.get("preserve_alpha", False)
                             # Map SVG stdDeviation to our radius param (radius ≈ 2*sigma)
                             radius = max(0.1, std_dev * 2.0)
                             filt_layer = self._doc.add_layer(
                                 name="Gaussian Blur", layer_type=LayerType.FILTER
                             )
                             filt_layer.adjustment = filt
-                            filt_layer.adjustment_params = {"radius": radius}
+                            filt_layer.adjustment_params = {
+                                "radius": radius,
+                                "preserve_alpha": preserve_alpha,
+                            }
                             filt_layer.parent_id = layer.id
                             layer.children.append(filt_layer.id)
                             self._doc.layers.reposition_before(filt_layer.id, layer.id)
@@ -802,7 +806,7 @@ class MainWindow(QMainWindow):
             self._doc.group_selected_layers(selected)
         else:
             self._doc.add_group()
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_dup_layer(self) -> None:
@@ -992,7 +996,7 @@ class MainWindow(QMainWindow):
         new_stack_order = list(reversed(remaining))
         self._doc.layers.reorder_by_ids(new_stack_order)
         self._doc.save_snapshot("Reorder Layers")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
@@ -1001,7 +1005,7 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, group_id)
         self._doc.save_snapshot("Move to Group")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_layers_unparented(self, layer_ids: list[str]) -> None:
@@ -1010,7 +1014,7 @@ class MainWindow(QMainWindow):
             return
         self._doc.layers.reparent(layer_ids, None)
         self._doc.save_snapshot("Remove from Group")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
@@ -1036,7 +1040,7 @@ class MainWindow(QMainWindow):
         # Reposition just before the target in the stack
         self._doc.layers.reposition_before(mask_id, target_id)
         self._doc.save_snapshot("Attach Mask to Layer")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_adj_filter_dropped_on_layer(self, adj_id: str, target_id: str) -> None:
@@ -1059,7 +1063,7 @@ class MainWindow(QMainWindow):
         # Reposition just before the target in the stack
         self._doc.layers.reposition_before(adj_id, target_id)
         self._doc.save_snapshot("Attach Adjustment to Layer")
-        self._pipeline.engine.invalidate_all()
+        self._pipeline.invalidate()
         self._refresh()
 
     def _on_toggle_vis_selected(self) -> None:
@@ -1628,6 +1632,15 @@ class MainWindow(QMainWindow):
         # Update text overlay after release (may have created a new text layer)
         if tool_type == ToolType.TEXT:
             self._text_update_overlay()
+        # Re-sync vector properties bar so color dropdowns reflect the
+        # selected object's fill/stroke (e.g. after clicking a new path)
+        _VEC_TOOLS = {ToolType.PEN: "pen", ToolType.NODE: "node",
+                      ToolType.VECTOR_SHAPE: "shape"}
+        if tool_type in _VEC_TOOLS:
+            tool = self._tools.active_tool
+            if tool is not None:
+                self._props_panel.vector_bar.sync_from_tool(
+                    tool, _VEC_TOOLS[tool_type])
 
     # ---- Double-click handler ------------------------------------------------
 
@@ -2053,6 +2066,15 @@ class MainWindow(QMainWindow):
                 tool.break_path_at_node(self._doc)
             elif action == "toggle_mode":
                 tool.toggle_node_mode(self._doc)
+            elif action == "set_sharp":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SHARP)
+            elif action == "set_smooth":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SMOOTH)
+            elif action == "set_symmetric":
+                from ..vector.path import HandleMode
+                tool.set_node_mode(self._doc, HandleMode.SYMMETRIC)
             elif action == "select_all":
                 tool.select_all_nodes(self._doc)
             self._schedule_render()
@@ -2302,7 +2324,7 @@ class MainWindow(QMainWindow):
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
@@ -2320,7 +2342,7 @@ class MainWindow(QMainWindow):
         else:
             # Cancelled — restore original params
             layer.adjustment_params = old_params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             self._refresh()
 
@@ -2377,7 +2399,7 @@ class MainWindow(QMainWindow):
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
@@ -2392,7 +2414,7 @@ class MainWindow(QMainWindow):
             self._refresh()
         else:
             layer.adjustment_params = old_params
-            self._pipeline.engine.invalidate_all()
+            self._pipeline.invalidate()
             self._pipeline.invalidate()
             self._refresh()
 

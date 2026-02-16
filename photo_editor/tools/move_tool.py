@@ -60,6 +60,7 @@ class MoveTool(Tool):
     """Click-drag to move; drag handles to resize; drag outside box to rotate."""
 
     HANDLE_MARGIN = 10  # hit-test radius in document pixels
+    ROTATE_HANDLE_OFFSET = 25  # distance above top-center for rotation handle
 
     def __init__(self) -> None:
         super().__init__("Move")
@@ -256,10 +257,24 @@ class MoveTool(Tool):
     @staticmethod
     def _hit_test_rect(bx: float, by: float, bw: float, bh: float,
                        x: float, y: float) -> tuple[_Mode, _Handle]:
-        """Hit-test a point against a rectangle and its handles."""
+        """Hit-test a point against a rectangle and its handles.
+
+        Detection priority:
+        1. Rotation handle node (circle above top-center)
+        2. Resize handles (8 control points)
+        3. Interior → MOVE
+        4. Everything outside → ROTATE
+        """
         m = MoveTool.HANDLE_MARGIN
+        rh_offset = MoveTool.ROTATE_HANDLE_OFFSET
         mx, my = bx + bw / 2, by + bh / 2
 
+        # 1. Rotation handle node above top-center
+        rh_x, rh_y = mx, by - rh_offset
+        if abs(x - rh_x) <= m and abs(y - rh_y) <= m:
+            return _Mode.ROTATE, _Handle.NONE
+
+        # 2. Resize handles
         handles = [
             (_Handle.TL, bx, by),
             (_Handle.T, mx, by),
@@ -274,9 +289,11 @@ class MoveTool(Tool):
             if abs(x - hx) <= m and abs(y - hy) <= m:
                 return _Mode.RESIZE, hid
 
+        # 3. Interior
         if bx <= x <= bx + bw and by <= y <= by + bh:
             return _Mode.MOVE, _Handle.NONE
 
+        # 4. Outside the box → rotation
         return _Mode.ROTATE, _Handle.NONE
 
     # ------------------------------------------------------------------
@@ -354,9 +371,16 @@ class MoveTool(Tool):
         #     user can transform the layer without unwanted switches.
         if self.auto_select:
             skip_autoselect = False
+            auto_switched = False
             if layer is not None:
                 mode_hit, _ = self._hit_test(doc, x, y)
-                if mode_hit == _Mode.RESIZE:
+                # Skip auto-select when the click lands on the interior
+                # (MOVE) or a resize handle.  This prevents selecting a
+                # layer beneath when clicking on a transparent area that
+                # is still within the bbox.
+                # ROTATE (outside the bbox) does NOT skip so that
+                # auto-select can still find a layer underneath.
+                if mode_hit in (_Mode.MOVE, _Mode.RESIZE):
                     skip_autoselect = True
 
             if not skip_autoselect:
@@ -368,6 +392,7 @@ class MoveTool(Tool):
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(topmost_idx)
                         layer = doc.layers.active_layer
+                        auto_switched = True
 
         if layer is None or layer.locked:
             return
@@ -375,18 +400,19 @@ class MoveTool(Tool):
         self._mode, self._handle = self._hit_test(doc, x, y)
 
         # If the click lands in the ROTATE zone (outside the bbox) with
-        # auto-select on, only promote to MOVE if the click actually hit
-        # the layer's opaque pixels (so dragging empty space / ruler
-        # guides doesn't move the layer).
+        # auto-select on AND auto-select actually switched layers, demote
+        # to MOVE (if on opaque pixels) or NONE (empty space).
+        # If auto-select didn't switch, keep ROTATE so the user can rotate
+        # the current layer from anywhere outside the bbox.
         if self.auto_select and self._mode == _Mode.ROTATE:
-            if self._point_on_layer(layer, x, y):
-                self._mode = _Mode.MOVE
-                self._handle = _Handle.NONE
-            else:
-                self._mode = _Mode.NONE
-
-        if self._mode == _Mode.NONE:
-            return
+            if auto_switched:
+                if self._point_on_layer(layer, x, y):
+                    self._mode = _Mode.MOVE
+                    self._handle = _Handle.NONE
+                else:
+                    self._mode = _Mode.NONE
+                    return
+            # else: auto-select didn't switch — keep ROTATE for rotation
 
         label = {_Mode.MOVE: "Move", _Mode.RESIZE: "Resize", _Mode.ROTATE: "Rotate"}
         doc.save_snapshot(label.get(self._mode, "Transform"))
@@ -442,16 +468,28 @@ class MoveTool(Tool):
 
         if layer.layer_type == LayerType.GROUP:
             for child in doc.layers:
-                if child.parent_id == layer.id:
-                    self._group_children.append(child)
-                    self._group_child_positions[child.id] = child.position
-                    # Non-destructive: snapshot source and record base transforms
-                    if child.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER):
-                        child.init_non_destructive()
-                        self._group_child_base_sx[child.id] = child.transform_scale_x
-                        self._group_child_base_sy[child.id] = child.transform_scale_y
-                        self._group_child_base_angle[child.id] = child.transform_angle
-                        self._group_child_dims[child.id] = (child.width, child.height)
+                if child.parent_id != layer.id:
+                    continue
+                self._group_children.append(child)
+                self._group_child_positions[child.id] = child.position
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                # Group children: composite to get pixels for scaling (they have no native pixels)
+                if child.layer_type == LayerType.GROUP:
+                    from ..engine.compositor import Compositor
+                    from ..core.layer_stack import LayerStack
+                    compositor = Compositor()
+                    px = compositor.composite_group_tight(child, doc.layers)
+                    if px is not None and px.size > 0:
+                        bounds = LayerStack._content_bounds(child, doc.layers)
+                        if bounds is not None:
+                            child.position = (int(bounds[0]), int(bounds[1]))
+                        child.pixels = px
+                child.init_non_destructive()
+                self._group_child_base_sx[child.id] = child.transform_scale_x
+                self._group_child_base_sy[child.id] = child.transform_scale_y
+                self._group_child_base_angle[child.id] = child.transform_angle
+                self._group_child_dims[child.id] = (child.width, child.height)
             bbox = self._group_bbox(doc, layer)
             self._group_orig_bbox = bbox
             if bbox:
@@ -600,6 +638,9 @@ class MoveTool(Tool):
                 vl = getattr(self._active_layer, "_vector_data", None)
                 if vl:
                     self._commit_vector_transform(doc, self._active_layer, vl)
+            elif self._active_layer.layer_type == LayerType.GROUP:
+                self._commit_group_vector_transforms(doc)
+                doc.layers.update_group_bbox(self._active_layer)
 
         self._dragging = False
         self._orig_pixels = None
@@ -699,7 +740,144 @@ class MoveTool(Tool):
         # Force rasterize to update layer.position/pixels
         rasterize_vector_layer_tight(doc, layer=layer, force=True)
 
+    def _commit_group_vector_transforms(self, doc: Document) -> None:
+        """Bake group move/resize/rotate into children.
 
+        For SHAPE children: update vector objects and re-rasterize.
+        For GROUP children: recursively bake transform into descendants.
+        For raster children: handled by existing init_non_destructive path.
+        """
+        from ..vector.geometry import AffineTransform, Vec2
+        from ..vector.rasterizer import rasterize_vector_layer_tight
+
+        for child in self._group_children:
+            if child.layer_type != LayerType.SHAPE:
+                continue
+            vl = getattr(child, "_vector_data", None)
+            if vl is None:
+                continue
+
+            orig_pos = self._group_child_positions.get(child.id)
+            if orig_pos is None:
+                continue
+
+            base_sx = self._group_child_base_sx.get(child.id, 1.0)
+            base_sy = self._group_child_base_sy.get(child.id, 1.0)
+            base_angle = self._group_child_base_angle.get(child.id, 0.0)
+            orig_dims = self._group_child_dims.get(child.id, (child.width, child.height))
+            orig_w, orig_h = orig_dims
+
+            orig_cx = orig_pos[0] + orig_w / 2.0
+            orig_cy = orig_pos[1] + orig_h / 2.0
+            new_cx = child.position[0] + child.width / 2.0
+            new_cy = child.position[1] + child.height / 2.0
+
+            # Build transform: T(new_center) * R(delta) * S(sx,sy) * T(-old_center)
+            xf = AffineTransform.translation(new_cx, new_cy)
+
+            angle_deg = child.transform_angle - base_angle
+            if angle_deg != 0.0:
+                xf = xf.rotate(math.radians(angle_deg))
+
+            sx = child.transform_scale_x / max(base_sx, 1e-6)
+            sy = child.transform_scale_y / max(base_sy, 1e-6)
+            if sx != 1.0 or sy != 1.0:
+                xf = xf.scale(sx, sy)
+
+            xf = xf.translate(-orig_cx, -orig_cy)
+
+            for obj in getattr(vl, "objects", []):
+                obj.transform = xf.concat(obj.transform)
+                obj.invalidate()
+
+            # Reset layer raster transform state
+            child._source_pixels = None
+            child._source_mask = None
+            child.transform_scale_x = 1.0
+            child.transform_scale_y = 1.0
+            child.transform_angle = 0.0
+            child.transform_base_w = 0
+            child.transform_base_h = 0
+            child._pixels_dirty = False
+
+            rasterize_vector_layer_tight(doc, layer=child, force=True)
+
+        # Group children: bake transform into descendants recursively
+        for child in self._group_children:
+            if child.layer_type != LayerType.GROUP:
+                continue
+            orig_pos = self._group_child_positions.get(child.id)
+            if orig_pos is None:
+                continue
+            base_sx = self._group_child_base_sx.get(child.id, 1.0)
+            base_sy = self._group_child_base_sy.get(child.id, 1.0)
+            base_angle = self._group_child_base_angle.get(child.id, 0.0)
+            orig_dims = self._group_child_dims.get(child.id, (child.width, child.height))
+            orig_w, orig_h = orig_dims
+            orig_cx = orig_pos[0] + orig_w / 2.0
+            orig_cy = orig_pos[1] + orig_h / 2.0
+            new_cx = child.position[0] + child.width / 2.0
+            new_cy = child.position[1] + child.height / 2.0
+            xf = AffineTransform.translation(new_cx, new_cy)
+            angle_deg = child.transform_angle - base_angle
+            if angle_deg != 0.0:
+                xf = xf.rotate(math.radians(angle_deg))
+            sx = child.transform_scale_x / max(base_sx, 1e-6)
+            sy = child.transform_scale_y / max(base_sy, 1e-6)
+            if sx != 1.0 or sy != 1.0:
+                xf = xf.scale(sx, sy)
+            xf = xf.translate(-orig_cx, -orig_cy)
+            self._bake_transform_into_descendants(doc, child, xf, sx, sy)
+            child._source_pixels = None
+            child._source_mask = None
+            child.transform_scale_x = 1.0
+            child.transform_scale_y = 1.0
+            child.transform_angle = 0.0
+            child.transform_base_w = 0
+            child.transform_base_h = 0
+            child._pixels_dirty = False
+
+    def _bake_transform_into_descendants(
+        self, doc: Document, group: object, xf: object,
+        sx: float = 1.0, sy: float = 1.0,
+    ) -> None:
+        """Recursively apply transform to all descendants of a group."""
+        from ..vector.geometry import Vec2
+        from ..vector.rasterizer import rasterize_vector_layer_tight
+
+        for layer in doc.layers:
+            if layer.parent_id != group.id:
+                continue
+            if layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK):
+                continue
+            # Update position
+            lx, ly = layer.position
+            new_pt = xf.apply(Vec2(float(lx), float(ly)))
+            layer.position = (int(new_pt.x), int(new_pt.y))
+            if layer.layer_type == LayerType.GROUP:
+                self._bake_transform_into_descendants(doc, layer, xf, sx, sy)
+            elif layer.layer_type == LayerType.SHAPE:
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    for obj in getattr(vl, "objects", []):
+                        obj.transform = xf.concat(obj.transform)
+                        obj.invalidate()
+                layer._source_pixels = None
+                layer._source_mask = None
+                layer.transform_scale_x = 1.0
+                layer.transform_scale_y = 1.0
+                layer.transform_angle = 0.0
+                layer.transform_base_w = 0
+                layer.transform_base_h = 0
+                layer._pixels_dirty = False
+                rasterize_vector_layer_tight(doc, layer=layer, force=True)
+            else:
+                # Raster: scale pixels and bake (if ND transform active)
+                if getattr(layer, "_source_pixels", None) is not None:
+                    layer.transform_scale_x *= sx
+                    layer.transform_scale_y *= sy
+                    layer.compute_display()
+                layer.rasterize_transform()
 
     # ------------------------------------------------------------------
     # Resize

@@ -1345,25 +1345,27 @@ class VectorPropertiesBar(QWidget):
         lbl_fill.setStyleSheet(_LABEL)
         layout.addWidget(lbl_fill)
         self._fill_btn = ColorDropdown(show_gradient=True, parent=self)
-        self._fill_btn.setFixedSize(24, 24)
+        self._fill_btn.setFixedSize(36, 24)
         self._fill_btn.color_changed.connect(self._on_fill_changed)
         self._fill_btn.color_committed.connect(self._on_fill_changed)
         self._fill_btn.gradient_changed.connect(self._on_fill_gradient_changed)
         layout.addWidget(self._fill_btn)
+
+        layout.addSpacing(4)
 
         # ---- Stroke colour ----
         lbl_stroke = QLabel("Stroke")
         lbl_stroke.setStyleSheet(_LABEL)
         layout.addWidget(lbl_stroke)
         self._stroke_btn = ColorDropdown(show_gradient=True, parent=self)
-        self._stroke_btn.setFixedSize(24, 24)
+        self._stroke_btn.setFixedSize(36, 24)
         self._stroke_btn.color_changed.connect(self._on_stroke_changed)
         self._stroke_btn.color_committed.connect(self._on_stroke_changed)
         self._stroke_btn.gradient_changed.connect(self._on_stroke_gradient_changed)
         layout.addWidget(self._stroke_btn)
 
         # ---- Stroke width ----
-        lbl_sw = QLabel("Width")
+        lbl_sw = QLabel("W")
         lbl_sw.setStyleSheet(_LABEL)
         layout.addWidget(lbl_sw)
         self._stroke_w = QDoubleSpinBox()
@@ -1378,7 +1380,8 @@ class VectorPropertiesBar(QWidget):
         self._stroke_w.valueChanged.connect(lambda v: self.property_changed.emit("stroke_width", v))
         layout.addWidget(self._stroke_w)
 
-        layout.addWidget(_make_separator())
+        self._sep_fill_stroke = _make_separator()
+        layout.addWidget(self._sep_fill_stroke)
 
         # ---- Shape type dropdown (shape tool only) ----
         self._shape_lbl = QLabel("Shape")
@@ -1423,10 +1426,37 @@ class VectorPropertiesBar(QWidget):
         self._param_b.valueChanged.connect(lambda v: self.property_changed.emit("param_b", v))
         layout.addWidget(self._param_b)
 
-        layout.addWidget(_make_separator())
+        self._sep_shape = _make_separator()
+        layout.addWidget(self._sep_shape)
 
-        # ---- Node tool action buttons (hidden unless node tool) ----
+        # ---- Node tool: node type buttons ----
         btn_css = _FLAT_BTN.format()
+
+        self._sharp_btn = QPushButton("■ Sharp")
+        self._sharp_btn.setFixedHeight(24)
+        self._sharp_btn.setStyleSheet(btn_css)
+        self._sharp_btn.setToolTip("Set selected nodes to sharp (straight)")
+        self._sharp_btn.clicked.connect(lambda: self.action_requested.emit("set_sharp"))
+        layout.addWidget(self._sharp_btn)
+
+        self._smooth_btn = QPushButton("● Smooth")
+        self._smooth_btn.setFixedHeight(24)
+        self._smooth_btn.setStyleSheet(btn_css)
+        self._smooth_btn.setToolTip("Set selected nodes to smooth (collinear handles)")
+        self._smooth_btn.clicked.connect(lambda: self.action_requested.emit("set_smooth"))
+        layout.addWidget(self._smooth_btn)
+
+        self._symmetric_btn = QPushButton("◆ Symmetric")
+        self._symmetric_btn.setFixedHeight(24)
+        self._symmetric_btn.setStyleSheet(btn_css)
+        self._symmetric_btn.setToolTip("Set selected nodes to symmetric (equal handles)")
+        self._symmetric_btn.clicked.connect(lambda: self.action_requested.emit("set_symmetric"))
+        layout.addWidget(self._symmetric_btn)
+
+        self._sep_node_types = _make_separator()
+        layout.addWidget(self._sep_node_types)
+
+        # ---- Node tool: action buttons ----
         self._delete_btn = QPushButton("Delete")
         self._delete_btn.setFixedHeight(24)
         self._delete_btn.setStyleSheet(btn_css)
@@ -1440,13 +1470,6 @@ class VectorPropertiesBar(QWidget):
         self._break_btn.setToolTip("Break path at selected nodes")
         self._break_btn.clicked.connect(lambda: self.action_requested.emit("break_path"))
         layout.addWidget(self._break_btn)
-
-        self._toggle_btn = QPushButton("Toggle")
-        self._toggle_btn.setFixedHeight(24)
-        self._toggle_btn.setStyleSheet(btn_css)
-        self._toggle_btn.setToolTip("Toggle node sharp/smooth/symmetric (Tab)")
-        self._toggle_btn.clicked.connect(lambda: self.action_requested.emit("toggle_mode"))
-        layout.addWidget(self._toggle_btn)
 
         self._selall_btn = QPushButton("Sel All")
         self._selall_btn.setFixedHeight(24)
@@ -1462,9 +1485,12 @@ class VectorPropertiesBar(QWidget):
         self._stroke_widgets = [lbl_stroke, self._stroke_btn, lbl_sw, self._stroke_w]
         self._shape_widgets = [self._shape_lbl, self._shape_combo,
                                self._param_a_lbl, self._param_a,
-                               self._param_b_lbl, self._param_b]
-        self._node_widgets = [self._delete_btn, self._break_btn,
-                              self._toggle_btn, self._selall_btn]
+                               self._param_b_lbl, self._param_b,
+                               self._sep_shape]
+        self._node_widgets = [self._sharp_btn, self._smooth_btn,
+                              self._symmetric_btn, self._sep_node_types,
+                              self._delete_btn, self._break_btn,
+                              self._selall_btn]
 
     # ---- Mode switching ----
 
@@ -1564,23 +1590,49 @@ class VectorPropertiesBar(QWidget):
         """Populate widget values from the active vector tool."""
         self.set_mode(mode)
         if mode in ("pen", "shape", "node"):
-            # Try full paint first, then fallback to color tuple
-            fp = getattr(tool, "fill_paint", None)
-            if fp:
-                self.set_fill_paint(fp)
-            else:
-                fc = getattr(tool, "fill_color", (0.7, 0.7, 0.9, 1.0))
-                self.set_fill_color(*fc)
+            # Try to get style from selected vector object first
+            fill_synced = False
+            stroke_synced = False
+            hit_obj = getattr(tool, "_hit_object", None)
+            if hit_obj is not None and hasattr(hit_obj, "style"):
+                style = hit_obj.style
+                if style is not None:
+                    # Fill
+                    fill = getattr(style, "fill", None)
+                    if fill is not None:
+                        fill_paint = getattr(fill, "paint", None)
+                        if fill_paint is not None:
+                            self.set_fill_paint(fill_paint)
+                            fill_synced = True
+                    # Stroke
+                    stroke = getattr(style, "stroke", None)
+                    if stroke is not None:
+                        stroke_paint = getattr(stroke, "paint", None)
+                        if stroke_paint is not None:
+                            self.set_stroke_paint(stroke_paint)
+                            stroke_synced = True
+                        sw = getattr(stroke, "width", None)
+                        if sw is not None:
+                            self.set_stroke_width(sw)
 
-            sp = getattr(tool, "stroke_paint", None)
-            if sp:
-                self.set_stroke_paint(sp)
-            else:
-                sc = getattr(tool, "stroke_color", (0.0, 0.0, 0.0, 1.0))
-                self.set_stroke_color(*sc)
+            if not fill_synced:
+                fp = getattr(tool, "fill_paint", None)
+                if fp:
+                    self.set_fill_paint(fp)
+                else:
+                    fc = getattr(tool, "fill_color", (0.7, 0.7, 0.9, 1.0))
+                    self.set_fill_color(*fc)
+
+            if not stroke_synced:
+                sp = getattr(tool, "stroke_paint", None)
+                if sp:
+                    self.set_stroke_paint(sp)
+                else:
+                    sc = getattr(tool, "stroke_color", (0.0, 0.0, 0.0, 1.0))
+                    self.set_stroke_color(*sc)
             
-            sw = getattr(tool, "stroke_width", 2.0)
-            self.set_stroke_width(sw)
+                sw = getattr(tool, "stroke_width", 2.0)
+                self.set_stroke_width(sw)
         if mode == "shape":
             from ...vector.shape_tool import VectorShapeType
             names = [st.name.replace("_", " ").capitalize()

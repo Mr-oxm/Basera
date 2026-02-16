@@ -55,6 +55,7 @@ class Document:
     def add_group(self, name: str = "Group") -> Layer:
         group = Layer(name=name, width=self.width, height=self.height, layer_type=LayerType.GROUP)
         self.layers.add(group)
+        self.layers.update_group_bbox(group)  # Empty group: position (0,0), minimal size
         self._snapshot(f"Add Group {name}")
         self._dirty = True
         return group

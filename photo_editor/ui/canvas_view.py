@@ -135,6 +135,52 @@ _HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
 
 _HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
 
+# Rotation cursor: a small circular-arrow icon built from scratch
+_ROTATE_CURSOR_CACHE: QCursor | None = None
+
+def _build_rotate_cursor() -> QCursor:
+    """Build a custom rotation cursor (circular arrow)."""
+    global _ROTATE_CURSOR_CACHE
+    if _ROTATE_CURSOR_CACHE is not None:
+        return _ROTATE_CURSOR_CACHE
+    size = 24
+    pm = QPixmap(size, size)
+    pm.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    # Draw a circular arc arrow
+    center = size / 2
+    radius = 8.0
+    # Arc
+    pen = QPen(QColor(0, 0, 0), 2.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    from PySide6.QtCore import QRectF as _QRectF
+    arc_rect = _QRectF(center - radius, center - radius, radius * 2, radius * 2)
+    p.drawArc(arc_rect, 30 * 16, 270 * 16)  # 270 degree arc
+    # White inner arc for contrast
+    pen2 = QPen(QColor(255, 255, 255), 1.2)
+    pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen2)
+    p.drawArc(arc_rect, 30 * 16, 270 * 16)
+    # Arrowhead at the end of the arc
+    import math as _math
+    end_angle = _math.radians(30)
+    ex = center + radius * _math.cos(end_angle)
+    ey = center - radius * _math.sin(end_angle)
+    p.setPen(QPen(QColor(0, 0, 0), 2.5))
+    p.setBrush(QColor(0, 0, 0))
+    from PySide6.QtGui import QPolygonF as _QPolyF
+    arrow = _QPolyF()
+    arrow.append(QPointF(ex, ey))
+    arrow.append(QPointF(ex + 4, ey - 3))
+    arrow.append(QPointF(ex + 1, ey + 4))
+    p.drawPolygon(arrow)
+    p.end()
+    _ROTATE_CURSOR_CACHE = QCursor(pm, size // 2, size // 2)
+    return _ROTATE_CURSOR_CACHE
+
+
 
 class CanvasView(_BASE_CLASS):
     """Interactive canvas that displays the composited document.
@@ -754,6 +800,18 @@ class CanvasView(_BASE_CLASS):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(-hw, -hh, br.width(), br.height()))
 
+        # Rotation handle: line from top-center upward + circle node
+        rh_offset = 20.0   # screen-space offset above the box
+        rh_x, rh_y = 0, -hh - rh_offset
+        # Connecting line
+        p.setPen(QPen(QColor(0, 150, 255), 1.0))
+        p.drawLine(QPointF(0, -hh), QPointF(rh_x, rh_y))
+        # Rotation circle node
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(0, 150, 255), 1.5))
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(QPointF(rh_x, rh_y), 5.0, 5.0)
+
         # Handle squares
         hs = 7
         handle_pts = [
@@ -787,6 +845,13 @@ class CanvasView(_BASE_CLASS):
             ry = px * math.sin(rad) + py * math.cos(rad)
             px, py = rx, ry
 
+        # Rotation handle node (above top-center)
+        rh_offset = 20.0
+        rh_x, rh_y = 0, -hh - rh_offset
+        if abs(px - rh_x) <= _HANDLE_HIT and abs(py - rh_y) <= _HANDLE_HIT:
+            self.setCursor(QCursor(_build_rotate_cursor()))
+            return
+
         # Hit-test against centered handle positions
         local_handles = [
             ("TL", -hw, -hh), ("T", 0, -hh), ("TR", hw, -hh),
@@ -801,7 +866,8 @@ class CanvasView(_BASE_CLASS):
         if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         else:
-            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            # Outside the box = rotation zone
+            self.setCursor(_build_rotate_cursor())
 
     # ---- Brush cursor drawing -----------------------------------------------
 
@@ -1136,21 +1202,22 @@ class CanvasView(_BASE_CLASS):
                         np_ = _to_screen(node.position.x, node.position.y)
                         node_sel = getattr(node, "selected", False)
 
-                        # Handle lines + control point circles
-                        if node.in_handle and not node.in_handle.approx_eq(node.position):
-                            hp = _to_screen(node.in_handle.x, node.in_handle.y)
-                            p.setPen(handle_pen)
-                            p.drawLine(np_, hp)
-                            p.setPen(QPen(accent, 0.8))
-                            p.setBrush(QColor(100, 180, 255, 150) if node_sel else QColor(255, 255, 255, 180))
-                            p.drawEllipse(hp, 3, 3)
-                        if node.out_handle and not node.out_handle.approx_eq(node.position):
-                            hp = _to_screen(node.out_handle.x, node.out_handle.y)
-                            p.setPen(handle_pen)
-                            p.drawLine(np_, hp)
-                            p.setPen(QPen(accent, 0.8))
-                            p.setBrush(QColor(100, 180, 255, 150) if node_sel else QColor(255, 255, 255, 180))
-                            p.drawEllipse(hp, 3, 3)
+                        # Handle lines + control point circles (only for selected nodes)
+                        if node_sel:
+                            if node.in_handle and not node.in_handle.approx_eq(node.position):
+                                hp = _to_screen(node.in_handle.x, node.in_handle.y)
+                                p.setPen(handle_pen)
+                                p.drawLine(np_, hp)
+                                p.setPen(QPen(accent, 0.8))
+                                p.setBrush(QColor(100, 180, 255, 150))
+                                p.drawEllipse(hp, 3, 3)
+                            if node.out_handle and not node.out_handle.approx_eq(node.position):
+                                hp = _to_screen(node.out_handle.x, node.out_handle.y)
+                                p.setPen(handle_pen)
+                                p.drawLine(np_, hp)
+                                p.setPen(QPen(accent, 0.8))
+                                p.setBrush(QColor(100, 180, 255, 150))
+                                p.drawEllipse(hp, 3, 3)
 
                         # Anchor point — shape indicates handle mode
                         p.setPen(QPen(accent, 1.2))
@@ -1225,6 +1292,8 @@ class CanvasView(_BASE_CLASS):
                     p.setPen(marquee_pen)
                     p.setBrush(QColor(100, 180, 255, 30))
                     p.drawRect(QRectF(ss, se).normalized())
+
+
 
         p.restore()
 

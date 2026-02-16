@@ -1,4 +1,4 @@
-"""Render pipeline — orchestrates engine + adjustment layers.
+"""Render pipeline — orchestrates compositor (with adjustment/filter layers).
 
 Caches the uint8 output so repeated calls without invalidation
 (e.g. panel refreshes, selection overlay updates) are essentially free.
@@ -8,26 +8,24 @@ Pre-allocates the uint8 buffer to avoid repeated allocation + conversion.
 import numpy as np
 
 from ..core.document import Document
-from .render_engine import RenderEngine
+from .compositor import Compositor
 
 
 class RenderPipeline:
     """Full pipeline: layer compositing -> adjustment layers -> output."""
 
     def __init__(self) -> None:
-        self._engine = RenderEngine()
+        self._compositor = Compositor()
         # Cached final uint8 result
         self._result_uint8: np.ndarray | None = None
         self._uint8_valid: bool = False
         # Pre-allocated uint8 conversion buffer
         self._uint8_buf: np.ndarray | None = None
 
-    @property
-    def engine(self) -> RenderEngine:
-        return self._engine
-
     def execute(self, document: Document) -> np.ndarray:
-        return self._engine.render(document)
+        return self._compositor.composite(
+            document.layers, document.width, document.height
+        )
 
     def execute_to_uint8(self, document: Document) -> np.ndarray:
         """Return the composited image as uint8 RGBA.
@@ -50,5 +48,4 @@ class RenderPipeline:
         return self._result_uint8
 
     def invalidate(self, layer_id: str | None = None) -> None:
-        self._engine.invalidate(layer_id)
         self._uint8_valid = False

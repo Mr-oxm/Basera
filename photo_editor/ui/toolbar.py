@@ -64,16 +64,20 @@ _TOOL_GROUPS: list[tuple[str, str, list[tuple[ToolType, str, str]]]] = [
         (ToolType.GRADIENT, "Gradient", "G"),
         (ToolType.PAINT_BUCKET, "Paint Bucket", "K"),
     ]),
-    ("text", "T", [
-        (ToolType.TEXT, "Text", "T"),
+    ("pen", "P", [
+        (ToolType.PEN, "Pen", "P"),
+    ]),
+    ("node", "A", [
+        (ToolType.NODE, "Node", "A"),
     ]),
     ("shape", "U", [
         (ToolType.SHAPE, "Shape", "U"),
     ]),
-    ("vector", "P", [
-        (ToolType.PEN, "Pen", "P"),
-        (ToolType.NODE, "Node", "A"),
+    ("vector_shape", "Shift+U", [
         (ToolType.VECTOR_SHAPE, "Vector Shape", "Shift+U"),
+    ]),
+    ("text", "T", [
+        (ToolType.TEXT, "Text", "T"),
     ]),
     ("navigate", "Z", [
         (ToolType.ZOOM, "Zoom", "Z"),

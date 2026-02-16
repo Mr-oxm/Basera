@@ -15,10 +15,15 @@ class LensBlur(Filter):
         Blur radius in pixels, range [1, 50].
     blade_count : int
         Number of aperture blades (3-8). More blades approach a circle.
+    preserve_alpha : bool
+        If True the original alpha channel is kept unchanged.
     """
 
     def __init__(self) -> None:
-        super().__init__("Lens Blur", {"radius": 5, "blade_count": 6})
+        super().__init__(
+            "Lens Blur",
+            {"radius": 5, "blade_count": 6, "preserve_alpha": False},
+        )
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -50,17 +55,17 @@ class LensBlur(Filter):
 
     # ------------------------------------------------------------------
     def apply(self, image: np.ndarray, params: dict) -> np.ndarray:
-        rgb = self._rgb(image).astype(np.float32)
-        alpha = self._alpha(image)
-
         radius = int(params.get("radius", self.default_params["radius"]))
         blade_count = int(params.get("blade_count", self.default_params["blade_count"]))
         radius = max(1, min(radius, 50))
         blade_count = max(3, min(blade_count, 8))
+        preserve = bool(params.get("preserve_alpha",
+                                   self.default_params["preserve_alpha"]))
 
         kernel = self._create_bokeh_kernel(radius, blade_count)
 
-        # Apply the kernel per-channel.
-        blurred = cv2.filter2D(rgb, -1, kernel)
+        # Work in premultiplied-alpha space to avoid dark fringe
+        pm, orig_alpha = self._premultiply(image)
+        blurred = cv2.filter2D(pm, -1, kernel)
 
-        return self._merge(blurred, alpha)
+        return self._unpremultiply(blurred, orig_alpha, preserve)

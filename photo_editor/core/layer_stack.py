@@ -77,6 +77,67 @@ class LayerStack:
 
     # ---- Group / reparent ---------------------------------------------------
 
+    @staticmethod
+    def _content_bounds(layer: Layer, stack: "LayerStack") -> tuple[float, float, float, float] | None:
+        """Return (min_x, min_y, max_x, max_y) for a layer's content, or None."""
+        if layer.layer_type == LayerType.GROUP:
+            min_x, min_y = float("inf"), float("inf")
+            max_x, max_y = float("-inf"), float("-inf")
+            found = False
+            for child in stack:
+                if child.parent_id != layer.id or not child.visible:
+                    continue
+                if child.layer_type in (LayerType.MASK, LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                cb = LayerStack._content_bounds(child, stack)
+                if cb is None:
+                    continue
+                cx0, cy0, cx1, cy1 = cb
+                min_x = min(min_x, cx0)
+                min_y = min(min_y, cy0)
+                max_x = max(max_x, cx1)
+                max_y = max(max_y, cy1)
+                found = True
+            return (min_x, min_y, max_x, max_y) if found else None
+        try:
+            lx, ly = layer.position
+            return (float(lx), float(ly), float(lx + layer.width), float(ly + layer.height))
+        except (AttributeError, TypeError):
+            return None
+
+    def update_group_bbox(self, group: Layer, *, recurse_to_parents: bool = True) -> bool:
+        """Update a group's position, width, height to fit its content.
+
+        Returns True if the group was updated. If recurse_to_parents is True,
+        also updates any parent groups.
+        """
+        if group.layer_type != LayerType.GROUP:
+            return False
+        bounds = self._content_bounds(group, self)
+        if bounds is None:
+            # Empty group: keep current or use minimal size
+            group.position = (0, 0)
+            group.width = max(1, group.width)
+            group.height = max(1, group.height)
+            updated = True
+        else:
+            min_x, min_y, max_x, max_y = bounds
+            w = max(1, int(max_x - min_x))
+            h = max(1, int(max_y - min_y))
+            if (group.position != (int(min_x), int(min_y))
+                    or group.width != w or group.height != h):
+                group.position = (int(min_x), int(min_y))
+                group.width = w
+                group.height = h
+                updated = True
+            else:
+                updated = False
+        if updated and recurse_to_parents and group.parent_id:
+            parent = self.get(group.parent_id)
+            if parent is not None and parent.layer_type == LayerType.GROUP:
+                self.update_group_bbox(parent, recurse_to_parents=True)
+        return updated
+
     def reparent(self, layer_ids: list[str], new_parent_id: str | None) -> None:
         """Move *layer_ids* into the group identified by *new_parent_id*.
 
@@ -86,12 +147,14 @@ class LayerStack:
         stack when un-parenting.
         """
         new_parent = self.get(new_parent_id) if new_parent_id else None
+        affected_old_parent_ids: set[str] = set()
         for lid in layer_ids:
             layer = self.get(lid)
             if layer is None or lid == new_parent_id:
                 continue
             # Remove from old parent's children / mask_layers list
             if layer.parent_id:
+                affected_old_parent_ids.add(layer.parent_id)
                 old_parent = self.get(layer.parent_id)
                 if old_parent:
                     if lid in old_parent.children:
@@ -125,9 +188,17 @@ class LayerStack:
                     break
             for j, layer in enumerate(moved):
                 self._layers.insert(group_idx + j, layer)
+            new_parent = self.get(new_parent_id)
+            if new_parent and new_parent.layer_type == LayerType.GROUP:
+                self.update_group_bbox(new_parent)
         else:
             # Un-parenting: append at the end (top of the stack).
             self._layers.extend(moved)
+            # Update old parent groups that lost children
+            for old_pid in affected_old_parent_ids:
+                old_parent = self.get(old_pid)
+                if old_parent and old_parent.layer_type == LayerType.GROUP:
+                    self.update_group_bbox(old_parent)
 
     def create_group_from(self, layer_ids: list[str], group_name: str = "Group") -> "Layer | None":
         """Create a new group layer containing *layer_ids*."""
@@ -167,6 +238,7 @@ class LayerStack:
             group.children.append(lid)
 
         self._active_index = self._layers.index(group)
+        self.update_group_bbox(group)
         return group
 
     def reorder_by_ids(self, ordered_ids: list[str]) -> None:

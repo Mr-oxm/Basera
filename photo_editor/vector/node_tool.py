@@ -20,6 +20,9 @@ import math
 import time
 from typing import TYPE_CHECKING
 
+from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+
 from ..tools.tool_base import Tool
 from ..core.enums import LayerType
 
@@ -57,6 +60,11 @@ class NodeTool(Tool):
         self._marquee_active: bool = False
         # Multi-node move: track all selected nodes' original positions
         self._moving_nodes: list[tuple[VectorObject, int, int, Vec2]] = []
+        # Segment drag state
+        self._seg_drag: bool = False
+        self._seg_drag_si: int = -1
+        self._seg_drag_seg_idx: int = -1
+        self._seg_drag_t: float = 0.5
         # Tolerances (screen pixels)
         self.node_tolerance: float = 8.0
         self.handle_tolerance: float = 7.0
@@ -83,16 +91,36 @@ class NodeTool(Tool):
         self._marquee_current = None
         self._marquee_active = False
         self._moving_nodes.clear()
+        self._seg_drag = False
 
         vl = self._get_vector_layer(doc)
         if vl is None:
             return
 
         # 1. Try hitting a handle on selected objects (handles have priority)
+        alt_held = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
         for obj in vl.selected_objects():
             hit = self._hit_test_handles(obj, pos)
             if hit is not None:
                 si, ni, comp = hit
+                # Alt+click on a handle → delete that single handle
+                if alt_held:
+                    doc.save_snapshot("Node: delete handle")
+                    obj.detach_shape()
+                    sp = obj.effective_path().sub_paths[si]
+                    node = sp.nodes[ni]
+                    if comp == "in_handle":
+                        node.in_handle = None
+                    elif comp == "out_handle":
+                        node.out_handle = None
+                    # If both handles are now gone, revert to SHARP
+                    if node.in_handle is None and node.out_handle is None:
+                        node.mode = HandleMode.SHARP
+                    sp.invalidate()
+                    obj.effective_path().invalidate()
+                    obj.invalidate()
+                    self._rasterize_to_layer(doc)
+                    return
                 self._hit_object = obj
                 self._hit_subpath_idx = si
                 self._hit_node_idx = ni
@@ -100,6 +128,7 @@ class NodeTool(Tool):
                 return
 
         # 2. Try hitting a node on selected objects
+        shift_held = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
         for obj in vl.selected_objects():
             hit = self._hit_test_nodes(obj, pos)
             if hit is not None:
@@ -109,9 +138,32 @@ class NodeTool(Tool):
                 self._hit_node_idx = ni
                 self._hit_component = "position"
                 node = obj.effective_path().sub_paths[si].nodes[ni]
-                node.selected = True
+                if shift_held:
+                    # Toggle node selection with Shift
+                    node.selected = not node.selected
+                else:
+                    # Without Shift: if node is already selected, keep multi-selection
+                    # for dragging. If not selected, select only this one.
+                    if not node.selected:
+                        self._deselect_all_nodes(vl)
+                        node.selected = True
                 # Collect all selected nodes for multi-drag
                 self._collect_selected_nodes(vl)
+                return
+
+        # 2b. Try hitting a path segment on selected objects (for dragging curves)
+        for obj in vl.selected_objects():
+            seg_hit = self._hit_test_segment(obj, pos)
+            if seg_hit is not None:
+                si, seg_idx, t = seg_hit
+                self._hit_object = obj
+                self._hit_subpath_idx = si
+                self._hit_node_idx = -1
+                self._hit_component = "segment"
+                self._seg_drag = True
+                self._seg_drag_si = si
+                self._seg_drag_seg_idx = seg_idx
+                self._seg_drag_t = t
                 return
 
         # 3. Try hitting any unselected object's node
@@ -136,9 +188,15 @@ class NodeTool(Tool):
         hit_obj = vl.hit_test(pos, self.stroke_tolerance)
         if hit_obj is not None:
             if not hit_obj.selected:
-                vl.deselect_all()
-                self._deselect_all_nodes(vl)
+                if not shift_held:
+                    vl.deselect_all()
+                    self._deselect_all_nodes(vl)
                 hit_obj.selected = True
+            else:
+                # Clicked on already-selected object body: deselect nodes
+                # so we move the whole object, unless Shift is held
+                if not shift_held:
+                    self._deselect_all_nodes(vl)
             self._hit_object = hit_obj
             self._hit_subpath_idx = -1
             self._hit_node_idx = -1
@@ -164,6 +222,69 @@ class NodeTool(Tool):
         dist = pos.distance_to(self._drag_start)
         if dist > 3.0:
             self._dragging = True
+
+        # Segment drag — reshape curve between two nodes
+        if (self._seg_drag and self._hit_object is not None
+                and self._hit_component == "segment" and self._dragging):
+            if not self._snapshot_taken:
+                doc.save_snapshot("Node: reshape segment")
+                self._snapshot_taken = True
+            self._hit_object.detach_shape()
+            sp = self._hit_object.effective_path().sub_paths[self._seg_drag_si]
+            seg_idx = self._seg_drag_seg_idx
+            n = len(sp.nodes)
+            # Identify the two nodes bounding this segment
+            n0 = sp.nodes[seg_idx]
+            if seg_idx + 1 < n:
+                n1 = sp.nodes[seg_idx + 1]
+            elif sp.closed:
+                n1 = sp.nodes[0]
+            else:
+                self._seg_drag = False
+                return
+
+            try:
+                inv = self._hit_object.transform.inverse()
+                local_pt = inv.apply(pos)
+                local_start = inv.apply(self._drag_start)
+            except ValueError:
+                local_pt = pos
+                local_start = self._drag_start
+
+            delta = local_pt - local_start
+            t = self._seg_drag_t
+
+            # Ensure the relevant handles exist for this segment.
+            # n0 only needs out_handle (controls curve going forward),
+            # n1 only needs in_handle (controls curve coming in).
+            # We do NOT create both handles — a node can have one sharp
+            # side and one smooth side.
+            if n0.out_handle is None:
+                direction = self._compute_auto_handle_dir(sp, seg_idx)
+                dist = self._auto_handle_length(sp, seg_idx)
+                n0.out_handle = n0.position + direction * dist
+            ni1 = (seg_idx + 1) % n
+            if n1.in_handle is None:
+                direction = self._compute_auto_handle_dir(sp, ni1)
+                dist = self._auto_handle_length(sp, ni1)
+                n1.in_handle = n1.position - direction * dist
+
+            # Move the relevant handles to reshape the segment
+            # Weight the movement by t: at t=0.5, both handles move equally
+            w0 = 1.0 - t  # weight for out_handle of n0
+            w1 = t         # weight for in_handle of n1
+            scale_factor = 1.5  # amplify for responsiveness
+            if n0.out_handle is not None:
+                n0.set_out_handle(n0.out_handle + delta * (w0 * scale_factor))
+            if n1.in_handle is not None:
+                n1.set_in_handle(n1.in_handle + delta * (w1 * scale_factor))
+
+            self._drag_start = pos  # incremental delta
+            sp.invalidate()
+            self._hit_object.effective_path().invalidate()
+            self._hit_object.invalidate()
+            self._throttled_rasterize(doc)
+            return
 
         # Body drag — move entire object
         if self._body_drag and self._hit_object is not None and self._dragging:
@@ -358,6 +479,131 @@ class NodeTool(Tool):
         if changed:
             self._rasterize_to_layer(doc)
 
+    @staticmethod
+    def _compute_auto_handle_dir(sp: SubPath, ni: int) -> Vec2:
+        """Compute a natural handle direction based on neighboring nodes.
+        
+        Returns a normalized direction vector from the previous node
+        toward the next node. Falls back to Vec2(1,0) if no neighbors.
+        """
+        nodes = sp.nodes
+        n = len(nodes)
+        prev_pos = None
+        next_pos = None
+        
+        if ni > 0:
+            prev_pos = nodes[ni - 1].position
+        elif sp.closed and n >= 3:
+            prev_pos = nodes[-1].position
+            
+        if ni < n - 1:
+            next_pos = nodes[ni + 1].position
+        elif sp.closed and n >= 3:
+            next_pos = nodes[0].position
+        
+        node_pos = nodes[ni].position
+        
+        if prev_pos is not None and next_pos is not None:
+            direction = (next_pos - prev_pos).normalized()
+            if direction.length_sq() < 1e-9:
+                direction = Vec2(1.0, 0.0)
+            return direction
+        elif next_pos is not None:
+            direction = (next_pos - node_pos).normalized()
+            if direction.length_sq() < 1e-9:
+                direction = Vec2(1.0, 0.0)
+            return direction
+        elif prev_pos is not None:
+            direction = (node_pos - prev_pos).normalized()
+            if direction.length_sq() < 1e-9:
+                direction = Vec2(1.0, 0.0)
+            return direction
+        
+        return Vec2(1.0, 0.0)
+
+    def set_node_mode(self, doc: "Document", mode: HandleMode) -> None:
+        """Set handle mode on all selected nodes to the given mode."""
+        vl = self._get_vector_layer(doc)
+        if vl is None:
+            return
+
+        changed = False
+        for obj in vl.selected_objects():
+            obj.detach_shape()
+            path = obj.effective_path()
+            obj_changed = False
+            for sp in path.sub_paths:
+                sp_changed = False
+                for ni, node in enumerate(sp.nodes):
+                    if node.selected and node.mode != mode:
+                        if not changed:
+                            doc.save_snapshot(f"Node: set {mode.name.lower()}")
+                            changed = True
+                        node.mode = mode
+                        if mode == HandleMode.SHARP:
+                            # Remove handles to make straight line segments
+                            node.in_handle = None
+                            node.out_handle = None
+                        elif mode == HandleMode.SMOOTH:
+                            if node.out_handle and node.in_handle:
+                                # Existing handles: enforce collinearity
+                                direction = (node.out_handle - node.position).normalized()
+                                in_len = node.in_handle.distance_to(node.position)
+                                node.in_handle = node.position - direction * in_len
+                            else:
+                                # Create handles along neighbor direction
+                                direction = self._compute_auto_handle_dir(sp, ni)
+                                dist = self._auto_handle_length(sp, ni)
+                                node.out_handle = node.position + direction * dist
+                                node.in_handle = node.position - direction * dist
+                        elif mode == HandleMode.SYMMETRIC:
+                            if node.out_handle:
+                                offset = node.out_handle - node.position
+                                node.in_handle = node.position - offset
+                            elif node.in_handle:
+                                offset = node.in_handle - node.position
+                                node.out_handle = node.position - offset
+                            else:
+                                # Create handles along neighbor direction
+                                direction = self._compute_auto_handle_dir(sp, ni)
+                                dist = self._auto_handle_length(sp, ni)
+                                node.out_handle = node.position + direction * dist
+                                node.in_handle = node.position - direction * dist
+                        sp_changed = True
+                        obj_changed = True
+                if sp_changed:
+                    sp.invalidate()
+            if obj_changed:
+                path.invalidate()
+                obj.invalidate()
+
+        if changed:
+            self._rasterize_to_layer(doc)
+
+    @staticmethod
+    def _auto_handle_length(sp: SubPath, ni: int) -> float:
+        """Compute a sensible default handle length (~1/3 of avg neighbor distance)."""
+        nodes = sp.nodes
+        n = len(nodes)
+        total = 0.0
+        count = 0
+        pos = nodes[ni].position
+        if ni > 0:
+            total += pos.distance_to(nodes[ni - 1].position)
+            count += 1
+        elif sp.closed and n >= 3:
+            total += pos.distance_to(nodes[-1].position)
+            count += 1
+        if ni < n - 1:
+            total += pos.distance_to(nodes[ni + 1].position)
+            count += 1
+        elif sp.closed and n >= 3:
+            total += pos.distance_to(nodes[0].position)
+            count += 1
+        if count == 0:
+            return 20.0
+        return max(5.0, (total / count) * 0.33)
+
     def insert_node_on_segment(self, doc: "Document", x: int, y: int) -> None:
         """Insert a node at the point on the path nearest to (x, y)."""
         pos = Vec2(float(x), float(y))
@@ -498,6 +744,23 @@ class NodeTool(Tool):
                     return (si, ni)
         return None
 
+    def _hit_test_segment(self, obj: VectorObject, pos: Vec2) -> tuple[int, int, float] | None:
+        """Test if click is on a path segment. Returns (si, seg_idx, t) or None."""
+        try:
+            inv = obj.transform.inverse()
+        except ValueError:
+            return None
+        local_pt = inv.apply(pos)
+        tol = self.stroke_tolerance * 2.0
+        path = obj.effective_path()
+        for si, sp in enumerate(path.sub_paths):
+            for seg_idx, curve in enumerate(sp.iter_curves()):
+                t, nearest = curve.nearest_point(local_pt)
+                d = local_pt.distance_to(nearest)
+                if d < tol:
+                    return (si, seg_idx, max(0.1, min(0.9, t)))
+        return None
+
     def _collect_selected_nodes(self, vl: VectorLayer) -> None:
         """Collect all selected nodes across all selected objects for multi-drag."""
         self._moving_nodes.clear()
@@ -582,3 +845,34 @@ class NodeTool(Tool):
     @property
     def is_body_dragging(self) -> bool:
         return self._body_drag and self._dragging
+
+    def selected_nodes_bbox(self, doc: "Document") -> tuple[float, float, float, float] | None:
+        """Return bounding box (x, y, w, h) in doc coords for all selected nodes.
+
+        Returns None if fewer than 2 nodes are selected.
+        """
+        vl = self._get_vector_layer(doc)
+        if vl is None:
+            return None
+
+        min_x = float("inf")
+        min_y = float("inf")
+        max_x = float("-inf")
+        max_y = float("-inf")
+        count = 0
+
+        for obj in vl.selected_objects():
+            path = obj.effective_path()
+            for sp in path.sub_paths:
+                for node in sp.nodes:
+                    if node.selected:
+                        pt = obj.transform.apply(node.position)
+                        min_x = min(min_x, pt.x)
+                        min_y = min(min_y, pt.y)
+                        max_x = max(max_x, pt.x)
+                        max_y = max(max_y, pt.y)
+                        count += 1
+
+        if count < 2:
+            return None
+        return (min_x, min_y, max_x - min_x, max_y - min_y)

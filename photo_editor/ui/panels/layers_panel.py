@@ -365,38 +365,57 @@ def _thumb_checker(size: int = _THUMB_SIZE) -> QPixmap:
     return _THUMB_CHECKER
 
 
+def _pixels_to_thumbnail_pixmap(px: np.ndarray, size: int = _THUMB_SIZE) -> QPixmap:
+    """Convert float32 RGBA pixels to a centered thumbnail QPixmap on checkerboard."""
+    pm = QPixmap(_thumb_checker(size))
+    if px is None or px.size == 0:
+        return pm
+    h, w = px.shape[:2]
+    if h > size * 4 or w > size * 4:
+        step_h = max(1, h // (size * 2))
+        step_w = max(1, w // (size * 2))
+        px = px[::step_h, ::step_w]
+        h, w = px.shape[:2]
+    buf = np.empty((h, w, 4), dtype=np.uint8)
+    np.multiply(px[:, :, 2:3], 255, out=buf[:, :, 0:1], casting='unsafe')
+    np.multiply(px[:, :, 1:2], 255, out=buf[:, :, 1:2], casting='unsafe')
+    np.multiply(px[:, :, 0:1], 255, out=buf[:, :, 2:3], casting='unsafe')
+    np.multiply(px[:, :, 3:4], 255, out=buf[:, :, 3:4], casting='unsafe')
+    np.clip(buf, 0, 255, out=buf)
+    img = QImage(buf.data, w, h, w * 4, QImage.Format.Format_ARGB32)
+    scaled = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.FastTransformation)
+    tp = QPainter(pm)
+    ox = (size - scaled.width()) // 2
+    oy = (size - scaled.height()) // 2
+    tp.drawImage(ox, oy, scaled)
+    tp.end()
+    return pm
+
+
 def _make_thumbnail(layer, size: int = _THUMB_SIZE) -> QPixmap:
     """Generate a small QPixmap thumbnail for *layer*."""
-    pm = QPixmap(_thumb_checker(size))  # copy pre-built checkerboard
-
-    # Paint the layer pixels scaled into the square
+    pm = QPixmap(_thumb_checker(size))
     try:
-        px = layer.pixels  # float32, (H, W, 4)
+        px = layer.pixels
         if px is not None and px.size > 0:
-            h, w = px.shape[:2]
-            # Downsample before conversion for large layers
-            if h > size * 4 or w > size * 4:
-                step_h = max(1, h // (size * 2))
-                step_w = max(1, w // (size * 2))
-                px = px[::step_h, ::step_w]
-                h, w = px.shape[:2]
-            buf = np.empty((h, w, 4), dtype=np.uint8)
-            np.multiply(px[:, :, 2:3], 255, out=buf[:, :, 0:1], casting='unsafe')  # B
-            np.multiply(px[:, :, 1:2], 255, out=buf[:, :, 1:2], casting='unsafe')  # G
-            np.multiply(px[:, :, 0:1], 255, out=buf[:, :, 2:3], casting='unsafe')  # R
-            np.multiply(px[:, :, 3:4], 255, out=buf[:, :, 3:4], casting='unsafe')  # A
-            np.clip(buf, 0, 255, out=buf)
-            img = QImage(buf.data, w, h, w * 4, QImage.Format.Format_ARGB32)
-            scaled = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.FastTransformation)
-            tp = QPainter(pm)
-            ox = (size - scaled.width()) // 2
-            oy = (size - scaled.height()) // 2
-            tp.drawImage(ox, oy, scaled)
-            tp.end()
+            pm = _pixels_to_thumbnail_pixmap(px, size)
     except Exception:
         pass
+    return pm
 
+
+def _make_group_thumbnail(document: Document, group, size: int = _THUMB_SIZE) -> QPixmap:
+    """Generate a thumbnail for a group layer by compositing its children."""
+    pm = QPixmap(_thumb_checker(size))
+    try:
+        from ...engine.compositor import Compositor
+        compositor = Compositor()
+        px = compositor.composite_group_tight(group, document.layers)
+        if px is not None and px.size > 0:
+            pm = _pixels_to_thumbnail_pixmap(px, size)
+    except Exception:
+        pass
     return pm
 
 
@@ -1279,8 +1298,11 @@ class LayersPanel(QWidget):
             item.setSizeHint(QSize(0, _ROW_HEIGHT))
 
             thumbnail = None
-            if thumbnails and not is_group and not is_adjustment and not is_filter and not is_text:
-                thumbnail = _make_thumbnail(layer)
+            if thumbnails and not is_adjustment and not is_filter and not is_text:
+                if is_group:
+                    thumbnail = _make_group_thumbnail(document, layer)
+                else:
+                    thumbnail = _make_thumbnail(layer)
 
             widget = _LayerItemWidget(
                 layer.id, layer.name, layer.visible, layer.locked,

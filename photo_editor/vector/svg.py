@@ -564,10 +564,37 @@ def export_svg(
         '<?xml version="1.0" encoding="UTF-8"?>',
         f'<svg xmlns="{_SVG_NS}" width="{width}" height="{height}" viewBox="{vb}">',
     ]
+
+    # Collect filter definitions from objects and emit a <defs> block
+    filter_defs: list[str] = []
+    filter_id_map: dict[int, str] = {}  # id(obj) -> filter_id string
+    filt_counter = 0
     for obj in objects:
         if not obj.visible:
             continue
-        lines.append(_object_to_svg(obj))
+        svg_filt = getattr(obj, "svg_filter", None)
+        if svg_filt and svg_filt.get("type") == "gaussian_blur":
+            filt_counter += 1
+            fid = f"filter{filt_counter}"
+            filter_id_map[id(obj)] = fid
+            std_dev = svg_filt.get("std_deviation", 0.0)
+            preserve = svg_filt.get("preserve_alpha", True)
+            preserve_attr = f' preserveAlpha="{str(preserve).lower()}"'
+            filter_defs.append(
+                f'    <filter id="{fid}">'
+                f'<feGaussianBlur stdDeviation="{std_dev:.2f}"{preserve_attr}/>'
+                f'</filter>'
+            )
+
+    if filter_defs:
+        lines.append("  <defs>")
+        lines.extend(filter_defs)
+        lines.append("  </defs>")
+
+    for obj in objects:
+        if not obj.visible:
+            continue
+        lines.append(_object_to_svg(obj, filter_id_map))
     lines.append("</svg>")
     return "\n".join(lines)
 
@@ -583,12 +610,19 @@ def export_svg_to_file(
         f.write(svg)
 
 
-def _object_to_svg(obj: VectorObject) -> str:
+def _object_to_svg(
+    obj: VectorObject,
+    filter_id_map: dict[int, str] | None = None,
+) -> str:
     """Convert a single VectorObject to an SVG element."""
     path = obj.transformed_path()
     d = path_to_svg_d(path)
     style_parts = _style_to_svg_attrs(obj.style)
-    attrs = f'd="{d}" {style_parts}'
+    filter_attr = ""
+    if filter_id_map and id(obj) in filter_id_map:
+        fid = filter_id_map[id(obj)]
+        filter_attr = f' filter="url(#{fid})"'
+    attrs = f'd="{d}" {style_parts}{filter_attr}'
     return f'  <path {attrs}/>'
 
 
@@ -656,10 +690,27 @@ def import_svg(filepath: str) -> SVGNode:
     defs = _collect_defs(root)
     filters = _collect_filters(root)
     css_rules = _parse_css_rules(root)
-    return _import_element_recursive(
+    node = _import_element_recursive(
         root, root_xf, parent_style=None,
         defs=defs, filters=filters, css_rules=css_rules,
     )
+    return _unwrap_redundant_root(node)
+
+
+def _unwrap_redundant_root(node: SVGNode) -> SVGNode:
+    """Remove an extra group wrapper when the root has exactly one child group.
+    
+    Typical SVG structure: <svg><g>...</g></svg> produces root(svg)->group(g)->leaves.
+    We unwrap so the effective root is the inner group, avoiding a redundant parent.
+    """
+    if not isinstance(node, SVGGroup):
+        return node
+    if len(node.children) != 1:
+        return node
+    child = node.children[0]
+    if not isinstance(child, SVGGroup):
+        return node
+    return child
 
 
 def import_svg_string(svg_text: str) -> SVGNode:
@@ -669,10 +720,11 @@ def import_svg_string(svg_text: str) -> SVGNode:
     defs = _collect_defs(root)
     filters = _collect_filters(root)
     css_rules = _parse_css_rules(root)
-    return _import_element_recursive(
+    node = _import_element_recursive(
         root, root_xf, parent_style=None,
         defs=defs, filters=filters, css_rules=css_rules,
     )
+    return _unwrap_redundant_root(node)
 
 
 def _parse_css_rules(root: ET.Element) -> dict[str, dict[str, str]]:
@@ -745,7 +797,14 @@ def _collect_filters(root: ET.Element) -> dict[str, dict]:
                         sigma = float(parts[0]) if parts else 0.0
                     except ValueError:
                         sigma = 0.0
-                    filters[id_] = {"type": "gaussian_blur", "std_deviation": sigma}
+                    # Parse preserveAlpha (custom or SVG2 attribute)
+                    pa_str = child.get("preserveAlpha", "false").strip().lower()
+                    preserve_alpha = pa_str in ("true", "1", "yes")
+                    filters[id_] = {
+                        "type": "gaussian_blur",
+                        "std_deviation": sigma,
+                        "preserve_alpha": preserve_alpha,
+                    }
                     break
                 # Add more filter types as needed: feBlend, feColorMatrix, etc.
     
