@@ -82,6 +82,9 @@ class MainWindow(QMainWindow):
         self._panel_refresh_timer.setSingleShot(True)
         self._panel_refresh_timer.timeout.connect(self._do_deferred_panel_refresh)
         self._panel_refresh_pending = False
+        
+        # Track whether text editing is active to manage conflicting shortcuts
+        self._text_editing_active = False
 
         self._shortcut_mgr = ShortcutManager.instance()
 
@@ -2503,6 +2506,9 @@ class MainWindow(QMainWindow):
         """Sync the text editing overlay state to the canvas."""
         tool = self._tools.active_tool
         if tool is None or self._tools.active_type != ToolType.TEXT:
+            if self._text_editing_active:
+                self._text_editing_active = False
+                self._update_text_editing_shortcuts(False)
             self._canvas.set_text_editing(False)
             self._canvas.set_text_box(None)
             self._canvas.set_text_draw_rect(None)
@@ -2510,6 +2516,9 @@ class MainWindow(QMainWindow):
 
         # Drawing preview
         if tool.is_drawing:
+            if self._text_editing_active:
+                self._text_editing_active = False
+                self._update_text_editing_shortcuts(False)
             self._canvas.set_text_editing(False)
             self._canvas.set_text_box(None)
             self._canvas.set_text_draw_rect(tool.draw_rect)
@@ -2517,8 +2526,14 @@ class MainWindow(QMainWindow):
 
         self._canvas.set_text_draw_rect(None)
 
+        # Update persistent text editing state
+        is_editing = (tool.is_editing and tool.text_data is not None)
+        if self._text_editing_active != is_editing:
+            self._text_editing_active = is_editing
+            self._update_text_editing_shortcuts(is_editing)
+
         # Editing mode
-        if tool.is_editing and tool.text_data is not None:
+        if is_editing:
             td = tool.text_data
             self._canvas.set_text_editing(True)
             box = tool.editing_box()
@@ -2595,6 +2610,12 @@ class MainWindow(QMainWindow):
         tool = self._tools.active_tool
         if tool is not None and hasattr(tool, "commit_editing"):
             tool.commit_editing(self._doc)
+        
+        # Re-enable shortcuts
+        if self._text_editing_active:
+            self._text_editing_active = False
+            self._update_text_editing_shortcuts(False)
+
         self._canvas.set_text_editing(False)
         self._canvas.set_text_box(None)
         self._canvas.set_text_draw_rect(None)
@@ -3027,6 +3048,29 @@ class MainWindow(QMainWindow):
             sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
             sc.activated.connect(self._shortcut_toggle_fullscreen)
             self._active_shortcuts.append(sc)
+
+    def _update_text_editing_shortcuts(self, editing: bool) -> None:
+        """Disable single-key shortcuts during text editing to prevent conflicts."""
+        if not hasattr(self, "_active_shortcuts"):
+            return
+
+        for sc in self._active_shortcuts:
+            if not editing:
+                sc.setEnabled(True)
+                continue
+
+            # If editing, disable shortcuts that don't have Ctrl/Alt/Meta
+            # (i.e. disable simple typing keys like 'V', 'T', 'Shift+U', 'Delete')
+            seq_str = sc.key().toString(QKeySequence.SequenceFormat.PortableText)
+            
+            # We consider a shortcut "safe" (non-conflicting with typing) if it require modifiers
+            # that are not typically used for character input (Ctrl, Alt, Meta).
+            # Shift IS used for typing (uppercase), so Shift-only shortcuts are unsafe.
+            is_safe = ("Ctrl+" in seq_str or 
+                       "Alt+" in seq_str or 
+                       "Meta+" in seq_str)
+            
+            sc.setEnabled(is_safe)
 
     # ---- Shortcut callbacks -------------------------------------------------
 
