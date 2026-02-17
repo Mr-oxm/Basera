@@ -178,8 +178,9 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourname/photo-editor.git
-cd photo-editor
+git clone https://github.com/Mr-oxm/PhotoEditor
+
+cd PhotoEditor
 
 # Create environment and install dependencies
 uv sync
