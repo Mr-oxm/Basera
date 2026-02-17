@@ -52,6 +52,7 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ### Still Not Working
 - Brush engine pressure sensitivity (partial support)
+- Refatored Logic
 
 ---
 
