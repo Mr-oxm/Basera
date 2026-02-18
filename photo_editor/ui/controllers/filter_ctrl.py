@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ...commands import UpdateEffectCommand
 from ...core.enums import LayerType
 from ..filter_runner import _adj_map, _filter_name_map, _filter_map, run_adjustment, run_filter
 
@@ -13,7 +14,7 @@ class FilterController:
         self._mw = None
 
     def preview_render(self) -> None:
-        """Re-render the canvas for a live filter/adjustment preview."""
+        """Re-render the canvas for a live filter/adjustment preview (async)."""
         mw = self._mw
         if not mw._doc:
             return
@@ -22,8 +23,7 @@ class FilterController:
             mw._pipeline.invalidate(active.id)
         else:
             mw._pipeline.invalidate()
-        result = mw._pipeline.execute_to_uint8(mw._doc)
-        mw._canvas.set_image(result, force=True)
+        mw._schedule_render()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu signals."""
@@ -88,18 +88,14 @@ class FilterController:
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            mw._pipeline.invalidate()
-            result = mw._pipeline.execute_to_uint8(mw._doc)
-            mw._canvas.set_image(result, force=True)
+            mw._schedule_render()
 
         dlg.params_changed.connect(_on_preview)
         _on_preview(current_params)
 
         old_params = dict(current_params)
         if dlg.exec():
-            layer.adjustment_params = dlg.get_params()
-            mw._doc.save_snapshot(f"Edit {adj.name}")
-            mw._refresh()
+            mw.execute_command(UpdateEffectCommand(layer.id, dlg.get_params()))
         else:
             layer.adjustment_params = old_params
             mw._pipeline.invalidate()
@@ -151,18 +147,14 @@ class FilterController:
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
-            mw._pipeline.invalidate()
-            result = mw._pipeline.execute_to_uint8(mw._doc)
-            mw._canvas.set_image(result, force=True)
+            mw._schedule_render()
 
         dlg.params_changed.connect(_on_preview)
         _on_preview(current_params)
 
         old_params = dict(current_params)
         if dlg.exec():
-            layer.adjustment_params = dlg.get_params()
-            mw._doc.save_snapshot(f"Edit {filt.name}")
-            mw._refresh()
+            mw.execute_command(UpdateEffectCommand(layer.id, dlg.get_params()))
         else:
             layer.adjustment_params = old_params
             mw._pipeline.invalidate()

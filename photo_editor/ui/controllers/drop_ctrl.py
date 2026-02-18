@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QMessageBox
 
+from ...commands import PlaceImageCommand
 from ...core.document import Document
 from ...utils.image_io import load_image
 
@@ -32,12 +33,15 @@ class DropController:
             try:
                 img = load_image(path)
                 if mw._doc:
-                    mw._doc.place_image(img, name=Path(path).stem)
+                    mw.execute_command(PlaceImageCommand(img, name=Path(path).stem))
                 else:
                     h, w = img.shape[:2]
                     mw._doc = Document(w, h, name=Path(path).stem)
                     mw._doc.layers[0].pixels = img
-                mw._refresh()
+                    mw._doc.save_snapshot("Open Image")
+                    mw._open_docs.append((mw._doc, path))
+                    mw._file_tabs.add_tab(Path(path).name, tooltip=path)
+                    mw._refresh()
                 mw._canvas.zoom_to_fit()
             except Exception as exc:
                 QMessageBox.warning(mw, "Error", str(exc))
