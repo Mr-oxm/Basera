@@ -1,0 +1,627 @@
+"""Main LayersPanel — dockable panel for managing the layer stack."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidgetItem,
+    QMenu,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ....core.document import Document
+from ....core.enums import BlendMode, LayerType
+
+from .base import (
+    BG,
+    BG_HEADER,
+    BORDER,
+    BTN_HOVER,
+    ICON_ACTIVE,
+    ROLE_INDENT,
+    ROLE_IS_ADJ_FILTER,
+    ROLE_IS_GROUP,
+    ROLE_IS_MASK,
+    ROLE_IS_SEP,
+    ROLE_LAYER_ID,
+    ROLE_PARENT_ID,
+    ROW_HEIGHT,
+    SEP_HEIGHT,
+    SEL_PURPLE,
+    TEXT,
+    TEXT_DIM,
+    h_separator,
+    toolbar_btn,
+)
+from .blend_combo import BlendModeCombo
+from .icons import icon_lock, ico_adjustment, ico_filter, ico_folder, ico_fx, ico_grid
+from .icons import ico_mask, ico_new_layer, ico_settings, ico_trash, ico_duplicate
+from .layer_item import LayerItemWidget
+from .layer_list import LayerListWidget
+from .thumbnails import make_group_thumbnail, make_thumbnail
+
+
+class LayersPanel(QWidget):
+    """Dockable panel for managing the layer stack."""
+
+    layer_selected = Signal(int)
+    visibility_toggled = Signal(str)
+    lock_toggled = Signal(str)
+    opacity_changed = Signal(float)
+    blend_mode_changed = Signal(BlendMode)
+    blend_mode_hovered = Signal(object)
+    blend_mode_hover_ended = Signal()
+    add_requested = Signal()
+    delete_requested = Signal()
+    duplicate_requested = Signal()
+    group_requested = Signal()
+    mask_requested = Signal()
+    merge_down_requested = Signal()
+    flatten_requested = Signal()
+    rename_requested = Signal(str, str)
+    styles_requested = Signal()
+    adjustment_layer_requested = Signal(str)
+    edit_adjustment_requested = Signal(str)
+    filter_layer_requested = Signal(str)
+    edit_filter_requested = Signal(str)
+    layers_reordered = Signal(list, int)
+    layers_reparented = Signal(list, str)
+    layers_unparented = Signal(list)
+    mask_dropped_on_layer = Signal(str, str)
+    adj_filter_dropped_on_layer = Signal(str, str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._doc: Document | None = None
+        self._refreshing = False
+        self._row_layer_ids: list[str] = []
+        self._collapsed_groups: set[str] = set()
+        self._collapsed_masks: set[str] = set()
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        self.setStyleSheet(f"background-color: {BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        header = QWidget()
+        header.setStyleSheet(f"background-color: {BG_HEADER};")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(6, 4, 6, 4)
+        header_layout.setSpacing(4)
+
+        r1 = QHBoxLayout()
+        r1.setSpacing(4)
+
+        opacity_lbl = QLabel("Opacity:")
+        opacity_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        r1.addWidget(opacity_lbl)
+
+        self._opacity_spin = QSpinBox()
+        self._opacity_spin.setRange(0, 100)
+        self._opacity_spin.setValue(100)
+        self._opacity_spin.setSuffix(" %")
+        self._opacity_spin.setFixedWidth(52)
+        self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._opacity_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background: {BG}; color: {TEXT}; border: 1px solid {BORDER};
+                border-radius: 3px; padding: 2px 4px; font-size: 11px;
+            }}
+        """)
+        self._opacity_spin.valueChanged.connect(self._on_opacity_changed)
+        r1.addWidget(self._opacity_spin)
+
+        self._blend_combo = BlendModeCombo()
+        self._blend_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {BG}; color: {TEXT}; border: 1px solid {BORDER};
+                border-radius: 3px; padding: 2px 4px; font-size: 11px;
+                min-width: 70px;
+            }}
+            QComboBox::drop-down {{ border: none; width: 14px; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_HEADER}; color: {TEXT};
+                selection-background-color: {SEL_PURPLE};
+            }}
+        """)
+        for mode in BlendMode:
+            self._blend_combo.addItem(mode.name.replace("_", " ").title(), mode)
+        self._blend_combo.currentIndexChanged.connect(self._on_blend_changed)
+        self._blend_combo.hover_preview.connect(self.blend_mode_hovered.emit)
+        self._blend_combo.hover_ended.connect(self.blend_mode_hover_ended.emit)
+        r1.addWidget(self._blend_combo, 1)
+
+        self._settings_btn = QPushButton()
+        self._settings_btn.setIcon(ico_settings())
+        self._settings_btn.setIconSize(QSize(16, 16))
+        self._settings_btn.setFixedSize(22, 22)
+        self._settings_btn.setFlat(True)
+        self._settings_btn.setToolTip("Layer options")
+        self._settings_btn.setStyleSheet("background: transparent; border: none;")
+        r1.addWidget(self._settings_btn)
+
+        self._lock_btn = QPushButton()
+        self._lock_btn.setIcon(icon_lock(False))
+        self._lock_btn.setIconSize(QSize(16, 16))
+        self._lock_btn.setFixedSize(22, 22)
+        self._lock_btn.setFlat(True)
+        self._lock_btn.setToolTip("Toggle lock")
+        self._lock_btn.setStyleSheet("background: transparent; border: none;")
+        self._lock_btn.clicked.connect(self._on_header_lock_clicked)
+        r1.addWidget(self._lock_btn)
+
+        header_layout.addLayout(r1)
+
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setRange(0, 100)
+        self._opacity_slider.setValue(100)
+        self._opacity_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                background: {BORDER}; height: 3px; border-radius: 1px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {ICON_ACTIVE}; width: 10px; height: 10px;
+                margin: -4px 0; border-radius: 5px;
+            }}
+            QSlider::handle:horizontal:hover {{ background: #ffffff; }}
+        """)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
+        header_layout.addWidget(self._opacity_slider)
+
+        root.addWidget(header)
+        root.addWidget(h_separator())
+
+        self._list = LayerListWidget()
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._list.currentRowChanged.connect(self._on_row_changed)
+        self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self._list.layers_reordered.connect(self.layers_reordered.emit)
+        self._list.layers_dropped_in_group.connect(self.layers_reparented.emit)
+        self._list.layers_unparented.connect(self.layers_unparented.emit)
+        self._list.mask_dropped_on_layer.connect(self.mask_dropped_on_layer.emit)
+        self._list.adj_filter_dropped_on_layer.connect(self.adj_filter_dropped_on_layer.emit)
+        self._list.delete_key_pressed.connect(self.delete_requested.emit)
+        root.addWidget(self._list, 1)
+
+        root.addWidget(h_separator())
+
+        toolbar = QWidget()
+        toolbar.setStyleSheet(f"background-color: {BG_HEADER};")
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(4, 3, 4, 3)
+        tb_layout.setSpacing(1)
+
+        tb_layout.addWidget(toolbar_btn(ico_new_layer(), "New layer", self.add_requested))
+        tb_layout.addWidget(toolbar_btn(ico_fx(), "Layer styles", self.styles_requested))
+        tb_layout.addWidget(toolbar_btn(ico_mask(), "Add mask", self.mask_requested))
+
+        self._adj_btn = QPushButton()
+        self._adj_btn.setIcon(ico_adjustment())
+        self._adj_btn.setIconSize(QSize(16, 16))
+        self._adj_btn.setFixedSize(24, 24)
+        self._adj_btn.setFlat(True)
+        self._adj_btn.setToolTip("Add adjustment layer")
+        self._adj_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background: {BTN_HOVER};
+            }}
+        """)
+        self._adj_menu = QMenu(self)
+        self._adj_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {BG_HEADER}; color: {TEXT};
+                border: 1px solid {BORDER}; padding: 4px 0;
+            }}
+            QMenu::item {{ padding: 4px 20px; }}
+            QMenu::item:selected {{ background: {SEL_PURPLE}; }}
+        """)
+        _ADJ_NAMES = [
+            "Brightness/Contrast", "Levels", "Curves", "Exposure",
+            "Vibrance", "Hue/Saturation", "Color Balance", "Black & White",
+            "Photo Filter", "Gradient Map", "Selective Color", "Channel Mixer",
+            "Invert", "Posterize", "Threshold",
+        ]
+        for adj_name in _ADJ_NAMES:
+            action = self._adj_menu.addAction(adj_name)
+            action.triggered.connect(
+                lambda checked, n=adj_name: self.adjustment_layer_requested.emit(n),
+            )
+        self._adj_btn.clicked.connect(self._show_adj_menu)
+        tb_layout.addWidget(self._adj_btn)
+
+        self._filt_btn = QPushButton()
+        self._filt_btn.setIcon(ico_filter())
+        self._filt_btn.setIconSize(QSize(16, 16))
+        self._filt_btn.setFixedSize(24, 24)
+        self._filt_btn.setFlat(True)
+        self._filt_btn.setToolTip("Add filter layer")
+        self._filt_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; border-radius: 3px;
+            }}
+            QPushButton:hover {{ background: {BTN_HOVER}; }}
+        """)
+        self._filt_menu = QMenu(self)
+        self._filt_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {BG_HEADER}; color: {TEXT};
+                border: 1px solid {BORDER}; padding: 4px 0;
+            }}
+            QMenu::item {{ padding: 4px 20px; }}
+            QMenu::item:selected {{ background: {SEL_PURPLE}; }}
+        """)
+        _FILTER_CATEGORIES = [
+            ("Blur", ["Gaussian Blur", "Motion Blur", "Radial Blur", "Surface Blur", "Lens Blur"]),
+            ("Sharpen", ["Sharpen", "Unsharp Mask", "Smart Sharpen"]),
+            ("Noise", ["Add Noise", "Reduce Noise", "Dust & Scratches", "Median"]),
+            ("Distort", ["Ripple", "Wave", "Twirl", "Pinch", "Perspective"]),
+            ("Stylize", ["Emboss", "Find Edges", "Solarize", "Oil Paint"]),
+            ("Render", ["Clouds", "Difference Clouds", "Lighting Effects"]),
+        ]
+        for cat_name, filters in _FILTER_CATEGORIES:
+            sub = self._filt_menu.addMenu(cat_name)
+            sub.setStyleSheet(self._filt_menu.styleSheet())
+            for fname in filters:
+                action = sub.addAction(fname)
+                action.triggered.connect(
+                    lambda checked, n=fname: self.filter_layer_requested.emit(n),
+                )
+        self._filt_btn.clicked.connect(self._show_filt_menu)
+        tb_layout.addWidget(self._filt_btn)
+
+        tb_layout.addStretch()
+
+        tb_layout.addWidget(toolbar_btn(ico_folder(), "New group", self.group_requested))
+        tb_layout.addWidget(toolbar_btn(ico_duplicate(), "Duplicate layer", self.duplicate_requested))
+        tb_layout.addWidget(toolbar_btn(ico_grid(), "Flatten image", self.flatten_requested))
+        tb_layout.addWidget(toolbar_btn(ico_trash(), "Delete layer", self.delete_requested))
+
+        root.addWidget(toolbar)
+
+    def refresh(self, document: Document, *, thumbnails: bool = True) -> None:
+        self._doc = document
+        self._refreshing = True
+
+        display_order = self._build_display_order(document, self._collapsed_groups, self._collapsed_masks)
+        new_ids: list[str] = []
+        for entry in display_order:
+            if len(entry) == 3:
+                new_ids.append("__sep__")
+            else:
+                new_ids.append(entry[0].id)
+        structure_changed = (new_ids != self._row_layer_ids)
+
+        if not structure_changed and not thumbnails:
+            self._sync_row_states(document)
+            self._sync_active(document)
+            self._refreshing = False
+            return
+
+        self._list.clear()
+        self._row_layer_ids = []
+
+        for entry in display_order:
+            if len(entry) == 3:
+                _, indent, _ = entry
+                item = QListWidgetItem()
+                item.setData(ROLE_LAYER_ID, "__sep__")
+                item.setData(ROLE_IS_SEP, True)
+                item.setSizeHint(QSize(0, SEP_HEIGHT))
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+
+                sep_widget = QWidget()
+                sep_layout = QHBoxLayout(sep_widget)
+                left_margin = 4 + indent * 16
+                sep_layout.setContentsMargins(left_margin, 0, 4, 0)
+                sep_layout.setSpacing(0)
+                line = QFrame()
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setStyleSheet(f"color: {BORDER};")
+                line.setFixedHeight(1)
+                sep_layout.addWidget(line)
+                sep_widget.setStyleSheet("background: transparent;")
+
+                self._list.addItem(item)
+                self._list.setItemWidget(item, sep_widget)
+                self._row_layer_ids.append("__sep__")
+                continue
+
+            layer, indent = entry
+            is_group = layer.layer_type == LayerType.GROUP
+            is_adjustment = layer.layer_type == LayerType.ADJUSTMENT
+            is_filter = layer.layer_type == LayerType.FILTER
+            is_text = layer.layer_type == LayerType.TEXT
+            is_mask_layer = layer.layer_type == LayerType.MASK
+            has_mask = layer.mask is not None or bool(layer.mask_layers)
+            has_adj_children = any(
+                cl.parent_id == layer.id
+                and cl.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+                for cl in document.layers
+            )
+            has_mask_children = any(
+                cl.parent_id == layer.id
+                and cl.layer_type == LayerType.MASK
+                for cl in document.layers
+            )
+            has_children = has_mask or has_mask_children or has_adj_children
+            is_collapsed = layer.id in self._collapsed_groups
+
+            item = QListWidgetItem()
+            item.setData(ROLE_LAYER_ID, layer.id)
+            item.setData(ROLE_IS_GROUP, is_group)
+            item.setData(ROLE_INDENT, indent)
+            item.setData(ROLE_PARENT_ID, layer.parent_id or "")
+            item.setData(ROLE_IS_MASK, is_mask_layer)
+            item.setData(ROLE_IS_ADJ_FILTER, is_adjustment or is_filter)
+            item.setSizeHint(QSize(0, ROW_HEIGHT))
+
+            thumbnail = None
+            if thumbnails and not is_adjustment and not is_filter and not is_text:
+                if is_group:
+                    thumbnail = make_group_thumbnail(document, layer)
+                else:
+                    thumbnail = make_thumbnail(layer)
+
+            widget = LayerItemWidget(
+                layer.id, layer.name, layer.visible, layer.locked,
+                indent=indent, is_group=is_group, is_collapsed=is_collapsed,
+                has_mask=has_mask, has_children=has_children,
+                masks_collapsed=(layer.id in self._collapsed_masks),
+                thumbnail=thumbnail,
+                is_adjustment=is_adjustment, is_filter=is_filter,
+                is_text=is_text, is_mask_layer=is_mask_layer,
+            )
+            widget.visibility_clicked.connect(self.visibility_toggled.emit)
+            widget.lock_clicked.connect(self.lock_toggled.emit)
+            widget.rename_finished.connect(self.rename_requested.emit)
+            if is_group:
+                widget.collapse_clicked.connect(self._on_collapse_toggled)
+            elif has_children:
+                widget.collapse_clicked.connect(self._on_mask_collapse_toggled)
+
+            self._list.addItem(item)
+            self._list.setItemWidget(item, widget)
+            self._row_layer_ids.append(layer.id)
+
+        self._sync_active(document)
+        self._refreshing = False
+
+    def _sync_row_states(self, document: Document) -> None:
+        layers_by_id = {layer.id: layer for layer in document.layers}
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if not item:
+                continue
+            lid = item.data(ROLE_LAYER_ID)
+            layer = layers_by_id.get(lid)
+            if not layer:
+                continue
+            widget = self._list.itemWidget(item)
+            if isinstance(widget, LayerItemWidget):
+                widget.update_state(layer.visible, layer.locked)
+
+    def refresh_controls_only(self, document: Document) -> None:
+        self._doc = document
+        self._refreshing = True
+        self._sync_active(document)
+        self._refreshing = False
+
+    def _sync_active(self, document: Document) -> None:
+        from .icons import icon_lock
+
+        active = document.layers.active_layer
+        if active:
+            for row in range(self._list.count()):
+                it = self._list.item(row)
+                if it and it.data(ROLE_LAYER_ID) == active.id:
+                    self._list.setCurrentRow(row)
+                    break
+
+            op_val = int(active.opacity * 100)
+            self._opacity_spin.blockSignals(True)
+            self._opacity_spin.setValue(op_val)
+            self._opacity_spin.blockSignals(False)
+            self._opacity_slider.blockSignals(True)
+            self._opacity_slider.setValue(op_val)
+            self._opacity_slider.blockSignals(False)
+            blend_idx = self._blend_combo.findData(active.blend_mode)
+            if blend_idx >= 0:
+                self._blend_combo.blockSignals(True)
+                self._blend_combo.setCurrentIndex(blend_idx)
+                self._blend_combo.blockSignals(False)
+            self._lock_btn.setIcon(icon_lock(active.locked))
+
+    def selected_layer_ids(self) -> list[str]:
+        ids: list[str] = []
+        for item in self._list.selectedItems():
+            lid = item.data(ROLE_LAYER_ID)
+            if lid:
+                ids.append(lid)
+        return ids
+
+    def row_layer_ids(self) -> list[str]:
+        return list(self._row_layer_ids)
+
+    @staticmethod
+    def _build_display_order(
+        document: Document, collapsed: set[str],
+        masks_collapsed: set[str] | None = None,
+    ) -> list[tuple]:
+        if masks_collapsed is None:
+            masks_collapsed = set()
+        layers = list(document.layers)
+        children_of: dict[str, list] = {}
+        mask_children_of: dict[str, list] = {}
+        adj_children_of: dict[str, list] = {}
+        for layer in layers:
+            if layer.parent_id:
+                if layer.layer_type == LayerType.MASK:
+                    mask_children_of.setdefault(layer.parent_id, []).append(layer)
+                elif layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    adj_children_of.setdefault(layer.parent_id, []).append(layer)
+                else:
+                    children_of.setdefault(layer.parent_id, []).append(layer)
+
+        def _emit_children(lid, indent, result, is_group, group_collapsed):
+            has_masks = lid in mask_children_of
+            has_adj = lid in adj_children_of
+            has_raster = is_group and lid in children_of
+            masks_hidden = lid in masks_collapsed
+
+            if is_group and group_collapsed:
+                return
+
+            if has_masks and not masks_hidden:
+                for child in reversed(mask_children_of[lid]):
+                    result.append((child, indent))
+
+            if has_masks and has_adj and not masks_hidden:
+                result.append((None, indent, "sep"))
+
+            if has_adj and not masks_hidden:
+                for child in reversed(adj_children_of[lid]):
+                    result.append((child, indent))
+
+            if has_raster and not group_collapsed:
+                if (has_masks or has_adj) and not masks_hidden:
+                    result.append((None, indent, "sep"))
+                for child in reversed(children_of[lid]):
+                    result.append((child, indent))
+                    child_is_group = child.layer_type == LayerType.GROUP
+                    child_collapsed = child_is_group and child.id in collapsed
+                    _emit_children(child.id, indent + 1, result,
+                                   is_group=child_is_group, group_collapsed=child_collapsed)
+
+        result: list[tuple] = []
+        for layer in reversed(layers):
+            if layer.parent_id is not None:
+                continue
+            is_group = layer.layer_type == LayerType.GROUP
+            result.append((layer, 0))
+            group_collapsed = is_group and layer.id in collapsed
+            _emit_children(layer.id, 1, result, is_group, group_collapsed)
+        return result
+
+    def _show_adj_menu(self) -> None:
+        pos = self._adj_btn.mapToGlobal(self._adj_btn.rect().topLeft())
+        pos.setY(pos.y() - self._adj_menu.sizeHint().height())
+        self._adj_menu.exec(pos)
+
+    def _show_filt_menu(self) -> None:
+        pos = self._filt_btn.mapToGlobal(self._filt_btn.rect().topLeft())
+        pos.setY(pos.y() - self._filt_menu.sizeHint().height())
+        self._filt_menu.exec(pos)
+
+    def _on_collapse_toggled(self, group_id: str) -> None:
+        if group_id in self._collapsed_groups:
+            self._collapsed_groups.discard(group_id)
+        else:
+            self._collapsed_groups.add(group_id)
+        if self._doc:
+            self.refresh(self._doc)
+
+    def _on_mask_collapse_toggled(self, layer_id: str) -> None:
+        if layer_id in self._collapsed_masks:
+            self._collapsed_masks.discard(layer_id)
+        else:
+            self._collapsed_masks.add(layer_id)
+        if self._doc:
+            self.refresh(self._doc)
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        layer_id = item.data(ROLE_LAYER_ID)
+        if self._doc and layer_id:
+            layer = self._doc.layers.get(layer_id)
+            if layer and layer.layer_type == LayerType.ADJUSTMENT:
+                self.edit_adjustment_requested.emit(layer_id)
+                return
+            if layer and layer.layer_type == LayerType.FILTER:
+                self.edit_filter_requested.emit(layer_id)
+                return
+        widget = self._list.itemWidget(item)
+        if isinstance(widget, LayerItemWidget):
+            widget.start_rename()
+
+    def _on_row_changed(self, row: int) -> None:
+        if self._refreshing or row < 0 or not self._doc:
+            return
+        if 0 <= row < len(self._row_layer_ids):
+            lid = self._row_layer_ids[row]
+            for i, layer in enumerate(self._doc.layers):
+                if layer.id == lid:
+                    self.layer_selected.emit(i)
+                    break
+        layer = self._layer_for_row(row)
+        if layer:
+            op_val = int(layer.opacity * 100)
+            self._opacity_spin.blockSignals(True)
+            self._opacity_spin.setValue(op_val)
+            self._opacity_spin.blockSignals(False)
+            self._opacity_slider.blockSignals(True)
+            self._opacity_slider.setValue(op_val)
+            self._opacity_slider.blockSignals(False)
+            blend_idx = self._blend_combo.findData(layer.blend_mode)
+            if blend_idx >= 0:
+                self._blend_combo.blockSignals(True)
+                self._blend_combo.setCurrentIndex(blend_idx)
+                self._blend_combo.blockSignals(False)
+            from .icons import icon_lock
+            self._lock_btn.setIcon(icon_lock(layer.locked))
+
+    def _layer_for_row(self, row: int):
+        if not self._doc or row < 0 or row >= len(self._row_layer_ids):
+            return None
+        lid = self._row_layer_ids[row]
+        return self._doc.layers.get(lid)
+
+    def _on_opacity_changed(self, value: int) -> None:
+        if self._refreshing:
+            return
+        self._opacity_slider.blockSignals(True)
+        self._opacity_slider.setValue(value)
+        self._opacity_slider.blockSignals(False)
+        self.opacity_changed.emit(value / 100.0)
+
+    def _on_opacity_slider_changed(self, value: int) -> None:
+        if self._refreshing:
+            return
+        self._opacity_spin.blockSignals(True)
+        self._opacity_spin.setValue(value)
+        self._opacity_spin.blockSignals(False)
+        self.opacity_changed.emit(value / 100.0)
+
+    def _on_header_lock_clicked(self) -> None:
+        item = self._list.currentItem()
+        if item:
+            layer_id = item.data(ROLE_LAYER_ID)
+            if layer_id:
+                self.lock_toggled.emit(layer_id)
+
+    def _on_blend_changed(self, idx: int) -> None:
+        if self._refreshing:
+            return
+        mode = self._blend_combo.itemData(idx)
+        if mode is not None:
+            self.blend_mode_changed.emit(mode)
+
+    def toggle_visibility_for_selected(self) -> None:
+        item = self._list.currentItem()
+        if item:
+            layer_id = item.data(ROLE_LAYER_ID)
+            if layer_id:
+                self.visibility_toggled.emit(layer_id)
