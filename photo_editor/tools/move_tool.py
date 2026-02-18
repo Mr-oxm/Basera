@@ -633,7 +633,6 @@ class MoveTool(Tool):
                 
         # --- Vector Layer Commit ---
         if self._active_layer is not None and self._mode != _Mode.NONE:
-            from ..core.enums import LayerType
             if self._active_layer.layer_type == LayerType.SHAPE:
                 vl = getattr(self._active_layer, "_vector_data", None)
                 if vl:

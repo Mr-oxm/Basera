@@ -13,7 +13,7 @@ import math
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QCursor, QImage, QKeyEvent, QLinearGradient, QMouseEvent,
+    QColor, QCursor, QImage, QKeyEvent, QMouseEvent,
     QPainter, QPainterPath, QPen, QPixmap, QWheelEvent,
 )
 from PySide6.QtWidgets import QApplication, QWidget
@@ -25,161 +25,16 @@ except ImportError:
     _BASE_CLASS = QWidget
 
 from ..core.enums import ToolType
-
-# Pre-built checkerboard tile (fast)
-_CHECKER_SIZE = 16
-_CHECKER_TILE: QPixmap | None = None
-
-# Custom gradient cursor (built lazily)
-_GRADIENT_CURSOR: QCursor | None = None
-
-
-def _make_gradient_cursor() -> QCursor:
-    """Build a crosshair cursor with a tiny gradient swatch indicator."""
-    size = 32
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    cx, cy = size // 2, size // 2
-
-    # Outer thin crosshair (black shadow)
-    pen = QPen(QColor(0, 0, 0, 160), 1.4)
-    pen.setCosmetic(True)
-    p.setPen(pen)
-    gap = 4
-    arm = 10
-    p.drawLine(cx, cy - arm, cx, cy - gap)
-    p.drawLine(cx, cy + gap, cx, cy + arm)
-    p.drawLine(cx - arm, cy, cx - gap, cy)
-    p.drawLine(cx + gap, cy, cx + arm, cy)
-
-    # Inner white crosshair
-    pen2 = QPen(QColor(255, 255, 255, 230), 1.0)
-    pen2.setCosmetic(True)
-    p.setPen(pen2)
-    p.drawLine(cx, cy - arm, cx, cy - gap)
-    p.drawLine(cx, cy + gap, cx, cy + arm)
-    p.drawLine(cx - arm, cy, cx - gap, cy)
-    p.drawLine(cx + gap, cy, cx + arm, cy)
-
-    # Small gradient rectangle at bottom-right
-    gx, gy, gw, gh = cx + 3, cy + 3, 9, 7
-    grad = QLinearGradient(gx, gy, gx + gw, gy)
-    grad.setColorAt(0.0, QColor(0, 0, 0))
-    grad.setColorAt(1.0, QColor(255, 255, 255))
-    p.setPen(QPen(QColor(160, 160, 160), 0.8))
-    p.setBrush(grad)
-    p.drawRoundedRect(gx, gy, gw, gh, 1.5, 1.5)
-
-    p.end()
-    return QCursor(pm, cx, cy)
-
-
-def _gradient_cursor() -> QCursor:
-    global _GRADIENT_CURSOR
-    if _GRADIENT_CURSOR is None:
-        _GRADIENT_CURSOR = _make_gradient_cursor()
-    return _GRADIENT_CURSOR
-
-
-def _checker_tile() -> QPixmap:
-    global _CHECKER_TILE
-    if _CHECKER_TILE is None:
-        s = _CHECKER_SIZE
-        _CHECKER_TILE = QPixmap(s * 2, s * 2)
-        p = QPainter(_CHECKER_TILE)
-        p.fillRect(0, 0, s * 2, s * 2, QColor(204, 204, 204))
-        p.fillRect(0, 0, s, s, Qt.GlobalColor.white)
-        p.fillRect(s, s, s, s, Qt.GlobalColor.white)
-        p.end()
-    return _CHECKER_TILE
-
-
-# Cursor shapes per tool type
-_CURSORS: dict[ToolType, Qt.CursorShape] = {
-    ToolType.BRUSH: Qt.CursorShape.CrossCursor,
-    ToolType.ERASER: Qt.CursorShape.CrossCursor,
-    ToolType.CLONE_STAMP: Qt.CursorShape.CrossCursor,
-    ToolType.HEALING_BRUSH: Qt.CursorShape.CrossCursor,
-    ToolType.GRADIENT: None,  # handled separately with custom pixmap cursor
-    ToolType.PAINT_BUCKET: Qt.CursorShape.CrossCursor,
-    ToolType.RECT_SELECT: Qt.CursorShape.CrossCursor,
-    ToolType.ELLIPSE_SELECT: Qt.CursorShape.CrossCursor,
-    ToolType.LASSO: Qt.CursorShape.CrossCursor,
-    ToolType.MAGIC_WAND: Qt.CursorShape.CrossCursor,
-    ToolType.TEXT: Qt.CursorShape.IBeamCursor,
-    ToolType.SHAPE: Qt.CursorShape.CrossCursor,
-    ToolType.TRANSFORM: Qt.CursorShape.SizeAllCursor,
-    ToolType.MOVE: Qt.CursorShape.SizeAllCursor,
-    ToolType.ZOOM: Qt.CursorShape.PointingHandCursor,
-    ToolType.PAN: Qt.CursorShape.OpenHandCursor,
-    ToolType.EYEDROPPER: Qt.CursorShape.CrossCursor,
-    ToolType.CROP: Qt.CursorShape.CrossCursor,
-    ToolType.PEN: Qt.CursorShape.CrossCursor,
-    ToolType.NODE: Qt.CursorShape.ArrowCursor,
-    ToolType.VECTOR_SHAPE: Qt.CursorShape.CrossCursor,
-}
-
-# Cursor shapes for bounding-box handles
-_HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
-    "TL": Qt.CursorShape.SizeFDiagCursor,
-    "TR": Qt.CursorShape.SizeBDiagCursor,
-    "BL": Qt.CursorShape.SizeBDiagCursor,
-    "BR": Qt.CursorShape.SizeFDiagCursor,
-    "T": Qt.CursorShape.SizeVerCursor,
-    "B": Qt.CursorShape.SizeVerCursor,
-    "L": Qt.CursorShape.SizeHorCursor,
-    "R": Qt.CursorShape.SizeHorCursor,
-}
-
-_HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
-
-# Rotation cursor: a small circular-arrow icon built from scratch
-_ROTATE_CURSOR_CACHE: QCursor | None = None
-
-def _build_rotate_cursor() -> QCursor:
-    """Build a custom rotation cursor (circular arrow)."""
-    global _ROTATE_CURSOR_CACHE
-    if _ROTATE_CURSOR_CACHE is not None:
-        return _ROTATE_CURSOR_CACHE
-    size = 24
-    pm = QPixmap(size, size)
-    pm.fill(QColor(0, 0, 0, 0))
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    # Draw a circular arc arrow
-    center = size / 2
-    radius = 8.0
-    # Arc
-    pen = QPen(QColor(0, 0, 0), 2.5)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    p.setPen(pen)
-    from PySide6.QtCore import QRectF as _QRectF
-    arc_rect = _QRectF(center - radius, center - radius, radius * 2, radius * 2)
-    p.drawArc(arc_rect, 30 * 16, 270 * 16)  # 270 degree arc
-    # White inner arc for contrast
-    pen2 = QPen(QColor(255, 255, 255), 1.2)
-    pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
-    p.setPen(pen2)
-    p.drawArc(arc_rect, 30 * 16, 270 * 16)
-    # Arrowhead at the end of the arc
-    import math as _math
-    end_angle = _math.radians(30)
-    ex = center + radius * _math.cos(end_angle)
-    ey = center - radius * _math.sin(end_angle)
-    p.setPen(QPen(QColor(0, 0, 0), 2.5))
-    p.setBrush(QColor(0, 0, 0))
-    from PySide6.QtGui import QPolygonF as _QPolyF
-    arrow = _QPolyF()
-    arrow.append(QPointF(ex, ey))
-    arrow.append(QPointF(ex + 4, ey - 3))
-    arrow.append(QPointF(ex + 1, ey + 4))
-    p.drawPolygon(arrow)
-    p.end()
-    _ROTATE_CURSOR_CACHE = QCursor(pm, size // 2, size // 2)
-    return _ROTATE_CURSOR_CACHE
-
+from .canvas.canvas_cursors import (
+    CURSORS,
+    HANDLE_CURSORS,
+    HANDLE_HIT,
+    build_rotate_cursor,
+    checker_tile,
+    gradient_cursor,
+)
+from .canvas.canvas_overlays import CanvasOverlays
+from .canvas.canvas_input import CanvasInputHandler
 
 
 class CanvasView(_BASE_CLASS):
@@ -283,6 +138,9 @@ class CanvasView(_BASE_CLASS):
         self._doc_ref = None          # Document | None
         self._tool_manager_ref = None  # ToolManager | None
 
+        self._overlays = CanvasOverlays(self)
+        self._input_handler = CanvasInputHandler(self)
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(200, 200)
@@ -357,9 +215,9 @@ class CanvasView(_BASE_CLASS):
     def set_tool_cursor(self, tool_type: ToolType) -> None:
         self._current_tool_type = tool_type
         if tool_type == ToolType.GRADIENT:
-            self.setCursor(_gradient_cursor())
+            self.setCursor(gradient_cursor())
             return
-        shape = _CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
+        shape = CURSORS.get(tool_type, Qt.CursorShape.ArrowCursor)
         self.setCursor(QCursor(shape))
 
     # ---- Crop bounding box overlay API ------------------------------------
@@ -572,7 +430,7 @@ class CanvasView(_BASE_CLASS):
         # Checkerboard — single hardware-accelerated tiled draw
         p.save()
         p.setClipRect(dr.toAlignedRect())
-        p.drawTiledPixmap(dr.toAlignedRect(), _checker_tile())
+        p.drawTiledPixmap(dr.toAlignedRect(), checker_tile())
         p.restore()
 
         # Document image
@@ -580,7 +438,7 @@ class CanvasView(_BASE_CLASS):
 
         # Selection overlay — marching ants
         if self._sel_contours:
-            self._draw_marching_ants(p, dr)
+            self._overlays.draw_marching_ants(p, dr)
 
         # Selection drag rectangle / ellipse
         if self._drag_rect is not None:
@@ -615,221 +473,49 @@ class CanvasView(_BASE_CLASS):
 
         # Transform bounding box with handles
         if self._transform_box is not None:
-            self._draw_transform_box(p, dr)
+            self._overlays.draw_transform_box(p, dr)
 
         # Text editing overlays
         if self._text_draw_rect is not None:
-            self._draw_text_draw_rect(p, dr)
+            self._overlays.draw_text_draw_rect(p, dr)
         if self._text_box is not None:
-            self._draw_text_box(p, dr)
+            self._overlays.draw_text_box(p, dr)
         if self._text_selection_rects:
-            self._draw_text_selection(p, dr)
+            self._overlays.draw_text_selection(p, dr)
         if self._text_cursor_pos is not None and self._text_cursor_visible and self._text_editing:
-            self._draw_text_cursor(p, dr)
+            self._overlays.draw_text_cursor(p, dr)
 
         # Brush cursor preview circle
         if self._brush_size > 0 and self._brush_cursor_visible:
-            self._draw_brush_cursor(p)
+            self._overlays.draw_brush_cursor(p)
 
         # Clone / Heal source crosshair and live preview
         if (self._source_pos is not None
                 and self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
-            self._draw_source_overlay(p, dr)
+            self._overlays.draw_source_overlay(p, dr)
 
         # Crop bounding box with dimmed surround
         if self._crop_box is not None:
-            self._draw_crop_box(p, dr)
+            self._overlays.draw_crop_box(p, dr)
 
         # Gradient control line + stop handles
         if self._grad_handles_visible:
-            self._draw_gradient_handles(p, dr)
+            self._overlays.draw_gradient_handles(p, dr)
 
         # Guide lines overlay (including preview guide)
         if self._guide_lines or self._preview_guide is not None:
-            self._draw_guides(p, dr)
+            self._overlays.draw_guides(p, dr)
 
         # Vector object overlay (node handles, path outlines)
         if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
-            self._draw_vector_overlay(p, dr)
+            self._overlays.draw_vector_overlay(p, dr)
 
         p.end()
-
-    # ---- Marching ants (selection contour) -----------------------------------
-
-    def _draw_marching_ants(self, p: QPainter, dr: QRectF) -> None:
-        """Draw animated marching-ants contour from the selection mask."""
-        if not self._sel_contours or self._doc_w == 0 or self._doc_h == 0:
-            return
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-
-        # Background stroke (white) so ants are visible on any colour
-        bg_pen = QPen(QColor(255, 255, 255), 1.0, Qt.PenStyle.SolidLine)
-        bg_pen.setCosmetic(True)
-        p.setPen(bg_pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        for poly in self._sel_contours:
-            mapped = self._map_polygon_to_screen(poly, dr, sx, sy)
-            p.drawPolyline(mapped)
-
-        # Foreground stroke (black dashes) animated
-        fg_pen = QPen(QColor(0, 0, 0), 1.0, Qt.PenStyle.DashLine)
-        fg_pen.setCosmetic(True)
-        fg_pen.setDashOffset(float(self._march_offset))
-        p.setPen(fg_pen)
-        for poly in self._sel_contours:
-            mapped = self._map_polygon_to_screen(poly, dr, sx, sy)
-            p.drawPolyline(mapped)
-
-        p.restore()
-
-    def _map_polygon_to_screen(self, poly, dr: QRectF,
-                                sx: float, sy: float):
-        """Map a QPolygonF from document coords to screen coords."""
-        from PySide6.QtGui import QPolygonF
-        pts = []
-        for i in range(poly.count()):
-            pt = poly.at(i)
-            pts.append(QPointF(dr.left() + pt.x() * sx,
-                               dr.top() + pt.y() * sy))
-        return QPolygonF(pts)
-
-    # ---- Crop box drawing ----------------------------------------------------
-
-    def _draw_crop_box(self, p: QPainter, dr: QRectF) -> None:
-        """Draw the crop bounding box with dimmed outside area and handles."""
-        if self._crop_box is None or self._doc_w == 0 or self._doc_h == 0:
-            return
-        x, y, w, h = self._crop_box
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-        crop_rect = QRectF(dr.left() + x * sx, dr.top() + y * sy, w * sx, h * sy)
-
-        p.save()
-
-        # -- Dim the area outside the crop region --
-        dim_path = QPainterPath()
-        dim_path.addRect(dr)
-        inner_path = QPainterPath()
-        inner_path.addRect(crop_rect)
-        dim_path = dim_path.subtracted(inner_path)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 140))
-        p.drawPath(dim_path)
-
-        # -- Crop rectangle outline --
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(220, 50, 50, 230), 1.5)
-        pen.setCosmetic(True)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(crop_rect)
-
-        # -- Rule-of-thirds grid lines --
-        pen_grid = QPen(QColor(220, 50, 50, 80), 1.0)
-        pen_grid.setCosmetic(True)
-        pen_grid.setStyle(Qt.PenStyle.DashLine)
-        p.setPen(pen_grid)
-        for i in (1, 2):
-            gx = crop_rect.left() + crop_rect.width() * i / 3
-            p.drawLine(QPointF(gx, crop_rect.top()), QPointF(gx, crop_rect.bottom()))
-            gy = crop_rect.top() + crop_rect.height() * i / 3
-            p.drawLine(QPointF(crop_rect.left(), gy), QPointF(crop_rect.right(), gy))
-
-        # -- Corner and edge handles --
-        hs = 7
-        handle_pts = [
-            (crop_rect.left(), crop_rect.top()),
-            (crop_rect.left() + crop_rect.width() / 2, crop_rect.top()),
-            (crop_rect.right(), crop_rect.top()),
-            (crop_rect.left(), crop_rect.top() + crop_rect.height() / 2),
-            (crop_rect.right(), crop_rect.top() + crop_rect.height() / 2),
-            (crop_rect.left(), crop_rect.bottom()),
-            (crop_rect.left() + crop_rect.width() / 2, crop_rect.bottom()),
-            (crop_rect.right(), crop_rect.bottom()),
-        ]
-        p.setPen(QPen(QColor(220, 50, 50, 230), 1))
-        p.setBrush(QColor(255, 255, 255))
-        for hx, hy in handle_pts:
-            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
-
-        p.restore()
-
-    # ---- Transform box -------------------------------------------------------
-
-    def _box_widget_rect(self, dr: QRectF) -> QRectF | None:
-        """Return the transform box rectangle in widget coordinates."""
-        if self._transform_box is None or self._doc_w == 0 or self._doc_h == 0:
-            return None
-        x, y, w, h = self._transform_box
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-        return QRectF(dr.left() + x * sx, dr.top() + y * sy, w * sx, h * sy)
-
-    def _handle_positions(self, br: QRectF) -> list[tuple[str, float, float]]:
-        """Return handle (name, cx, cy) in widget coordinates."""
-        x, y = br.x(), br.y()
-        w, h = br.width(), br.height()
-        return [
-            ("TL", x, y), ("T", x + w / 2, y), ("TR", x + w, y),
-            ("L", x, y + h / 2), ("R", x + w, y + h / 2),
-            ("BL", x, y + h), ("B", x + w / 2, y + h), ("BR", x + w, y + h),
-        ]
-
-    def _draw_transform_box(self, p: QPainter, dr: QRectF) -> None:
-        br = self._box_widget_rect(dr)
-        if br is None:
-            return
-
-        cx = br.x() + br.width() / 2
-        cy = br.y() + br.height() / 2
-        hw, hh = br.width() / 2, br.height() / 2
-
-        p.save()
-        p.translate(cx, cy)
-        if self._transform_angle != 0.0:
-            # QPainter rotates clockwise for positive angles;
-            # TransformEngine (cv2) rotates counter-clockwise for positive.
-            p.rotate(-self._transform_angle)
-
-        # Outer rectangle (centered at origin)
-        p.setPen(QPen(QColor(0, 150, 255), 1.5))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(QRectF(-hw, -hh, br.width(), br.height()))
-
-        # Rotation handle: line from top-center upward + circle node
-        rh_offset = 20.0   # screen-space offset above the box
-        rh_x, rh_y = 0, -hh - rh_offset
-        # Connecting line
-        p.setPen(QPen(QColor(0, 150, 255), 1.0))
-        p.drawLine(QPointF(0, -hh), QPointF(rh_x, rh_y))
-        # Rotation circle node
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.setPen(QPen(QColor(0, 150, 255), 1.5))
-        p.setBrush(QColor(255, 255, 255))
-        p.drawEllipse(QPointF(rh_x, rh_y), 5.0, 5.0)
-
-        # Handle squares
-        hs = 7
-        handle_pts = [
-            (-hw, -hh), (0, -hh), (hw, -hh),
-            (-hw, 0), (hw, 0),
-            (-hw, hh), (0, hh), (hw, hh),
-        ]
-        p.setPen(QPen(QColor(0, 150, 255), 1))
-        p.setBrush(QColor(255, 255, 255))
-        for hx, hy in handle_pts:
-            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
-
-        p.restore()
 
     def _update_transform_cursor(self, pos: QPointF) -> None:
         """Adjust cursor shape when hovering over the transform box / handles."""
         dr = self._doc_rect()
-        br = self._box_widget_rect(dr)
+        br = self._overlays.box_widget_rect(dr)
         if br is None:
             return
 
@@ -848,8 +534,8 @@ class CanvasView(_BASE_CLASS):
         # Rotation handle node (above top-center)
         rh_offset = 20.0
         rh_x, rh_y = 0, -hh - rh_offset
-        if abs(px - rh_x) <= _HANDLE_HIT and abs(py - rh_y) <= _HANDLE_HIT:
-            self.setCursor(QCursor(_build_rotate_cursor()))
+        if abs(px - rh_x) <= HANDLE_HIT and abs(py - rh_y) <= HANDLE_HIT:
+            self.setCursor(QCursor(build_rotate_cursor()))
             return
 
         # Hit-test against centered handle positions
@@ -859,240 +545,15 @@ class CanvasView(_BASE_CLASS):
             ("BL", -hw, hh), ("B", 0, hh), ("BR", hw, hh),
         ]
         for name, hx, hy in local_handles:
-            if abs(px - hx) <= _HANDLE_HIT and abs(py - hy) <= _HANDLE_HIT:
-                self.setCursor(QCursor(_HANDLE_CURSORS[name]))
+            if abs(px - hx) <= HANDLE_HIT and abs(py - hy) <= HANDLE_HIT:
+                self.setCursor(QCursor(HANDLE_CURSORS[name]))
                 return
 
         if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         else:
             # Outside the box = rotation zone
-            self.setCursor(_build_rotate_cursor())
-
-    # ---- Brush cursor drawing -----------------------------------------------
-
-    def _draw_brush_cursor(self, p: QPainter) -> None:
-        """Draw a live preview of the actual dab that will be applied."""
-        pos = self._brush_cursor_pos
-        radius_screen = (self._brush_size / 2) * self._zoom
-
-        # Don't draw if it's tiny (< 2px on screen) — crosshair suffices
-        if radius_screen < 1.5:
-            return
-
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-
-        dab_screen = radius_screen * 2  # full diameter on screen
-        target = QRectF(pos.x() - radius_screen, pos.y() - radius_screen,
-                        dab_screen, dab_screen)
-
-        # ---- Draw the actual dab preview ----
-        if self._dab_pixmap is not None:
-            p.drawPixmap(target.toAlignedRect(), self._dab_pixmap)
-
-        # ---- Outline ring (thin, clean) ----
-        pen_outer = QPen(QColor(0, 0, 0, 160), 1.0)
-        pen_outer.setCosmetic(True)
-        p.setPen(pen_outer)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(pos, radius_screen, radius_screen)
-
-        pen_inner = QPen(QColor(255, 255, 255, 180), 1.0)
-        pen_inner.setCosmetic(True)
-        pen_inner.setStyle(Qt.PenStyle.DashLine)
-        p.setPen(pen_inner)
-        p.drawEllipse(pos, radius_screen, radius_screen)
-
-        # Crosshair at center
-        ch = max(3.0, min(radius_screen * 0.12, 6.0))
-        p.setPen(QPen(QColor(255, 255, 255, 200), 1.0))
-        p.drawLine(QPointF(pos.x() - ch, pos.y()), QPointF(pos.x() + ch, pos.y()))
-        p.drawLine(QPointF(pos.x(), pos.y() - ch), QPointF(pos.x(), pos.y() + ch))
-
-        # ---- Live clone/heal preview (translucent source patch) ----
-        if self._clone_preview_pixmap is not None:
-            p.setOpacity(1.0)
-            p.drawPixmap(target.toAlignedRect(), self._clone_preview_pixmap)
-            p.setOpacity(1.0)
-
-        p.restore()
-
-    # ---- Clone / Heal source overlay drawing --------------------------------
-
-    def _draw_source_overlay(self, p: QPainter, dr: QRectF) -> None:
-        """Draw a crosshair at the clone/heal source position.
-
-        The source crosshair always tracks the cursor with the offset so the
-        user can see exactly which region will be sampled.
-        """
-        if self._source_pos is None or self._doc_w == 0 or self._doc_h == 0:
-            return
-
-        sx_scale = dr.width() / self._doc_w
-        sy_scale = dr.height() / self._doc_h
-
-        # Always compute source position relative to the current cursor
-        if self._source_offset is not None and self._brush_cursor_visible:
-            doc_pos = self._canvas_to_doc(self._brush_cursor_pos)
-            src_x = doc_pos[0] + self._source_offset[0]
-            src_y = doc_pos[1] + self._source_offset[1]
-        else:
-            src_x, src_y = self._source_pos
-
-        # Convert to widget coords
-        wx = dr.left() + src_x * sx_scale
-        wy = dr.top() + src_y * sy_scale
-
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        arm = 12.0
-        gap = 4.0
-
-        # Outer black crosshair
-        pen_outer = QPen(QColor(0, 0, 0, 200), 1.6)
-        pen_outer.setCosmetic(True)
-        p.setPen(pen_outer)
-        p.drawLine(QPointF(wx, wy - arm), QPointF(wx, wy - gap))
-        p.drawLine(QPointF(wx, wy + gap), QPointF(wx, wy + arm))
-        p.drawLine(QPointF(wx - arm, wy), QPointF(wx - gap, wy))
-        p.drawLine(QPointF(wx + arm, wy), QPointF(wx + gap, wy))
-
-        # Inner coloured crosshair (cyan for visibility)
-        pen_inner = QPen(QColor(0, 220, 255, 230), 1.0)
-        pen_inner.setCosmetic(True)
-        p.setPen(pen_inner)
-        p.drawLine(QPointF(wx, wy - arm), QPointF(wx, wy - gap))
-        p.drawLine(QPointF(wx, wy + gap), QPointF(wx, wy + arm))
-        p.drawLine(QPointF(wx - arm, wy), QPointF(wx - gap, wy))
-        p.drawLine(QPointF(wx + arm, wy), QPointF(wx + gap, wy))
-
-        # Small circle at center
-        p.setPen(QPen(QColor(0, 220, 255, 200), 1.0))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(QPointF(wx, wy), 3.0, 3.0)
-
-        # If brush size is known, also draw the source circle outline
-        if self._brush_size > 0:
-            src_radius = (self._brush_size / 2) * self._zoom
-            pen_src = QPen(QColor(0, 220, 255, 120), 1.0)
-            pen_src.setCosmetic(True)
-            pen_src.setStyle(Qt.PenStyle.DashLine)
-            p.setPen(pen_src)
-            p.drawEllipse(QPointF(wx, wy), src_radius, src_radius)
-
-        p.restore()
-
-    # ---- Gradient handle overlay drawing ------------------------------------
-
-    def _draw_gradient_handles(self, p: QPainter, dr: QRectF) -> None:
-        """Draw the gradient control line with coloured stop circles."""
-        if not self._grad_start or not self._grad_end:
-            return
-        if self._doc_w == 0 or self._doc_h == 0:
-            return
-
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-
-        s = QPointF(dr.left() + self._grad_start[0] * sx,
-                     dr.top() + self._grad_start[1] * sy)
-        e = QPointF(dr.left() + self._grad_end[0] * sx,
-                     dr.top() + self._grad_end[1] * sy)
-
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # ---- Control line (dark shadow + bright inner) ----
-        pen_shadow = QPen(QColor(0, 0, 0, 100), 3.0)
-        pen_shadow.setCosmetic(True)
-        p.setPen(pen_shadow)
-        p.drawLine(s, e)
-
-        pen_line = QPen(QColor(255, 255, 255, 200), 1.4)
-        pen_line.setCosmetic(True)
-        p.setPen(pen_line)
-        p.drawLine(s, e)
-
-        # ---- Intermediate stop circles (small) ----
-        for stop in self._grad_stops:
-            if stop.position <= 0.0 or stop.position >= 1.0:
-                continue
-            cx = s.x() + (e.x() - s.x()) * stop.position
-            cy = s.y() + (e.y() - s.y()) * stop.position
-            r, g, b, a = stop.color.to_rgb8()
-            p.setPen(QPen(QColor(255, 255, 255, 220), 1.4))
-            p.setBrush(QColor(r, g, b, a))
-            p.drawEllipse(QPointF(cx, cy), 5.0, 5.0)
-
-        # ---- Start endpoint handle ----
-        if self._grad_stops:
-            r0, g0, b0, a0 = self._grad_stops[0].color.to_rgb8()
-        else:
-            r0, g0, b0, a0 = 0, 0, 0, 255
-        # Shadow ring
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 50))
-        p.drawEllipse(s, 10.0, 10.0)
-        # Fill + border
-        p.setPen(QPen(QColor(255, 255, 255), 2.0))
-        p.setBrush(QColor(r0, g0, b0, a0))
-        p.drawEllipse(s, 8.0, 8.0)
-
-        # ---- End endpoint handle ----
-        if self._grad_stops:
-            r1, g1, b1, a1 = self._grad_stops[-1].color.to_rgb8()
-        else:
-            r1, g1, b1, a1 = 255, 255, 255, 255
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 50))
-        p.drawEllipse(e, 10.0, 10.0)
-        p.setPen(QPen(QColor(255, 255, 255), 2.0))
-        p.setBrush(QColor(r1, g1, b1, a1))
-        p.drawEllipse(e, 8.0, 8.0)
-
-        p.restore()
-
-    # ---- Guide lines overlay ------------------------------------------------
-
-    def _draw_guides(self, p: QPainter, dr: QRectF) -> None:
-        """Draw horizontal and vertical guide lines across the full canvas."""
-        all_guides = list(self._guide_lines)
-        preview = self._preview_guide
-        if not all_guides and preview is None:
-            return
-        if self._doc_w == 0 or self._doc_h == 0:
-            return
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-
-        guide_pen = QPen(QColor(74, 179, 255, 180), 1.0, Qt.PenStyle.DashLine)
-        guide_pen.setCosmetic(True)
-        preview_pen = QPen(QColor(74, 179, 255, 100), 1.0, Qt.PenStyle.DashLine)
-        preview_pen.setCosmetic(True)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-
-        def _draw_one(g, pen):
-            p.setPen(pen)
-            if g.orientation == Qt.Orientation.Vertical:
-                wx = dr.left() + g.position * sx
-                p.drawLine(QPointF(wx, 0), QPointF(wx, self.height()))
-            else:  # Horizontal
-                wy = dr.top() + g.position * sy
-                p.drawLine(QPointF(0, wy), QPointF(self.width(), wy))
-
-        for g in all_guides:
-            _draw_one(g, guide_pen)
-
-        if preview is not None:
-            _draw_one(preview, preview_pen)
-
-        p.restore()
+            self.setCursor(build_rotate_cursor())
 
     def _hit_test_guide(self, pos: QPointF):
         """Return the Guide object near *pos* (widget coords), or None."""
@@ -1113,8 +574,6 @@ class CanvasView(_BASE_CLASS):
                     return g
         return None
 
-    # ---- Vector overlay drawing ---------------------------------------------
-
     def set_document_ref(self, doc) -> None:
         """Store a reference to the active Document for overlay drawing."""
         self._doc_ref = doc
@@ -1123,506 +582,43 @@ class CanvasView(_BASE_CLASS):
         """Store a reference to the ToolManager for overlay state."""
         self._tool_manager_ref = tm
 
-    def _draw_vector_overlay(self, p: QPainter, dr: QRectF) -> None:
-        """Draw path outlines, node handles, pen preview, and marquee for vector layers."""
-        doc = self._doc_ref
-        if doc is None or self._doc_w == 0 or self._doc_h == 0:
-            return
-        layer = doc.layers.active_layer
-        if layer is None:
-            return
-        vl = getattr(layer, "_vector_data", None)
-        if vl is None:
-            return
-        try:
-            from ..vector.path import SegmentType, HandleMode
-        except ImportError:
-            return
-
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-
-        def _to_screen(dx: float, dy: float) -> QPointF:
-            return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
-
-        # ---- Colors & pens ----
-        accent = QColor(100, 180, 255)
-        accent_dim = QColor(100, 180, 255, 100)
-        white = QColor(255, 255, 255)
-        black = QColor(0, 0, 0)
-
-        path_pen = QPen(accent, 1.0, Qt.PenStyle.SolidLine)
-        path_pen.setCosmetic(True)
-        path_pen_sel = QPen(accent, 1.5, Qt.PenStyle.SolidLine)
-        path_pen_sel.setCosmetic(True)
-        handle_pen = QPen(accent_dim, 0.8, Qt.PenStyle.SolidLine)
-        handle_pen.setCosmetic(True)
-        preview_pen = QPen(QColor(100, 180, 255, 120), 1.0, Qt.PenStyle.DashLine)
-        preview_pen.setCosmetic(True)
-
-        is_pen_tool = self._current_tool_type == ToolType.PEN
-        is_node_tool = self._current_tool_type == ToolType.NODE
-        show_nodes = self._current_tool_type in (ToolType.PEN, ToolType.NODE)
-
-        for obj in vl.objects:
-            if not obj.visible:
-                continue
-            is_obj_selected = obj.selected
-            path = obj.transformed_path()
-
-            for sp in path.sub_paths:
-                if not sp.nodes:
-                    continue
-
-                # ---- Draw path segments ----
-                pp = QPainterPath()
-                origin = sp.nodes[0].position
-                pp.moveTo(_to_screen(origin.x, origin.y))
-                for seg in sp.segments:
-                    if seg.seg_type == SegmentType.LINE:
-                        pp.lineTo(_to_screen(seg.end.x, seg.end.y))
-                    elif seg.seg_type == SegmentType.CUBIC:
-                        pp.cubicTo(
-                            _to_screen(seg.cp1.x, seg.cp1.y),
-                            _to_screen(seg.cp2.x, seg.cp2.y),
-                            _to_screen(seg.end.x, seg.end.y),
-                        )
-                    elif seg.seg_type == SegmentType.CLOSE:
-                        pp.closeSubpath()
-                p.setPen(path_pen_sel if is_obj_selected else path_pen)
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawPath(pp)
-
-                # ---- Draw nodes and handles ----
-                if show_nodes and (is_obj_selected or is_pen_tool):
-                    for node in sp.nodes:
-                        np_ = _to_screen(node.position.x, node.position.y)
-                        node_sel = getattr(node, "selected", False)
-
-                        # Handle lines + control point circles (only for selected nodes)
-                        if node_sel:
-                            if node.in_handle and not node.in_handle.approx_eq(node.position):
-                                hp = _to_screen(node.in_handle.x, node.in_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
-                            if node.out_handle and not node.out_handle.approx_eq(node.position):
-                                hp = _to_screen(node.out_handle.x, node.out_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
-
-                        # Anchor point — shape indicates handle mode
-                        p.setPen(QPen(accent, 1.2))
-                        mode = getattr(node, "mode", None)
-                        if node_sel:
-                            p.setBrush(accent)
-                        else:
-                            p.setBrush(white)
-
-                        if mode == HandleMode.SHARP:
-                            # Square for sharp corners
-                            p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
-                        elif mode == HandleMode.SMOOTH:
-                            # Circle for smooth
-                            p.drawEllipse(np_, 3.5, 3.5)
-                        elif mode == HandleMode.SYMMETRIC:
-                            # Diamond for symmetric
-                            diamond = QPainterPath()
-                            diamond.moveTo(np_.x(), np_.y() - 4)
-                            diamond.lineTo(np_.x() + 4, np_.y())
-                            diamond.lineTo(np_.x(), np_.y() + 4)
-                            diamond.lineTo(np_.x() - 4, np_.y())
-                            diamond.closeSubpath()
-                            p.drawPath(diamond)
-                        else:
-                            p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
-
-        # ---- Pen tool: live preview line from last node to cursor ----
-        if is_pen_tool and self._tool_manager_ref is not None:
-            from ..vector.pen_tool import PenTool
-            tool = self._tool_manager_ref.active_tool
-            if isinstance(tool, PenTool) and tool.is_drawing and tool.preview_point:
-                nodes = tool.current_nodes
-                if nodes:
-                    last = nodes[-1]
-                    last_screen = _to_screen(last.position.x, last.position.y)
-                    preview_screen = _to_screen(tool.preview_point.x, tool.preview_point.y)
-                    p.setPen(preview_pen)
-                    if last.out_handle and not last.out_handle.approx_eq(last.position):
-                        # Draw cubic preview from last node's out_handle
-                        cp1 = _to_screen(last.out_handle.x, last.out_handle.y)
-                        preview_pp = QPainterPath()
-                        preview_pp.moveTo(last_screen)
-                        preview_pp.cubicTo(cp1, preview_screen, preview_screen)
-                        p.drawPath(preview_pp)
-                    else:
-                        p.drawLine(last_screen, preview_screen)
-
-                    # Close-path indicator: circle around first node when near
-                    if len(nodes) >= 3:
-                        first = nodes[0]
-                        first_screen = _to_screen(first.position.x, first.position.y)
-                        from ..vector.geometry import Vec2
-                        dist = Vec2(tool.preview_point.x, tool.preview_point.y).distance_to(first.position)
-                        if dist < 8.0:
-                            p.setPen(QPen(QColor(50, 200, 100), 1.5))
-                            p.setBrush(Qt.BrushStyle.NoBrush)
-                            p.drawEllipse(first_screen, 6, 6)
-
-        # ---- Node tool: marquee selection rectangle ----
-        if is_node_tool and self._tool_manager_ref is not None:
-            from ..vector.node_tool import NodeTool
-            tool = self._tool_manager_ref.active_tool
-            if isinstance(tool, NodeTool):
-                mrect = tool.marquee_rect
-                if mrect is not None:
-                    s, e = mrect
-                    ss = _to_screen(s.x, s.y)
-                    se = _to_screen(e.x, e.y)
-                    marquee_pen = QPen(accent, 1.0, Qt.PenStyle.DashLine)
-                    marquee_pen.setCosmetic(True)
-                    p.setPen(marquee_pen)
-                    p.setBrush(QColor(100, 180, 255, 30))
-                    p.drawRect(QRectF(ss, se).normalized())
-
-
-
-        p.restore()
-
-    # ---- Text overlay drawing -----------------------------------------------
-
     def _doc_to_widget(self, dr: QRectF, dx: float, dy: float) -> QPointF:
         """Convert document coords to widget coords."""
         sx = dr.width() / self._doc_w if self._doc_w else 1
         sy = dr.height() / self._doc_h if self._doc_h else 1
         return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
 
-    def _draw_text_cursor(self, p: QPainter, dr: QRectF) -> None:
-        """Draw the blinking text cursor."""
-        if self._text_cursor_pos is None:
-            return
-        cx, cy = self._text_cursor_pos
-        h = self._text_cursor_height
-
-        # If there's a text box with rotation, apply rotation
-        if self._text_box is not None and self._text_box_angle != 0.0:
-            bx, by, bw, bh = self._text_box
-            box_cx = bx + bw / 2.0
-            box_cy = by + bh / 2.0
-            wc = self._doc_to_widget(dr, box_cx, box_cy)
-            p.save()
-            p.translate(wc.x(), wc.y())
-            p.rotate(-self._text_box_angle)
-            # Draw cursor relative to box center
-            sx = dr.width() / self._doc_w if self._doc_w else 1
-            sy = dr.height() / self._doc_h if self._doc_h else 1
-            lcx = (bx + cx - box_cx) * sx
-            lcy = (by + cy - box_cy) * sy
-            lh = h * sy
-            p.setPen(QPen(QColor(255, 255, 255), 2))
-            p.drawLine(QPointF(lcx, lcy), QPointF(lcx, lcy + lh))
-            p.setPen(QPen(QColor(0, 0, 0), 1))
-            p.drawLine(QPointF(lcx, lcy), QPointF(lcx, lcy + lh))
-            p.restore()
-        else:
-            # No rotation
-            top = self._doc_to_widget(dr, cx + (self._text_box[0] if self._text_box else 0),
-                                      cy + (self._text_box[1] if self._text_box else 0))
-            bot = self._doc_to_widget(dr, cx + (self._text_box[0] if self._text_box else 0),
-                                      cy + h + (self._text_box[1] if self._text_box else 0))
-            p.setPen(QPen(QColor(255, 255, 255), 2))
-            p.drawLine(top, bot)
-            p.setPen(QPen(QColor(0, 0, 0), 1))
-            p.drawLine(top, bot)
-
-    def _draw_text_box(self, p: QPainter, dr: QRectF) -> None:
-        """Draw the text bounding box with resize handles."""
-        if self._text_box is None or self._doc_w == 0:
-            return
-        x, y, w, h = self._text_box
-        sx = dr.width() / self._doc_w
-        sy = dr.height() / self._doc_h
-
-        p.save()
-        if self._text_box_angle != 0.0:
-            cx = x + w / 2.0
-            cy = y + h / 2.0
-            wc = self._doc_to_widget(dr, cx, cy)
-            p.translate(wc.x(), wc.y())
-            p.rotate(-self._text_box_angle)
-            hw, hh = w * sx / 2, h * sy / 2
-        else:
-            tl = self._doc_to_widget(dr, x, y)
-            p.translate(tl.x() + w * sx / 2, tl.y() + h * sy / 2)
-            hw, hh = w * sx / 2, h * sy / 2
-
-        # Dashed box
-        pen = QPen(QColor(0, 150, 255), 1.5, Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRect(QRectF(-hw, -hh, hw * 2, hh * 2))
-
-        # Handles
-        hs = 6
-        handle_pts = [
-            (-hw, -hh), (0, -hh), (hw, -hh),
-            (-hw, 0), (hw, 0),
-            (-hw, hh), (0, hh), (hw, hh),
-        ]
-        p.setPen(QPen(QColor(0, 150, 255), 1))
-        p.setBrush(QColor(255, 255, 255))
-        for hx, hy in handle_pts:
-            p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))
-
-        p.restore()
-
-    def _draw_text_draw_rect(self, p: QPainter, dr: QRectF) -> None:
-        """Draw the text box creation preview rectangle."""
-        if self._text_draw_rect is None or self._doc_w == 0:
-            return
-        x, y, w, h = self._text_draw_rect
-        tl = self._doc_to_widget(dr, x, y)
-        br = self._doc_to_widget(dr, x + w, y + h)
-        pen = QPen(QColor(0, 150, 255), 2.0, Qt.PenStyle.SolidLine)
-        p.setPen(pen)
-        p.setBrush(QColor(0, 150, 255, 40))
-        p.drawRect(QRectF(tl, br))
-
-    def _draw_text_selection(self, p: QPainter, dr: QRectF) -> None:
-        """Draw text selection highlight rectangles."""
-        if not self._text_selection_rects or not self._text_box:
-            return
-        bx, by = self._text_box[0], self._text_box[1]
-        sx = dr.width() / self._doc_w if self._doc_w else 1
-        sy = dr.height() / self._doc_h if self._doc_h else 1
-
-        p.save()
-        if self._text_box_angle != 0.0:
-            bw, bh = self._text_box[2], self._text_box[3]
-            cx = bx + bw / 2.0
-            cy = by + bh / 2.0
-            wc = self._doc_to_widget(dr, cx, cy)
-            p.translate(wc.x(), wc.y())
-            p.rotate(-self._text_box_angle)
-            offset_x = -bw / 2.0 * sx
-            offset_y = -bh / 2.0 * sy
-        else:
-            tl = self._doc_to_widget(dr, bx, by)
-            offset_x = tl.x()
-            offset_y = tl.y()
-            p.translate(0, 0)
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(60, 130, 220, 80))
-        for rx, ry, rw, rh in self._text_selection_rects:
-            if self._text_box_angle != 0.0:
-                p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy,
-                                  rw * sx, rh * sy))
-            else:
-                p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy,
-                                  rw * sx, rh * sy))
-        p.restore()
-
     # ---- Key events (text editing + Alt source mode) -----------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        # Alt held → switch to source-selection cursor for clone/heal tools
-        if event.key() == Qt.Key.Key_Alt:
-            if self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
-                self._alt_held = True
-                self.setCursor(self._make_source_cursor())
-                event.accept()
-                return
-        if self._key_handler is not None and self._text_editing:
-            consumed = self._key_handler(
-                event.key(), event.text(), event.modifiers())
-            if consumed:
-                event.accept()
-                return
+        if self._input_handler.handle_key_press(event):
+            return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Alt and self._alt_held:
-            self._alt_held = False
-            # Restore blank cursor when brush preview is active
-            if self._brush_size > 0:
-                self.setCursor(Qt.CursorShape.BlankCursor)
-            else:
-                shape = _CURSORS.get(self._current_tool_type, Qt.CursorShape.ArrowCursor)
-                self.setCursor(QCursor(shape))
-            event.accept()
+        if self._input_handler.handle_key_release(event):
             return
         super().keyReleaseEvent(event)
-
-    @staticmethod
-    def _make_source_cursor() -> QCursor:
-        """Build a distinctive target/bullseye cursor for source selection."""
-        size = 32
-        pm = QPixmap(size, size)
-        pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx, cy = size // 2, size // 2
-
-        # Outer circle
-        pen = QPen(QColor(0, 0, 0, 180), 1.6)
-        pen.setCosmetic(True)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(cx - 10, cy - 10, 20, 20)
-        pen2 = QPen(QColor(0, 220, 255, 240), 1.0)
-        pen2.setCosmetic(True)
-        p.setPen(pen2)
-        p.drawEllipse(cx - 10, cy - 10, 20, 20)
-
-        # Inner circle
-        p.drawEllipse(cx - 4, cy - 4, 8, 8)
-
-        # Crosshair lines
-        gap = 5
-        arm = 12
-        p.setPen(QPen(QColor(0, 0, 0, 180), 1.4))
-        p.drawLine(cx, cy - arm, cx, cy - gap)
-        p.drawLine(cx, cy + gap, cx, cy + arm)
-        p.drawLine(cx - arm, cy, cx - gap, cy)
-        p.drawLine(cx + arm, cy, cx + gap, cy)
-        p.setPen(QPen(QColor(0, 220, 255, 240), 1.0))
-        p.drawLine(cx, cy - arm, cx, cy - gap)
-        p.drawLine(cx, cy + gap, cx, cy + arm)
-        p.drawLine(cx - arm, cy, cx - gap, cy)
-        p.drawLine(cx + arm, cy, cx + gap, cy)
-
-        # Center dot
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 220, 255, 220))
-        p.drawEllipse(cx - 1, cy - 1, 3, 3)
-
-        p.end()
-        return QCursor(pm, cx, cy)
 
     # ---- Mouse events -------------------------------------------------------
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        delta = event.angleDelta().y()
-        factor = 1.15 if delta > 0 else 1 / 1.15
-        self._zoom = max(0.01, min(self._zoom * factor, 32.0))
-        self.update()
-        self.view_changed.emit()
+        self._input_handler.handle_wheel(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = True
-            self._last_mouse = event.position()
-            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
-        elif event.button() == Qt.MouseButton.LeftButton:
-            # Check for guide hit first
-            hit_guide = self._hit_test_guide(event.position())
-            if hit_guide is not None:
-                self._dragging_canvas_guide = hit_guide
-                self.guide_grabbed.emit(hit_guide)
-                self.setCursor(QCursor(
-                    Qt.CursorShape.SplitVCursor if hit_guide.orientation == Qt.Orientation.Horizontal
-                    else Qt.CursorShape.SplitHCursor))
-                return
-            pos = event.position()
-            self.widget_pressed.emit(pos.x(), pos.y())
-            dx, dy = self._canvas_to_doc(pos)
-            self.tool_pressed.emit(dx, dy, 1.0)
+        self._input_handler.handle_mouse_press(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._panning:
-            delta = event.position() - self._last_mouse
-            self._pan += delta
-            self._last_mouse = event.position()
-            self.update()
-            self.view_changed.emit()
-            return
+        self._input_handler.handle_mouse_move(event)
 
-        # Guide dragging on canvas
-        if self._dragging_canvas_guide is not None:
-            g = self._dragging_canvas_guide
-            dr = self._doc_rect()
-            if g.orientation == Qt.Orientation.Horizontal:
-                sy = dr.height() / self._doc_h if self._doc_h else 1
-                doc_pos = (event.position().y() - dr.top()) / sy if sy else 0
-            else:
-                sx = dr.width() / self._doc_w if self._doc_w else 1
-                doc_pos = (event.position().x() - dr.left()) / sx if sx else 0
-            g.position = doc_pos
-            self.guide_drag_moved.emit(g, doc_pos)
-            self.update()
-            return
+    def leaveEvent(self, event) -> None:
+        self._input_handler.handle_leave()
 
-        dx, dy = self._canvas_to_doc(event.position())
-        self.cursor_moved.emit(dx, dy)
-
-        # Update brush cursor position and visibility
-        if self._brush_size > 0:
-            self._brush_cursor_pos = event.position()
-            self._brush_cursor_visible = True
-            # If source overlay is active, do a full repaint so the source
-            # crosshair tracks the cursor; otherwise just repaint brush area.
-            if (self._source_pos is not None
-                    and self._current_tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
-                self.update()
-            else:
-                radius = int((self._brush_size / 2) * self._zoom) + 4
-                cx, cy = int(event.position().x()), int(event.position().y())
-                self.update(cx - radius, cy - radius, radius * 2, radius * 2)
-
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            self.widget_moved.emit(event.position().x(), event.position().y())
-            self.tool_moved.emit(dx, dy, 1.0)
-        elif self._transform_box is not None:
-            self._update_transform_cursor(event.position())
-
-    def leaveEvent(self, _event) -> None:
-        self._brush_cursor_visible = False
-        self.update()
-
-    def enterEvent(self, _event) -> None:
-        if self._brush_size > 0:
-            self._brush_cursor_visible = True
-            self.update()
+    def enterEvent(self, event) -> None:
+        self._input_handler.handle_enter()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = False
-            # Restore tool cursor
-        elif event.button() == Qt.MouseButton.LeftButton:
-            # Guide drag release on canvas
-            if self._dragging_canvas_guide is not None:
-                g = self._dragging_canvas_guide
-                dr = self._doc_rect()
-                if g.orientation == Qt.Orientation.Horizontal:
-                    sy = dr.height() / self._doc_h if self._doc_h else 1
-                    doc_pos = (event.position().y() - dr.top()) / sy if sy else 0
-                    # Delete if dragged to ruler area (top edge)
-                    delete = event.position().y() < dr.top() - 20
-                else:
-                    sx = dr.width() / self._doc_w if self._doc_w else 1
-                    doc_pos = (event.position().x() - dr.left()) / sx if sx else 0
-                    # Delete if dragged to ruler area (left edge)
-                    delete = event.position().x() < dr.left() - 20
-                g.position = doc_pos
-                self.guide_drag_released.emit(g, doc_pos, delete)
-                self._dragging_canvas_guide = None
-                self.unsetCursor()
-                return
-            self.widget_released.emit()
-            dx, dy = self._canvas_to_doc(event.position())
-            self.tool_released.emit(dx, dy)
-            self._drag_rect = None
+        self._input_handler.handle_mouse_release(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            dx, dy = self._canvas_to_doc(event.position())
-            self.tool_double_clicked.emit(dx, dy)
+        self._input_handler.handle_mouse_double_click(event)
