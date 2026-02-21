@@ -311,6 +311,7 @@ photo_editor/
 ├── effects/                 # Effect pipeline
 ├── masks/                   # Mask manager & operations
 ├── transforms/              # Geometric transforms
+├── vector/                  # Vector System
 ├── ui/                      # PySide6 interface
 │   ├── main_window.py
 │   ├── canvas_view.py
