@@ -332,6 +332,8 @@ class LayerStack:
 
         if target:
             mask_layer.parent_id = target_id
+            # Inherit the target's position so brush and compositing align
+            mask_layer.position = target.position
             target.mask_layers.append(mask_layer.id)
             # Insert just before the target so that compositing order works
             target_idx = 0
