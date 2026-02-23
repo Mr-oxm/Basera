@@ -135,4 +135,8 @@ class CropController:
             cropped = np.zeros((max(1, h), max(1, w), 4), dtype=np.float32)
         layer.pixels = cropped
         layer.position = (x, y)
+        # Clear stale non-destructive transform source so the bounding box
+        # matches the new cropped pixels and subsequent transforms operate
+        # on the cropped data instead of reverting to the pre-crop image.
+        layer.rasterize_transform()
         mw._refresh()

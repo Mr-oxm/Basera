@@ -336,7 +336,9 @@ class _ColorButton(QWidget):
                                    int(stop.color[1] * 255),
                                    int(stop.color[2] * 255),
                                    int(stop.color[3] * 255) if len(stop.color) > 3 else 255)
-                grad.setColorAt(stop.position, QColor(r8, g8, b8, a8))
+                # Support both vector.style (offset) and core.color (position) stops
+                pos = getattr(stop, 'offset', None) or getattr(stop, 'position', 0.0)
+                grad.setColorAt(pos, QColor(r8, g8, b8, a8))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(rect, radius, radius)
@@ -430,6 +432,7 @@ class ColorDropdown(QWidget):
 
         self._popup: _ColorPopup | None = None
         self._color = Color.black()
+        self._paint: FillPaint | None = None  # track active paint (Solid or Gradient)
 
     # ---- Public API ---------------------------------------------------------
 
@@ -438,13 +441,16 @@ class ColorDropdown(QWidget):
 
     def set_color(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         if self._popup and self._popup.isVisible():
             self._popup.set_color(c)
 
     def set_paint(self, paint: FillPaint) -> None:
+        self._paint = paint
         if isinstance(paint, SolidPaint):
-            self.set_color(Color(*paint.color))
+            self._color = Color(*paint.color)
+            self._btn.set_color(self._color)
         elif isinstance(paint, GradientPaint):
             # Show gradient preview in button
             eff = paint.color_at(0.5)
@@ -464,14 +470,18 @@ class ColorDropdown(QWidget):
             )
             self._popup.color_changed.connect(self._on_live)
             self._popup.color_committed.connect(self._on_commit)
-            self._popup.gradient_changed.connect(self.gradient_changed.emit)
+            self._popup.gradient_changed.connect(self._on_gradient_from_popup)
 
     def _toggle_popup(self) -> None:
         self._ensure_popup()
         if self._popup.isVisible():
             self._popup.hide()
         else:
-            self._popup.set_color(self._color)
+            # Restore the full paint state (gradient or solid)
+            if isinstance(self._paint, GradientPaint):
+                self._popup.set_paint(self._paint)
+            else:
+                self._popup.set_color(self._color)
             # Position below the button
             pos = self._btn.mapToGlobal(QPoint(0, self._btn.height() + 4))
             self._popup.move(pos)
@@ -480,12 +490,37 @@ class ColorDropdown(QWidget):
             if self._default_tab:
                 self._popup.set_active_tab(self._default_tab)
 
+    def _on_gradient_from_popup(self, fill) -> None:
+        """Update button preview when gradient changes in the popup."""
+        # Convert core ColorFill to a GradientPaint for button preview
+        from ...core.color import LinearGradient, RadialGradient
+        from ...core.color_engine import ConicalGradient, DiamondGradient
+        if isinstance(fill, (LinearGradient, RadialGradient, ConicalGradient, DiamondGradient)):
+            from ...vector.style import GradientType as GT, GradientStop as VGS
+            gtype = GT.LINEAR
+            if isinstance(fill, RadialGradient):
+                gtype = GT.RADIAL
+            elif isinstance(fill, ConicalGradient):
+                gtype = GT.CONICAL
+            elif isinstance(fill, DiamondGradient):
+                gtype = GT.DIAMOND
+            stops = [
+                VGS(s.position, (s.color.r, s.color.g, s.color.b, s.color.a))
+                for s in fill.stops
+            ]
+            gpaint = GradientPaint(gradient_type=gtype, stops=stops)
+            self._paint = gpaint
+            self._btn.set_gradient(gpaint)
+        self.gradient_changed.emit(fill)
+
     def _on_live(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         self.color_changed.emit(c)
 
     def _on_commit(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         self.color_committed.emit(c)
