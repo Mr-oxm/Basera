@@ -6,15 +6,19 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 _ZOOM_BTN_STYLE = """
     QPushButton {
-        background: transparent;
-        border: none;
-        border-radius: 4px;
-        padding: 3px;
-        min-width: 60px; min-height: 26px; max-height: 26px;
-        font-size: 11px; color: #ccc;
+        background: transparent; border: 1px solid transparent; border-radius: 4px;
+        padding: 3px; font-weight: 500; min-width: 60px; min-height: 26px; max-height: 26px;
+        font-size: 11px; color: #b0b4b8;
     }
-    QPushButton:hover { background-color: rgba(255, 255, 255, 0.08); }
-    QPushButton:pressed { background-color: rgba(74, 111, 165, 0.5); }
+    QPushButton:hover { 
+        background: rgba(255,255,255,0.05); color: #e0e4e8; 
+        border: 1px solid rgba(255,255,255,0.1); 
+    }
+    QPushButton:pressed { 
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
+        border: 1px solid rgba(110,180,255,0.4); 
+        color: #ffffff; 
+    }
 """
 
 

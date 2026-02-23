@@ -350,10 +350,16 @@ class _ColorButton(QWidget):
             p.drawRoundedRect(rect, radius, radius)
 
         # Border
-        border = QColor(140, 180, 220) if self._hovered else QColor(70, 70, 70)
-        p.setPen(QPen(border, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(rect, radius, radius)
+        if self._hovered:
+            p.setPen(QPen(QColor(255, 255, 255, 40), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect, radius, radius)
+            p.setPen(QPen(QColor(110, 180, 255, 100), 1.0))
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
+        else:
+            p.setPen(QPen(QColor(255, 255, 255, 15), 1.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect, radius, radius)
         p.end()
 
     def enterEvent(self, ev) -> None:

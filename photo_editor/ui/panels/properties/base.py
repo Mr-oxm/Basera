@@ -30,70 +30,99 @@ qInstallMessageHandler(_qt_message_handler)
 
 
 # ---- Style constants ----
-_ACCENT = "#4a6fa5"
-_ACCENT_HOVER = "#5a8abf"
-_LABEL = "font-size: 10px; color: #777; letter-spacing: 0.5px; background: transparent;"
-_SEPARATOR = "color: #3a3a3a; background: #3a3a3a; max-width: 1px; margin: 4px 1px;"
+_ACCENT = "#6eb4ff"
+_ACCENT_HOVER = "#8ec5ff"
+_LABEL = "font-size: 10px; font-weight: 600; color: #9aa0a6; letter-spacing: 0.6px; background: transparent;"
+_SEPARATOR = """
+    QFrame {
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,0), stop:0.5 rgba(255,255,255,0.08), stop:1 rgba(255,255,255,0));
+        max-width: 1px; margin: 2px 4px; border: none;
+    }
+"""
 _TOGGLE = """
     QPushButton {{
-        font-size: {font_size}px; padding: 2px 5px;
-        background: transparent; border: none; border-radius: 4px;
-        color: #999; min-width: 24px; min-height: 24px;
+        font-size: {font_size}px; font-weight: 600; padding: 2px 5px;
+        background: transparent; border: 1px solid transparent; border-radius: 4px;
+        color: #b0b4b8; min-width: 24px; min-height: 24px;
     }}
-    QPushButton:hover {{ background: rgba(255,255,255,0.07); color: #ccc; }}
-    QPushButton:checked {{ background: rgba(74,111,165,0.35); color: #ddeeff; }}
+    QPushButton:hover {{ 
+        background: rgba(255,255,255,0.05); color: #e0e4e8; 
+        border: 1px solid rgba(255,255,255,0.1); 
+    }}
+    QPushButton:checked {{ 
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
+        border: 1px solid rgba(110,180,255,0.4); 
+        color: #ffffff; 
+    }}
 """
 _ALIGN_BTN = """
     QPushButton {
-        font-size: 10px; padding: 2px 4px;
-        background: transparent; border: none; border-radius: 4px;
-        color: #999; min-width: 24px; min-height: 24px;
+        font-size: 11px; padding: 2px 4px;
+        background: transparent; border: 1px solid transparent; border-radius: 4px;
+        color: #b0b4b8; min-width: 24px; min-height: 24px;
     }
-    QPushButton:hover { background: rgba(255,255,255,0.07); color: #ccc; }
-    QPushButton:checked { background: rgba(74,111,165,0.35); color: #ddeeff; }
+    QPushButton:hover { 
+        background: rgba(255,255,255,0.05); color: #e0e4e8; 
+        border: 1px solid rgba(255,255,255,0.1); 
+    }
+    QPushButton:checked { 
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
+        border: 1px solid rgba(110,180,255,0.4); 
+        color: #ffffff; 
+    }
 """
 _SPIN = """
     QSpinBox, QDoubleSpinBox {{
         font-size: 11px; padding: 2px 4px;
-        background: #383838; color: #ccc;
-        border: 1px solid transparent; border-radius: 3px;
+        background: rgba(0, 0, 0, 0.2); color: #e0e4e8;
+        border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         max-width: {max_w}px; min-height: 22px; max-height: 22px;
     }}
+    QSpinBox:hover, QDoubleSpinBox:hover {{
+        background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15);
+    }}
     QSpinBox:focus, QDoubleSpinBox:focus {{
-        border: 1px solid {accent};
+        border: 1px solid {accent}; background: rgba(0, 0, 0, 0.4);
     }}
 """
 _COMBO = """
     {widget} {{
-        background: #383838; border: 1px solid transparent; border-radius: 3px;
-        color: #ccc; font-size: 11px; padding: 2px 6px;
+        background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 4px; color: #e0e4e8; font-size: 11px; padding: 2px 6px;
         min-height: 20px; max-height: 22px;
     }}
-    {widget}:hover {{ border: 1px solid #4a4a4a; }}
-    {widget}:focus {{ border: 1px solid {accent}; }}
+    {widget}:hover {{ background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15); }}
+    {widget}:focus {{ border: 1px solid {accent}; background: rgba(0, 0, 0, 0.4); }}
     {widget}::drop-down {{
         subcontrol-origin: padding; subcontrol-position: center right;
         width: 16px; border: none; background: transparent;
     }}
     {widget}::down-arrow {{
         image: none; width: 0; height: 0;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 5px solid #888;
+        border-left: 4px solid transparent; border-right: 4px solid transparent;
+        border-top: 5px solid #aaaaaa;
     }}
+    {widget}::down-arrow:hover {{ border-top: 5px solid #eeeeee; }}
     {widget} QAbstractItemView {{
-        background: #2e2e2e; border: 1px solid #3a3a3a; border-radius: 4px;
-        color: #ccc; selection-background-color: {accent};
+        background: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
+        color: #e0e4e8; selection-background-color: {accent}; outline: none; padding: 2px;
     }}
 """
 _FLAT_BTN = """
     QPushButton {{
-        background: transparent; border: none; border-radius: 4px;
-        color: #999; font-size: 11px; padding: 2px 8px;
+        background: transparent; border: 1px solid transparent; border-radius: 4px;
+        color: #b0b4b8; font-size: 11px; padding: 2px 8px; font-weight: 500;
         min-height: 24px;
     }}
-    QPushButton:hover {{ background: rgba(255,255,255,0.07); color: #ccc; }}
-    QPushButton:pressed {{ background: rgba(74,111,165,0.35); }}
+    QPushButton:hover {{ 
+        background: rgba(255,255,255,0.05); color: #e0e4e8; 
+        border: 1px solid rgba(255,255,255,0.1); 
+    }}
+    QPushButton:pressed {{ 
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
+        border: 1px solid rgba(110,180,255,0.4); 
+        color: #ffffff; 
+    }}
 """
 
 
@@ -169,7 +198,7 @@ class PropertyDropdown(QWidget):
         layout.addWidget(self.slider)
         self.setStyleSheet("""
             PropertyDropdown {
-                background-color: #2a2a2a; border: 1px solid #555; border-radius: 3px;
+                background-color: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
             }
         """)
 
@@ -194,7 +223,7 @@ class CompactPropertyWidget(QWidget):
         name_label = QLabel(label)
         name_label.setMinimumWidth(40)
         name_label.setMaximumWidth(70)
-        name_label.setStyleSheet("font-size: 10px; color: #888; letter-spacing: 0.5px;")
+        name_label.setStyleSheet(_LABEL)
         layout.addWidget(name_label)
         self.value_spin = QDoubleSpinBox()
         self.value_spin.setRange(min_val, max_val)
@@ -204,14 +233,7 @@ class CompactPropertyWidget(QWidget):
         self.value_spin.setMinimumHeight(22)
         self.value_spin.setMaximumHeight(22)
         self.value_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.value_spin.setStyleSheet("""
-            QDoubleSpinBox {
-                font-size: 11px; padding: 2px 4px;
-                background: #383838; color: #ccc;
-                border: 1px solid transparent; border-radius: 3px;
-            }
-            QDoubleSpinBox:focus { border: 1px solid #4a6fa5; }
-        """)
+        self.value_spin.setStyleSheet(_SPIN.format(max_w=60, accent=_ACCENT))
         self.value_spin.valueChanged.connect(self._on_value_changed)
         layout.addWidget(self.value_spin)
         self.expand_btn = QPushButton("▾")
@@ -221,12 +243,12 @@ class CompactPropertyWidget(QWidget):
         self.expand_btn.clicked.connect(self._toggle_dropdown)
         self.expand_btn.setStyleSheet("""
             QPushButton {
-                font-size: 10px; padding: 0px;
+                font-size: 10px; padding: 0px; font-weight: 600;
                 background: transparent; border: none;
-                border-radius: 3px; color: #777;
+                border-radius: 4px; color: #b0b4b8;
             }
-            QPushButton:hover { background: rgba(255,255,255,0.07); color: #bbb; }
-            QPushButton:checked { color: #4a6fa5; }
+            QPushButton:hover { background: rgba(255,255,255,0.05); color: #e0e4e8; border: 1px solid rgba(255,255,255,0.1); }
+            QPushButton:checked { color: #ffffff; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1)); border: 1px solid rgba(110,180,255,0.4); }
         """)
         layout.addWidget(self.expand_btn)
         self.dropdown = None

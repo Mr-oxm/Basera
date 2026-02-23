@@ -12,6 +12,21 @@ from ....core.color_engine import ConicalGradient, DiamondGradient
 from ....vector.style import FillPaint, SolidPaint, GradientPaint, GradientType, GradientStop as VecGradientStop
 from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator
 
+_VECTOR_BTN = """
+    QPushButton {
+        font-size: 10.5px; padding: 2px 8px; font-weight: 500;
+        background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.05); border-radius: 4px;
+        color: #b0b4b8; min-height: 22px; max-height: 22px; border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    QPushButton:hover { 
+        background: rgba(0,0,0,0.3); color: #e0e4e8; 
+        border: 1px solid rgba(255,255,255,0.15); 
+    }
+    QPushButton:pressed { 
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1)); 
+        color: #ffffff; border: 1px solid rgba(110,180,255,0.4); 
+    }
+"""
 
 class VectorPropertiesBar(QWidget):
     """Horizontal bar that adapts to the active vector tool: Pen, Node, or Shape."""
@@ -112,25 +127,23 @@ class VectorPropertiesBar(QWidget):
         self._sep_shape = make_separator()
         layout.addWidget(self._sep_shape)
 
-        btn_css = FLAT_BTN.format()
-
         self._sharp_btn = QPushButton("■ Sharp")
         self._sharp_btn.setFixedHeight(24)
-        self._sharp_btn.setStyleSheet(btn_css)
+        self._sharp_btn.setStyleSheet(_VECTOR_BTN)
         self._sharp_btn.setToolTip("Set selected nodes to sharp (straight)")
         self._sharp_btn.clicked.connect(lambda: self.action_requested.emit("set_sharp"))
         layout.addWidget(self._sharp_btn)
 
         self._smooth_btn = QPushButton("● Smooth")
         self._smooth_btn.setFixedHeight(24)
-        self._smooth_btn.setStyleSheet(btn_css)
+        self._smooth_btn.setStyleSheet(_VECTOR_BTN)
         self._smooth_btn.setToolTip("Set selected nodes to smooth (collinear handles)")
         self._smooth_btn.clicked.connect(lambda: self.action_requested.emit("set_smooth"))
         layout.addWidget(self._smooth_btn)
 
         self._symmetric_btn = QPushButton("◆ Symmetric")
         self._symmetric_btn.setFixedHeight(24)
-        self._symmetric_btn.setStyleSheet(btn_css)
+        self._symmetric_btn.setStyleSheet(_VECTOR_BTN)
         self._symmetric_btn.setToolTip("Set selected nodes to symmetric (equal handles)")
         self._symmetric_btn.clicked.connect(lambda: self.action_requested.emit("set_symmetric"))
         layout.addWidget(self._symmetric_btn)
@@ -140,21 +153,21 @@ class VectorPropertiesBar(QWidget):
 
         self._delete_btn = QPushButton("Delete")
         self._delete_btn.setFixedHeight(24)
-        self._delete_btn.setStyleSheet(btn_css)
+        self._delete_btn.setStyleSheet(_VECTOR_BTN)
         self._delete_btn.setToolTip("Delete selected nodes (or whole object)")
         self._delete_btn.clicked.connect(lambda: self.action_requested.emit("delete_nodes"))
         layout.addWidget(self._delete_btn)
 
         self._break_btn = QPushButton("Break")
         self._break_btn.setFixedHeight(24)
-        self._break_btn.setStyleSheet(btn_css)
+        self._break_btn.setStyleSheet(_VECTOR_BTN)
         self._break_btn.setToolTip("Break path at selected nodes")
         self._break_btn.clicked.connect(lambda: self.action_requested.emit("break_path"))
         layout.addWidget(self._break_btn)
 
         self._selall_btn = QPushButton("Sel All")
         self._selall_btn.setFixedHeight(24)
-        self._selall_btn.setStyleSheet(btn_css)
+        self._selall_btn.setStyleSheet(_VECTOR_BTN)
         self._selall_btn.setToolTip("Select all nodes (Ctrl+A)")
         self._selall_btn.clicked.connect(lambda: self.action_requested.emit("select_all"))
         layout.addWidget(self._selall_btn)
