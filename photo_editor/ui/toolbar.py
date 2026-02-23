@@ -121,6 +121,15 @@ _C_ACCENT = QColor(110, 180, 255)
 _C_ACCENT_DIM = QColor(110, 180, 255, 75)
 _C_BG = QColor(60, 60, 65)
 
+def update_toolbar_icon_colors(palette: dict):
+    global _C_MAIN, _C_MAIN_DARK, _C_ACCENT, _C_ACCENT_DIM, _C_BG
+    _C_MAIN = QColor(palette['fg'])
+    _C_MAIN_DARK = QColor(palette['fg_dim'])
+    _C_ACCENT = QColor(palette['accent'])
+    _C_ACCENT_DIM = QColor(palette['accent'])
+    _C_ACCENT_DIM.setAlpha(75)
+    _C_BG = QColor(palette['bg2'])
+
 def _ico_move() -> QIcon:
     pix, p = _px()
     p.setPen(_pen(QColor(0, 0, 0, 80), 2.5))
@@ -579,16 +588,18 @@ def _tool_icon(tool_type: ToolType) -> QIcon:
 # ---------------------------------------------------------------------------
 
 class _ToolFlyout(QFrame):
-    """Floating popup that appears beside a tool-group button to reveal
-    all tools within the group."""
+    """Popup panel showing alternate tools in the same group."""
 
-    tool_picked = Signal(ToolType)
+    tool_chosen = Signal(ToolType)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        from .theme import ThemeManager
+        palette = ThemeManager.instance().active_palette
         self.setStyleSheet(
-            "QFrame { background: #3a3a3a; border: 1px solid #555; border-radius: 4px; }"
+            f"QFrame {{ background: {palette['bg2']}; border: 1px solid {palette['border']}; border-radius: 4px; }}"
         )
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(4, 4, 4, 4)
@@ -668,18 +679,12 @@ class _ToolGroupButton(QToolButton):
         self.setIconSize(QSize(_ICO, _ICO))
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(
-            "QToolButton { background: transparent; border: 1px solid transparent;"
-            "              border-radius: 4px; padding: 3px; }"
-            "QToolButton:hover { background: #444; border-color: #555; }"
-            "QToolButton:checked { background: #4a6fa5; border-color: #5a7fb5; }"
-        )
         self._update_icon()
 
         self._flyout: _ToolFlyout | None = None
         if len(tools) > 1:
             self._flyout = _ToolFlyout()
-            self._flyout.tool_picked.connect(self._on_flyout_pick)
+            self._flyout.tool_chosen.connect(self._on_flyout_pick)
 
         self._long_press = QTimer(self)
         self._long_press.setSingleShot(True)
@@ -851,18 +856,27 @@ class EditorToolbar(QToolBar):
         self.setMovable(False)
         self.setFloatable(False)
         self.setIconSize(QSize(_ICO, _ICO))
-        self.setStyleSheet(
-            "QToolBar { background: #333; border: none; spacing: 0px; padding: 4px 0px; }"
-            "QToolBar QWidget { background: transparent; }"
-            "QToolBar::separator { background: #444; height: 1px; margin: 4px 6px; }"
-        )
-
+        
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        
         self._group_buttons: list[_ToolGroupButton] = []
         self._tool_to_group: dict[ToolType, _ToolGroupButton] = {}
         self._col_mgr = ColorManager.instance()
         self._shortcut_mgr = ShortcutManager.instance()
         self._shortcut_mgr.shortcuts_changed.connect(self._refresh_tooltips)
         self._build()
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(
+            f"QToolBar {{ background: {palette['bg3']}; border: none; spacing: 0px; padding: 4px 0px; }}"
+            f"QToolBar QWidget {{ background: transparent; }}"
+            f"QToolBar::separator {{ background: {palette['border']}; height: 1px; margin: 4px 6px; }}"
+        )
+        update_toolbar_icon_colors(palette)
+        self._refresh_tooltips()
+        self._fg_bg.update()
 
     @staticmethod
     def _centered_wrapper(widget: QWidget, v_margin: int = 1) -> QWidget:

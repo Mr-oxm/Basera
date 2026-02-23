@@ -419,7 +419,9 @@ class CanvasView(_BASE_CLASS):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor(50, 50, 50))
+        from .theme import ThemeManager
+        palette = ThemeManager.instance().active_palette
+        p.fillRect(self.rect(), QColor(palette['bg1']))
 
         if self._pixmap is None:
             p.end()

@@ -38,6 +38,7 @@ from ...styles.pattern_overlay import PatternOverlay
 from ...styles.satin import Satin
 from ...styles.stroke import Stroke
 from ...styles.style_base import LayerStyle
+from ..theme import ThemeManager
 
 # ── Ordered list of all style types ──────────────────────────────────────
 
@@ -60,8 +61,15 @@ _STYLE_CLASS_MAP: dict[str, type[LayerStyle]] = {n: c for n, c in _STYLE_TYPES}
 #  Helper widgets
 # ═══════════════════════════════════════════════════════════════════════════
 
-_LBL_STYLE = "font-size: 9pt; color: #ccc;"
-_HEADER_STYLE = "font-size: 10pt; font-weight: bold; color: #ddd; margin-bottom: 4px;"
+def _lbl_style() -> str:
+    from ..theme import ThemeManager
+    p = ThemeManager.instance().active_palette
+    return f"font-size: 9pt; color: {p['fg_dim']};"
+
+def _header_style() -> str:
+    from ..theme import ThemeManager
+    p = ThemeManager.instance().active_palette
+    return f"font-size: 10pt; font-weight: bold; color: {p['fg']}; margin-bottom: 4px;"
 
 
 # ── Color swatch button (wraps ColorDropdown) ───────────────────────────
@@ -230,7 +238,7 @@ class _BaseStylePanel(QWidget):
 
     def _add_header(self, text: str) -> None:
         lbl = QLabel(text)
-        lbl.setStyleSheet(_HEADER_STYLE)
+        lbl.setStyleSheet(_header_style())
         self._layout.addWidget(lbl)
         self._layout.addWidget(_hline())
 
@@ -238,7 +246,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel("Blend Mode:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         combo = _blend_mode_combo(self._style.params.blend_mode)
@@ -295,7 +303,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel(f"{label}:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         dial = AngleDial(cur)
@@ -337,7 +345,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel(f"{label}:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         slider = QSlider(Qt.Orientation.Horizontal)
@@ -350,7 +358,7 @@ class _BaseStylePanel(QWidget):
         val_lbl.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        val_lbl.setStyleSheet(_LBL_STYLE)
+        val_lbl.setStyleSheet(_lbl_style())
         row.addWidget(val_lbl)
 
         def _update(v: int) -> None:
@@ -369,7 +377,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel(f"{label}:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         slider = QSlider(Qt.Orientation.Horizontal)
@@ -382,7 +390,7 @@ class _BaseStylePanel(QWidget):
         val_lbl.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        val_lbl.setStyleSheet(_LBL_STYLE)
+        val_lbl.setStyleSheet(_lbl_style())
         row.addWidget(val_lbl)
 
         def _update(v: int) -> None:
@@ -400,7 +408,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel(f"{label}:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         color_val = self._style.params.extra.get(key, [0.0, 0.0, 0.0])
@@ -423,7 +431,7 @@ class _BaseStylePanel(QWidget):
         row = QHBoxLayout()
         lbl = QLabel(f"{label}:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
 
         combo = QComboBox()
@@ -557,7 +565,7 @@ class _PatternOverlayPanel(_BaseStylePanel):
         row = QHBoxLayout()
         lbl = QLabel("Scale:")
         lbl.setFixedWidth(90)
-        lbl.setStyleSheet(_LBL_STYLE)
+        lbl.setStyleSheet(_lbl_style())
         row.addWidget(lbl)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(10, 500)
@@ -569,7 +577,7 @@ class _PatternOverlayPanel(_BaseStylePanel):
         val_lbl.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        val_lbl.setStyleSheet(_LBL_STYLE)
+        val_lbl.setStyleSheet(_lbl_style())
         row.addWidget(val_lbl)
 
         def _update(v: int) -> None:
@@ -654,37 +662,46 @@ class _StyleEntry:
 #  Main dialog
 # ═══════════════════════════════════════════════════════════════════════════
 
-_LIST_STYLE = """
-    QListWidget {
-        background: #2a2a2a;
-        border: 1px solid #555;
+def _list_style() -> str:
+    from ..theme import ThemeManager
+    p = ThemeManager.instance().active_palette
+    return f"""
+    QListWidget {{
+        background: {p['bg1_alt']};
+        border: 1px solid {p['border']};
         border-radius: 3px;
         font-size: 10pt;
-    }
-    QListWidget::item { padding: 4px 6px; }
-    QListWidget::item:selected { background: #0078d4; color: white; }
+    }}
+    QListWidget::item {{ padding: 4px 6px; }}
+    QListWidget::item:selected {{ background: {p['accent']}; color: {p.get('fg_accent', '#ffffff')}; }}
 """
 
 # ── Inline row widget for list items ─────────────────────────────────────
 
-_INLINE_BTN = """
-    QPushButton {
+def _inline_btn() -> str:
+    from ..theme import ThemeManager
+    p = ThemeManager.instance().active_palette
+    return f"""
+    QPushButton {{
         font-size: 11pt; font-weight: bold; padding: 0;
-        border: none; background: transparent; color: #888;
+        border: none; background: transparent; color: {p['fg_dim']};
         min-width: 20px; max-width: 20px;
         min-height: 20px; max-height: 20px;
-    }
-    QPushButton:hover { color: #fff; }
+    }}
+    QPushButton:hover {{ color: {p['fg']}; }}
 """
 
-_INLINE_DEL_BTN = """
-    QPushButton {
+def _inline_del_btn() -> str:
+    from ..theme import ThemeManager
+    p = ThemeManager.instance().active_palette
+    return f"""
+    QPushButton {{
         font-size: 11pt; font-weight: bold; padding: 0;
-        border: none; background: transparent; color: #888;
+        border: none; background: transparent; color: {p['fg_dim']};
         min-width: 20px; max-width: 20px;
         min-height: 20px; max-height: 20px;
-    }
-    QPushButton:hover { color: #e74c3c; }
+    }}
+    QPushButton:hover {{ color: #e74c3c; }}
 """
 
 
@@ -731,7 +748,8 @@ class _StyleRowWidget(QWidget):
 
         # Clickable name label – selects the row, does NOT toggle the checkbox
         self._name_lbl = _ClickableLabel(name)
-        self._name_lbl.setStyleSheet("font-size: 10pt; color: #ddd;")
+        palette = ThemeManager.instance().active_palette
+        self._name_lbl.setStyleSheet(f"font-size: 10pt; color: {palette['fg']};")
         self._name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         self._name_lbl.clicked.connect(lambda: self.row_clicked.emit(self._key))
         lay.addWidget(self._name_lbl, 1)
@@ -739,14 +757,14 @@ class _StyleRowWidget(QWidget):
         if show_add:
             add_btn = QPushButton("+")
             add_btn.setToolTip(f"Add another {name}")
-            add_btn.setStyleSheet(_INLINE_BTN)
+            add_btn.setStyleSheet(_inline_btn())
             add_btn.clicked.connect(lambda: self.add_clicked.emit(self._key))
             lay.addWidget(add_btn)
 
         if show_remove:
             del_btn = QPushButton("−")
             del_btn.setToolTip("Remove this style")
-            del_btn.setStyleSheet(_INLINE_DEL_BTN)
+            del_btn.setStyleSheet(_inline_del_btn())
             del_btn.clicked.connect(lambda: self.remove_clicked.emit(self._key))
             lay.addWidget(del_btn)
 
@@ -813,24 +831,25 @@ class LayerStylesDialog(QDialog):
         left.setSpacing(4)
 
         title = QLabel("Styles")
+        palette = ThemeManager.instance().active_palette
         title.setStyleSheet(
-            "font-size: 11pt; font-weight: bold; color: #eee;"
+            f"font-size: 11pt; font-weight: bold; color: {palette['fg']};"
             " margin-bottom: 4px;"
         )
         left.addWidget(title)
 
         self._list = QListWidget()
         self._list.setFixedWidth(220)
-        self._list.setStyleSheet(_LIST_STYLE)
+        self._list.setStyleSheet(_list_style())
         self._list.currentRowChanged.connect(self._on_row_changed)
         left.addWidget(self._list, 1)
 
         # Move Up / Move Down buttons
         _reorder_style = (
-            "QPushButton { font-size: 9pt; padding: 2px 8px;"
-            " border: 1px solid #555; border-radius: 3px;"
-            " background: #3a3a3a; color: #ccc; }"
-            " QPushButton:hover { background: #4a4a4a; }"
+            f"QPushButton {{ font-size: 9pt; padding: 2px 8px;"
+            f" border: 1px solid {palette['border']}; border-radius: 3px;"
+            f" background: {palette['btn']}; color: {palette['fg']}; }}"
+            f" QPushButton:hover {{ background: {palette['hover']}; }}"
         )
         reorder_row = QHBoxLayout()
         reorder_row.setSpacing(4)
@@ -851,7 +870,7 @@ class LayerStylesDialog(QDialog):
         # ── Separator ────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #555;")
+        sep.setStyleSheet(f"color: {palette['border']};")
         root.addWidget(sep)
 
         # ── Right column ─────────────────────────────────────────────────

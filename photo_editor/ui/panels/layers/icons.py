@@ -7,7 +7,8 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
-from .base import ICON_ACTIVE, ICON_INACTIVE, draw_icon
+from .base import draw_icon
+from photo_editor.ui.theme import ThemeManager
 
 
 def _tb_icon(draw_fn, size: int = 16) -> QIcon:
@@ -17,7 +18,10 @@ def _tb_icon(draw_fn, size: int = 16) -> QIcon:
 def icon_eye(visible: bool) -> QIcon:
     def _draw(p: QPainter, s: int):
         cx, cy = s / 2, s / 2
-        col = QColor(ICON_ACTIVE) if visible else QColor(ICON_INACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col_active = palette.get('fg_accent', palette['fg'])
+        col_inactive = palette['fg_dim']
+        col = QColor(col_active) if visible else QColor(col_inactive)
         p.setPen(QPen(col, 1.4))
         p.setBrush(Qt.BrushStyle.NoBrush)
         eye = QPainterPath()
@@ -37,7 +41,10 @@ def icon_eye(visible: bool) -> QIcon:
 
 def icon_lock(locked: bool) -> QIcon:
     def _draw(p: QPainter, s: int):
-        col = QColor(ICON_ACTIVE) if locked else QColor(ICON_INACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col_active = palette.get('fg_accent', palette['fg'])
+        col_inactive = palette['fg_dim']
+        col = QColor(col_active) if locked else QColor(col_inactive)
         cx = s / 2
         p.setPen(QPen(col, 1.4))
         bw, bh = 10.0, 6.0
@@ -69,7 +76,8 @@ def icon_mask(has_mask: bool) -> QIcon:
 
 def ico_new_layer() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(2, 4, s - 4, s - 6), 1, 1)
@@ -80,7 +88,8 @@ def ico_new_layer() -> QIcon:
 
 def ico_fx() -> QIcon:
     def _d(p, s):
-        p.setPen(QPen(QColor(ICON_ACTIVE), 1.4))
+        palette = ThemeManager.instance().active_palette
+        p.setPen(QPen(QColor(palette.get('fg_accent', palette['fg'])), 1.4))
         f = QFont("Segoe UI", 9, QFont.Weight.Bold)
         p.setFont(f)
         p.drawText(QRectF(0, 0, s, s), Qt.AlignmentFlag.AlignCenter, "fx")
@@ -89,7 +98,8 @@ def ico_fx() -> QIcon:
 
 def ico_mask() -> QIcon:
     def _d(p, s):
-        p.setPen(QPen(QColor(ICON_ACTIVE), 1.2))
+        palette = ThemeManager.instance().active_palette
+        p.setPen(QPen(QColor(palette.get('fg_accent', palette['fg'])), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QRectF(2, 2, s - 4, s - 4))
     return _tb_icon(_d)
@@ -98,13 +108,14 @@ def ico_mask() -> QIcon:
 def ico_mask_layer() -> QIcon:
     def _d(p, s):
         cx, cy, r = s / 2, s / 2, s / 2 - 2
-        p.setPen(QPen(QColor(ICON_ACTIVE), 1.2))
+        palette = ThemeManager.instance().active_palette
+        p.setPen(QPen(QColor(palette.get('fg_accent', palette['fg'])), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QPointF(cx, cy), r, r)
         clip = QPainterPath()
         clip.addRect(QRectF(cx, 0, cx, s))
         p.setClipPath(clip)
-        p.setBrush(QColor(ICON_ACTIVE))
+        p.setBrush(QColor(palette.get('fg_accent', palette['fg'])))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPointF(cx, cy), r, r)
     return _tb_icon(_d)
@@ -113,13 +124,14 @@ def ico_mask_layer() -> QIcon:
 def ico_adjustment() -> QIcon:
     def _d(p, s):
         cx, cy, r = s / 2, s / 2, s / 2 - 2
-        p.setPen(QPen(QColor(ICON_ACTIVE), 1.2))
+        palette = ThemeManager.instance().active_palette
+        p.setPen(QPen(QColor(palette.get('fg_accent', palette['fg'])), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(QPointF(cx, cy), r, r)
         clip = QPainterPath()
         clip.addRect(QRectF(0, 0, cx, s))
         p.setClipPath(clip)
-        p.setBrush(QColor(ICON_ACTIVE))
+        p.setBrush(QColor(palette.get('fg_accent', palette['fg'])))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPointF(cx, cy), r, r)
     return _tb_icon(_d)
@@ -127,7 +139,8 @@ def ico_adjustment() -> QIcon:
 
 def ico_filter() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.4))
         cx, cy = s / 2, s / 2
         r = s / 2 - 2
@@ -153,7 +166,8 @@ def ico_filter() -> QIcon:
 
 def ico_text() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.6))
         f = QFont("Segoe UI", int(s * 0.6), QFont.Weight.Bold)
         p.setFont(f)
@@ -163,7 +177,8 @@ def ico_text() -> QIcon:
 
 def ico_chain() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(3, 2, s - 6, 5), 2, 2)
@@ -174,7 +189,8 @@ def ico_chain() -> QIcon:
 
 def ico_eraser() -> QIcon:
     def _d(p, s):
-        p.setPen(QPen(QColor(ICON_ACTIVE), 1.2))
+        palette = ThemeManager.instance().active_palette
+        p.setPen(QPen(QColor(palette.get('fg_accent', palette['fg'])), 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawLine(QPointF(4, s - 3), QPointF(s - 4, 3))
         p.drawLine(QPointF(s - 6, s - 3), QPointF(s - 2, s - 3))
@@ -183,7 +199,8 @@ def ico_eraser() -> QIcon:
 
 def ico_folder() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         path = QPainterPath()
@@ -201,7 +218,8 @@ def ico_folder() -> QIcon:
 
 def ico_duplicate() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(1, 3, s - 5, s - 5), 1, 1)
@@ -211,7 +229,8 @@ def ico_duplicate() -> QIcon:
 
 def ico_move() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.4))
         cx, cy = s / 2, s / 2
         p.drawLine(QPointF(cx, 2), QPointF(cx, s - 2))
@@ -225,7 +244,8 @@ def ico_move() -> QIcon:
 
 def ico_grid() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.0))
         t = 3
         for r in range(3):
@@ -239,7 +259,8 @@ def ico_grid() -> QIcon:
 
 def ico_trash() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawLine(QPointF(3, 5), QPointF(s - 3, 5))
@@ -254,7 +275,8 @@ def ico_trash() -> QIcon:
 
 def ico_settings() -> QIcon:
     def _d(p, s):
-        col = QColor(ICON_ACTIVE)
+        palette = ThemeManager.instance().active_palette
+        col = QColor(palette.get('fg_accent', palette['fg']))
         p.setPen(QPen(col, 1.2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         cx, cy = s / 2, s / 2

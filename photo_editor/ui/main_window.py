@@ -23,7 +23,7 @@ from .panels.transform_panel import TransformPanel
 from .controllers import DocumentController
 from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
-from .theme import DARK_STYLESHEET
+from .theme import ThemeManager, THEMES
 from .tool_manager import ToolManager
 from .toolbar import EditorToolbar
 
@@ -37,7 +37,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Photo Editor")
         self.resize(1440, 900)
-        self.setStyleSheet(DARK_STYLESHEET)
+        
+        ThemeManager.instance().theme_changed.connect(
+            lambda _: self.setStyleSheet(THEMES[ThemeManager.instance().active_theme_name])
+        )
+        self.setStyleSheet(THEMES["Dark"])
         self.setAcceptDrops(True)
 
         self._doc: Document | None = None
@@ -138,10 +142,10 @@ class MainWindow(QMainWindow):
         self._props_toolbar.setMovable(False)
         self._props_toolbar.setFloatable(False)
         self._props_toolbar.addWidget(self._props_panel)
-        self._props_toolbar.setStyleSheet(
-            "QToolBar { background: #333333; border: none; border-bottom: 1px solid #444; spacing: 0; padding: 0; }"
-            "QToolBar > QWidget { background: #333333; }"
-        )
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
+        self._on_theme_changed(ThemeManager.instance().active_palette)
+        
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._props_toolbar)
 
         self._toolbar = EditorToolbar(self)
@@ -407,4 +411,10 @@ class MainWindow(QMainWindow):
             "<p>A professional raster image editor built with PySide6.</p>"
             "<p>Features include layers, masks, blending modes, "
             "filters, adjustments, and more.</p>",
+        )
+
+    def _on_theme_changed(self, palette: dict) -> None:
+        self._props_toolbar.setStyleSheet(
+            f"QToolBar {{ background: {palette['bg3']}; border: none; border-bottom: 1px solid {palette['border']}; spacing: 0; padding: 0; }}"
+            f"QToolBar > QWidget {{ background: {palette['bg3']}; }}"
         )

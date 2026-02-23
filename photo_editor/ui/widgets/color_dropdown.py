@@ -41,20 +41,22 @@ from .color_sliders import ColorSliders
 from .color_wheel import ColorWheel
 from .gradient_editor import GradientEditor
 from .swatch_grid import SwatchGrid
+from ..theme import ThemeManager
 
 
 # ============================================================================
 # Tab bar styled for the popup
 # ============================================================================
 
-_TAB_STYLE = """
-QTabBar {
+def _tab_style(palette: dict) -> str:
+    return f"""
+QTabBar {{
     background: transparent;
     border: none;
-}
-QTabBar::tab {
-    background: #333;
-    color: #999;
+}}
+QTabBar::tab {{
+    background: {palette['bg2']};
+    color: {palette['fg_dim']};
     border: none;
     padding: 6px 14px;
     font-size: 11px;
@@ -62,16 +64,16 @@ QTabBar::tab {
     font-family: 'Segoe UI', 'Inter', sans-serif;
     border-bottom: 2px solid transparent;
     margin-right: 1px;
-}
-QTabBar::tab:hover {
-    color: #ccc;
-    background: #3a3a3a;
-}
-QTabBar::tab:selected {
-    color: #e0e0e0;
-    background: #3a3a3a;
-    border-bottom: 2px solid #5a8abf;
-}
+}}
+QTabBar::tab:hover {{
+    color: {palette['fg']};
+    background: {palette['hover']};
+}}
+QTabBar::tab:selected {{
+    color: {palette.get('fg_accent', '#ffffff')};
+    background: {palette['bg1']};
+    border-bottom: 2px solid {palette['accent']};
+}}
 """
 
 
@@ -119,13 +121,6 @@ class _ColorPopup(QWidget):
         self._container = QWidget(self)
         self._container.setObjectName("popupContainer")
         self._container.setGraphicsEffect(shadow)
-        self._container.setStyleSheet(
-            "#popupContainer {"
-            "  background: #2e2e2e;"
-            "  border: 1px solid #444;"
-            "  border-radius: 8px;"
-            "}"
-        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)  # room for shadow
@@ -137,7 +132,6 @@ class _ColorPopup(QWidget):
 
         # Tab bar
         self._tabs = QTabBar()
-        self._tabs.setStyleSheet(_TAB_STYLE)
         self._tabs.setExpanding(False)
         self._tabs.setDocumentMode(True)
         self._tabs.addTab("Swatches")
@@ -191,7 +185,20 @@ class _ColorPopup(QWidget):
         self._mgr = ColorManager.instance()
         self._mgr.history_changed.connect(self._swatches.refresh_recent)
 
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
         self._updating = False
+
+    def _apply_theme(self, palette: dict) -> None:
+        self._container.setStyleSheet(
+            "#popupContainer {"
+            f"  background: {palette['bg2']};"
+            f"  border: 1px solid {palette['border']};"
+            "  border-radius: 8px;"
+            "}"
+        )
+        self._tabs.setStyleSheet(_tab_style(palette))
 
     def set_color(self, c: Color) -> None:
         self._updating = True
@@ -318,11 +325,14 @@ class _ColorButton(QWidget):
         clip.addRoundedRect(rect, radius, radius)
         p.setClipPath(clip)
         cs = 4
+        palette = ThemeManager.instance().active_palette
+        c1 = QColor(palette['bg1']).darker(110)
+        c2 = QColor(palette['bg1']).lighter(110)
         for y in range(int(rect.top()), int(rect.bottom()) + 1, cs):
             for x in range(int(rect.left()), int(rect.right()) + 1, cs):
                 ix = (x - int(rect.left())) // cs
                 iy = (y - int(rect.top())) // cs
-                c = QColor(68, 68, 68) if (ix + iy) % 2 == 0 else QColor(88, 88, 88)
+                c = c1 if (ix + iy) % 2 == 0 else c2
                 p.fillRect(x, y, cs, cs, c)
         p.setClipping(False)
 
@@ -351,13 +361,13 @@ class _ColorButton(QWidget):
 
         # Border
         if self._hovered:
-            p.setPen(QPen(QColor(255, 255, 255, 40), 1.5))
+            p.setPen(QPen(QColor(palette['border_light']), 1.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rect, radius, radius)
-            p.setPen(QPen(QColor(110, 180, 255, 100), 1.0))
+            p.setPen(QPen(QColor(palette['accent']), 1.0))
             p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
         else:
-            p.setPen(QPen(QColor(255, 255, 255, 15), 1.0))
+            p.setPen(QPen(QColor(palette['border']), 1.0))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rect, radius, radius)
         p.end()
@@ -425,12 +435,8 @@ class ColorDropdown(QWidget):
         layout.setSpacing(4)
 
         if label:
-            lbl = QLabel(label)
-            lbl.setStyleSheet(
-                "color: #999; font-size: 11px; font-weight: 600;"
-                "font-family: 'Segoe UI', 'Inter', sans-serif;"
-            )
-            layout.addWidget(lbl)
+            self._lbl = QLabel(label)
+            layout.addWidget(self._lbl)
 
         self._btn = _ColorButton()
         self._btn.clicked.connect(self._toggle_popup)
@@ -439,6 +445,17 @@ class ColorDropdown(QWidget):
         self._popup: _ColorPopup | None = None
         self._color = Color.black()
         self._paint: FillPaint | None = None  # track active paint (Solid or Gradient)
+
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        if hasattr(self, '_lbl') and self._lbl:
+            self._lbl.setStyleSheet(
+                f"color: {palette['fg_dim']}; font-size: 11px; font-weight: 600;"
+                "font-family: 'Segoe UI', 'Inter', sans-serif;"
+            )
+        self._btn.update()
 
     # ---- Public API ---------------------------------------------------------
 

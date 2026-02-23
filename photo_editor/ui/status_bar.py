@@ -24,15 +24,10 @@ _PILL_CSS = """
     }}
 """
 
-_ACCENT_PILL = _PILL_CSS.format(bg="#3d5a80", fg="#d0dcea", weight=600)
-_MUTED_PILL = _PILL_CSS.format(bg="rgba(255,255,255,0.06)", fg="#9a9a9a", weight=400)
-_DIM_PILL = _PILL_CSS.format(bg="transparent", fg="#777777", weight=400)
 
-
-def _pill(text: str = "", style: str = _MUTED_PILL) -> QLabel:
+def _pill(text: str = "") -> QLabel:
     """Create a pill-shaped label."""
     lbl = QLabel(text)
-    lbl.setStyleSheet(style)
     lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
     lbl.setFixedHeight(20)
     lbl.setContentsMargins(_H_PAD, 0, _H_PAD, 0)
@@ -76,7 +71,7 @@ class EditorStatusBar(QStatusBar):
         hl.setContentsMargins(6, 0, 0, 0)
         hl.setSpacing(5)
 
-        self._doc_pill = _pill("No document", _ACCENT_PILL)
+        self._doc_pill = _pill("No document")
         self._size_pill = _pill("")
         self._tool_pill = _pill("")
 
@@ -101,15 +96,9 @@ class EditorStatusBar(QStatusBar):
             "When checked, vector layers are continuously rasterized.\n"
             "Uncheck to view curves only (better performance)."
         )
-        self._auto_rasterize_cb.setStyleSheet(
-            "QCheckBox { color: #999; font-size: 10px; spacing: 4px; background: transparent; }"
-            "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 2px; "
-            "border: 1px solid #666; background: #383838; }"
-            "QCheckBox::indicator:checked { background: #4a6fa5; border-color: #5a8abf; }"
-        )
         self._auto_rasterize_cb.toggled.connect(self.auto_rasterize_changed.emit)
 
-        self._pos_pill = _pill("x: 0  y: 0", _DIM_PILL)
+        self._pos_pill = _pill("x: 0  y: 0")
         self._zoom_pill = _pill("100 %")
 
         hr.addStretch()
@@ -122,6 +111,10 @@ class EditorStatusBar(QStatusBar):
         # Attach clusters to the status bar
         self.addWidget(left, 1)
         self.addPermanentWidget(right)
+
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
 
     # ── public API (unchanged signatures) ───────────────────────────────
 
@@ -146,3 +139,25 @@ class EditorStatusBar(QStatusBar):
     @auto_rasterize.setter
     def auto_rasterize(self, value: bool) -> None:
         self._auto_rasterize_cb.setChecked(value)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(
+            f"QStatusBar {{ border-top: 1px solid {palette['input_bg']}; background: {palette['bg1_alt']}; }}"
+            "QStatusBar::item { border: none; }"
+        )
+        
+        accent_pill = _PILL_CSS.format(bg=palette['accent'], fg=palette['fg_accent'], weight=600)
+        dim_pill = _PILL_CSS.format(bg="transparent", fg=palette['fg_dim'], weight=400)
+        
+        self._doc_pill.setStyleSheet(accent_pill)
+        self._size_pill.setStyleSheet(dim_pill)
+        self._tool_pill.setStyleSheet(dim_pill)
+        self._pos_pill.setStyleSheet(dim_pill)
+        self._zoom_pill.setStyleSheet(dim_pill)
+        
+        self._auto_rasterize_cb.setStyleSheet(
+            f"QCheckBox {{ color: {palette['fg_dim']}; font-size: 10px; spacing: 4px; background: transparent; }}"
+            f"QCheckBox::indicator {{ width: 13px; height: 13px; border-radius: 2px; "
+            f"border: 1px solid {palette['border_light']}; background: {palette['bg2']}; }}"
+            f"QCheckBox::indicator:checked {{ background: {palette['accent']}; border-color: {palette['accent_border']}; }}"
+        )

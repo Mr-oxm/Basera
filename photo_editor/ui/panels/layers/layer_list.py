@@ -7,7 +7,6 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
 
 from .base import (
-    BG_LIST,
     ROLE_IS_ADJ_FILTER,
     ROLE_IS_GROUP,
     ROLE_IS_MASK,
@@ -16,6 +15,7 @@ from .base import (
     ROLE_PARENT_ID,
 )
 from .layer_delegate import LayerItemDelegate
+from photo_editor.ui.theme import ThemeManager
 
 
 class LayerListWidget(QListWidget):
@@ -36,9 +36,13 @@ class LayerListWidget(QListWidget):
         self._mask_drop_target: QListWidgetItem | None = None
         self._drop_indicator_y: int = -1
 
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
         self.setStyleSheet(f"""
             QListWidget {{
-                background-color: {BG_LIST};
+                background-color: {palette['bg1_alt']};
                 border: none;
                 outline: none;
             }}
@@ -88,7 +92,8 @@ class LayerListWidget(QListWidget):
                     self._clear_mask_highlight()
                     self._mask_drop_target = target_item
                     w = self.itemWidget(target_item)
-                    border_color = "#00bcd4" if self._is_dragging_mask() else "#ff9800"
+                    palette = ThemeManager.instance().active_palette
+                    border_color = palette['accent'] if self._is_dragging_mask() else palette['accent_border']
                     if w:
                         w.setStyleSheet(
                             "background: transparent;"
@@ -130,11 +135,12 @@ class LayerListWidget(QListWidget):
         if self._drop_indicator_y >= 0:
             p = QPainter(self.viewport())
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            pen = QPen(QColor("#7a3da8"), 2)
+            palette = ThemeManager.instance().active_palette
+            pen = QPen(QColor(palette['accent_border']), 2)
             p.setPen(pen)
             y = self._drop_indicator_y
             p.drawLine(4, y, self.viewport().width() - 4, y)
-            p.setBrush(QColor("#7a3da8"))
+            p.setBrush(QColor(palette['accent_border']))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(QPointF(4, y), 3, 3)
             p.drawEllipse(QPointF(self.viewport().width() - 4, y), 3, 3)

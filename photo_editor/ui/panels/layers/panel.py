@@ -22,11 +22,6 @@ from ....core.document import Document
 from ....core.enums import BlendMode, LayerType
 
 from .base import (
-    BG,
-    BG_HEADER,
-    BORDER,
-    BTN_HOVER,
-    ICON_ACTIVE,
     ROLE_INDENT,
     ROLE_IS_ADJ_FILTER,
     ROLE_IS_GROUP,
@@ -36,12 +31,10 @@ from .base import (
     ROLE_PARENT_ID,
     ROW_HEIGHT,
     SEP_HEIGHT,
-    SEL_PURPLE,
-    TEXT,
-    TEXT_DIM,
     h_separator,
     toolbar_btn,
 )
+from ...theme import ThemeManager
 from .blend_combo import BlendModeCombo
 from .icons import icon_lock, ico_adjustment, ico_filter, ico_folder, ico_fx, ico_grid
 from .icons import ico_mask, ico_new_layer, ico_settings, ico_trash, ico_duplicate
@@ -87,26 +80,97 @@ class LayersPanel(QWidget):
         self._collapsed_groups: set[str] = set()
         self._collapsed_masks: set[str] = set()
         self._build_ui()
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(f"background-color: {palette['bg1']};")
+        self._header.setStyleSheet(f"background-color: {palette['bg2']};")
+        self._opacity_lbl.setStyleSheet(f"color: {palette['fg_dim']}; font-size: 11px;")
+        
+        self._opacity_spin.setStyleSheet(f"""
+            QSpinBox {{
+                background: {palette['bg1']}; color: {palette['fg']}; border: 1px solid {palette['border']};
+                border-radius: 3px; padding: 2px 4px; font-size: 11px;
+            }}
+        """)
+        
+        self._blend_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {palette['bg1']}; color: {palette['fg']}; border: 1px solid {palette['border']};
+                border-radius: 3px; padding: 2px 4px; font-size: 11px;
+                min-width: 70px;
+            }}
+            QComboBox::drop-down {{ border: none; width: 14px; }}
+            QComboBox QAbstractItemView {{
+                background: {palette['bg2']}; color: {palette['fg']};
+                selection-background-color: {palette['accent']};
+            }}
+        """)
+        
+        self._opacity_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                background: {palette['border']}; height: 3px; border-radius: 1px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {palette['fg_accent'] if 'fg_accent' in palette else palette['fg']}; width: 10px; height: 10px;
+                margin: -4px 0; border-radius: 5px;
+            }}
+            QSlider::handle:horizontal:hover {{ background: #ffffff; }}
+        """)
+        
+        self._toolbar.setStyleSheet(f"background-color: {palette['bg2']};")
+        self._adj_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background: {palette['hover']};
+            }}
+        """)
+        self._adj_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {palette['bg2']}; color: {palette['fg']};
+                border: 1px solid {palette['border']}; padding: 4px 0;
+            }}
+            QMenu::item {{ padding: 4px 20px; }}
+            QMenu::item:selected {{ background: {palette['accent']}; }}
+        """)
+        self._filt_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; border-radius: 3px;
+            }}
+            QPushButton:hover {{ background: {palette['hover']}; }}
+        """)
+        self._filt_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {palette['bg2']}; color: {palette['fg']};
+                border: 1px solid {palette['border']}; padding: 4px 0;
+            }}
+            QMenu::item {{ padding: 4px 20px; }}
+            QMenu::item:selected {{ background: {palette['accent']}; }}
+        """)
+        # Trigger item rebuild on theme change if document is valid
+        if self._doc and hasattr(self, '_list'):
+            self.refresh(self._doc, thumbnails=True)
+            self._sync_active(self._doc)
 
     def _build_ui(self) -> None:
-        self.setStyleSheet(f"background-color: {BG};")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        header = QWidget()
-        header.setStyleSheet(f"background-color: {BG_HEADER};")
-        header_layout = QVBoxLayout(header)
+        self._header = QWidget()
+        header_layout = QVBoxLayout(self._header)
         header_layout.setContentsMargins(6, 4, 6, 4)
         header_layout.setSpacing(4)
 
         r1 = QHBoxLayout()
         r1.setSpacing(4)
 
-        opacity_lbl = QLabel("Opacity:")
-        opacity_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
-        r1.addWidget(opacity_lbl)
+        self._opacity_lbl = QLabel("Opacity:")
+        r1.addWidget(self._opacity_lbl)
 
         self._opacity_spin = QSpinBox()
         self._opacity_spin.setRange(0, 100)
@@ -114,28 +178,10 @@ class LayersPanel(QWidget):
         self._opacity_spin.setSuffix(" %")
         self._opacity_spin.setFixedWidth(52)
         self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._opacity_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background: {BG}; color: {TEXT}; border: 1px solid {BORDER};
-                border-radius: 3px; padding: 2px 4px; font-size: 11px;
-            }}
-        """)
         self._opacity_spin.valueChanged.connect(self._on_opacity_changed)
         r1.addWidget(self._opacity_spin)
 
         self._blend_combo = BlendModeCombo()
-        self._blend_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {BG}; color: {TEXT}; border: 1px solid {BORDER};
-                border-radius: 3px; padding: 2px 4px; font-size: 11px;
-                min-width: 70px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {BG_HEADER}; color: {TEXT};
-                selection-background-color: {SEL_PURPLE};
-            }}
-        """)
         for mode in BlendMode:
             self._blend_combo.addItem(mode.name.replace("_", " ").title(), mode)
         self._blend_combo.currentIndexChanged.connect(self._on_blend_changed)
@@ -167,20 +213,10 @@ class LayersPanel(QWidget):
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(0, 100)
         self._opacity_slider.setValue(100)
-        self._opacity_slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{
-                background: {BORDER}; height: 3px; border-radius: 1px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {ICON_ACTIVE}; width: 10px; height: 10px;
-                margin: -4px 0; border-radius: 5px;
-            }}
-            QSlider::handle:horizontal:hover {{ background: #ffffff; }}
-        """)
         self._opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
         header_layout.addWidget(self._opacity_slider)
 
-        root.addWidget(header)
+        root.addWidget(self._header)
         root.addWidget(h_separator())
 
         self._list = LayerListWidget()
@@ -197,9 +233,8 @@ class LayersPanel(QWidget):
 
         root.addWidget(h_separator())
 
-        toolbar = QWidget()
-        toolbar.setStyleSheet(f"background-color: {BG_HEADER};")
-        tb_layout = QHBoxLayout(toolbar)
+        self._toolbar = QWidget()
+        tb_layout = QHBoxLayout(self._toolbar)
         tb_layout.setContentsMargins(4, 3, 4, 3)
         tb_layout.setSpacing(1)
 
@@ -213,23 +248,9 @@ class LayersPanel(QWidget):
         self._adj_btn.setFixedSize(24, 24)
         self._adj_btn.setFlat(True)
         self._adj_btn.setToolTip("Add adjustment layer")
-        self._adj_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none; border-radius: 3px;
-            }}
-            QPushButton:hover {{
-                background: {BTN_HOVER};
-            }}
-        """)
+        
         self._adj_menu = QMenu(self)
-        self._adj_menu.setStyleSheet(f"""
-            QMenu {{
-                background: {BG_HEADER}; color: {TEXT};
-                border: 1px solid {BORDER}; padding: 4px 0;
-            }}
-            QMenu::item {{ padding: 4px 20px; }}
-            QMenu::item:selected {{ background: {SEL_PURPLE}; }}
-        """)
+        
         _ADJ_NAMES = [
             "Brightness/Contrast", "Levels", "Curves", "Exposure",
             "Vibrance", "Hue/Saturation", "Color Balance", "Black & White",
@@ -250,21 +271,9 @@ class LayersPanel(QWidget):
         self._filt_btn.setFixedSize(24, 24)
         self._filt_btn.setFlat(True)
         self._filt_btn.setToolTip("Add filter layer")
-        self._filt_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none; border-radius: 3px;
-            }}
-            QPushButton:hover {{ background: {BTN_HOVER}; }}
-        """)
+        
         self._filt_menu = QMenu(self)
-        self._filt_menu.setStyleSheet(f"""
-            QMenu {{
-                background: {BG_HEADER}; color: {TEXT};
-                border: 1px solid {BORDER}; padding: 4px 0;
-            }}
-            QMenu::item {{ padding: 4px 20px; }}
-            QMenu::item:selected {{ background: {SEL_PURPLE}; }}
-        """)
+        
         _FILTER_CATEGORIES = [
             ("Blur", ["Gaussian Blur", "Motion Blur", "Radial Blur", "Surface Blur", "Lens Blur"]),
             ("Sharpen", ["Sharpen", "Unsharp Mask", "Smart Sharpen"]),
@@ -291,7 +300,7 @@ class LayersPanel(QWidget):
         tb_layout.addWidget(toolbar_btn(ico_grid(), "Flatten image", self.flatten_requested))
         tb_layout.addWidget(toolbar_btn(ico_trash(), "Delete layer", self.delete_requested))
 
-        root.addWidget(toolbar)
+        root.addWidget(self._toolbar)
 
     def refresh(self, document: Document, *, thumbnails: bool = True) -> None:
         self._doc = document
@@ -331,7 +340,8 @@ class LayersPanel(QWidget):
                 sep_layout.setSpacing(0)
                 line = QFrame()
                 line.setFrameShape(QFrame.Shape.HLine)
-                line.setStyleSheet(f"color: {BORDER};")
+                theme_border = ThemeManager.instance().active_palette['border']
+                line.setStyleSheet(f"color: {theme_border};")
                 line.setFixedHeight(1)
                 sep_layout.addWidget(line)
                 sep_widget.setStyleSheet("background: transparent;")

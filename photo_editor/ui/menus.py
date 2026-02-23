@@ -20,8 +20,28 @@ class EditorMenuBar(QMenuBar):
         self.actions_map: dict[str, QAction] = {}
         self._mgr = ShortcutManager.instance()
         self._build()
-        # Live-update shortcuts when the user changes bindings
         self._mgr.shortcuts_changed.connect(self._refresh_shortcuts)
+        self.setNativeMenuBar(False)
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(f"""
+            QMenuBar {{
+                background-color: {palette['bg3']};
+                color: {palette['fg']};
+                border-bottom: 1px solid {palette['border']};
+            }}
+            QMenuBar::item:selected {{ background-color: {palette['hover']}; }}
+            QMenu {{
+                background-color: {palette['bg2']};
+                color: {palette['fg']};
+                border: 1px solid {palette['border_light']};
+            }}
+            QMenu::item:selected {{ background-color: {palette['accent']}; color: {palette['fg_accent']}; }}
+            QMenu::separator {{ height: 1px; background: {palette['border_light']}; margin: 4px 8px; }}
+        """)
 
     def _build(self) -> None:
         self._file_menu()
@@ -135,6 +155,13 @@ class EditorMenuBar(QMenuBar):
         self._add(m, "toggle_grid", "Show &Grid")
         self._add(m, "toggle_rulers", "Show &Rulers")
         self._add(m, "toggle_guides", "Show G&uides")
+        m.addSeparator()
+        
+        from .theme import THEMES
+        theme_sub = m.addMenu("&Theme")
+        for key in THEMES.keys():
+            action_key = f"theme_{key.lower().replace(' ', '_')}"
+            self._add(theme_sub, action_key, key)
 
     def _help_menu(self) -> None:
         m = self.addMenu("&Help")

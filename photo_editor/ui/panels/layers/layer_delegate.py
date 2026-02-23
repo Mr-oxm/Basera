@@ -6,7 +6,8 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyleOptionViewItem, QStyledItemDelegate
 
-from .base import ROLE_IS_SEP, SEL_BORDER, SEL_PURPLE
+from .base import ROLE_IS_SEP
+from photo_editor.ui.theme import ThemeManager
 
 
 class LayerItemDelegate(QStyledItemDelegate):
@@ -22,8 +23,9 @@ class LayerItemDelegate(QStyledItemDelegate):
         rect = option.rect.adjusted(1, 1, -1, -1)
 
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.setBrush(QColor(SEL_PURPLE))
-            painter.setPen(QPen(QColor(SEL_BORDER), 1))
+            palette = ThemeManager.instance().active_palette
+            painter.setBrush(QColor(palette['accent']))
+            painter.setPen(QPen(QColor(palette['accent_border']), 1))
             painter.drawRoundedRect(QRectF(rect), 4, 4)
         else:
             painter.setBrush(Qt.BrushStyle.NoBrush)

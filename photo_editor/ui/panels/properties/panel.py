@@ -35,12 +35,10 @@ class PropertiesPanel(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            PropertiesPanel, PropertiesPanel > QWidget {{
-                background-color: {self._PANEL_BG};
-            }}
-            QLabel {{ background: transparent; }}
-        """)
+        
+        from ...theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
 
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 0, 8, 0)
@@ -257,3 +255,11 @@ class PropertiesPanel(QWidget):
         w = self._widgets.get(key)
         if w:
             w.set_value(float(value))
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(f"""
+            PropertiesPanel, PropertiesPanel > QWidget {{
+                background-color: {palette['bg3']};
+            }}
+            QLabel {{ background: transparent; }}
+        """)

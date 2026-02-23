@@ -14,23 +14,30 @@ class _CloseButton(QToolButton):
         super().__init__(parent)
         self.setFixedSize(16, 16)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.setStyleSheet("""
-            QToolButton {
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(f"""
+            QToolButton {{
                 background: transparent;
                 border: none;
                 border-radius: 3px;
                 padding: 0px;
-            }
-            QToolButton:hover {
-                background: #555;
-            }
+            }}
+            QToolButton:hover {{
+                background: {palette['hover']};
+            }}
         """)
+        self._color_normal = QColor(palette['fg_dim'])
+        self._color_hover = QColor(palette['fg'])
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor("#ccc") if self.underMouse() else QColor("#888")
+        color = self._color_hover if self.underMouse() else self._color_normal
         pen = QPen(color)
         pen.setWidthF(1.5)
         p.setPen(pen)
@@ -62,35 +69,40 @@ class FileTabBar(QWidget):
 
         self._tab_bar.currentChanged.connect(self.tab_selected.emit)
 
-        self._tab_bar.setStyleSheet("""
-            QTabBar {
-                background: #1e1e1e;
-                border: none;
-            }
-            QTabBar::tab {
-                background: #2d2d2d;
-                color: #888;
-                padding: 5px 28px 5px 10px;
-                border: none;
-                border-right: 1px solid #1e1e1e;
-                min-width: 80px;
-                max-width: 220px;
-            }
-            QTabBar::tab:selected {
-                background: #1e1e1e;
-                color: #fff;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #383838;
-                color: #ccc;
-            }
-        """)
-
         layout.addWidget(self._tab_bar)
         layout.addStretch()
 
         self.setFixedHeight(30)
-        self.setStyleSheet("background: #1e1e1e;")
+        
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        self._tab_bar.setStyleSheet(f"""
+            QTabBar {{
+                background: {palette['bg2']};
+                border: none;
+            }}
+            QTabBar::tab {{
+                background: {palette['bg1']};
+                color: {palette['fg_dim']};
+                padding: 5px 28px 5px 10px;
+                border: none;
+                border-right: 1px solid {palette['bg3']};
+                min-width: 80px;
+                max-width: 220px;
+            }}
+            QTabBar::tab:selected {{
+                background: {palette['bg2']};
+                color: {palette['fg']};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: {palette['hover']};
+                color: {palette['fg']};
+            }}
+        """)
+        self.setStyleSheet(f"background: {palette['bg2']};")
 
     # ---- Public API ---------------------------------------------------------
 
