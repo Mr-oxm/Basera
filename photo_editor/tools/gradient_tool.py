@@ -326,11 +326,10 @@ class GradientTool(Tool):
         self._emit_handles(True)
 
     def deactivate(self) -> None:
-        """Clean up when switching away from the gradient tool."""
-        self._editing = False
+        """Hide handles when switching away, but preserve editing state."""
         self._dragging = False
         self._dragging_handle = None
-        self._saved_pixels = None
-        self._target_layer = None
+        # Only hide the overlay handles; keep _editing, _saved_pixels,
+        # _target_layer, and start/end coords so they can be restored.
         self._emit_handles(False)
         super().deactivate()

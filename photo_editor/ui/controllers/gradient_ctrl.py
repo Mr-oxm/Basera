@@ -26,6 +26,9 @@ class GradientController:
             return
         tool.set_preview_callback(mw._schedule_render)
         tool.set_handles_callback(self.on_gradient_handles)
+        # Restore handles if the tool still has an active editing session
+        if tool.is_editing:
+            tool._emit_handles(True)
 
     def on_gradient_handles(self, start, end, stops, visible) -> None:
         mw = self._mw
