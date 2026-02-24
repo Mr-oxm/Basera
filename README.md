@@ -52,6 +52,11 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ### Still Not Working
 - Brush engine pressure sensitivity (partial support)
+- Brush system 
+- Vector boolean features
+- Layer as a mask
+- Text to curves
+- Trace bitmap
 - Refatored Logic (almost done)
 
 ---
