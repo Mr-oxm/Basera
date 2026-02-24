@@ -57,6 +57,8 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 - Layer as a mask
 - Text to curves
 - Trace bitmap
+- Multi-select layers
+- Layer skew
 - Refatored Logic (almost done)
 
 ---
