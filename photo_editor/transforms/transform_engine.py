@@ -8,7 +8,7 @@ class TransformEngine:
     """Applies geometric transforms to RGBA float32 images."""
 
     @staticmethod
-    def scale(image: np.ndarray, sx: float, sy: float) -> np.ndarray:
+    def scale(image: np.ndarray, sx: float, sy: float, fast: bool = False) -> np.ndarray:
         h, w = image.shape[:2]
         nw, nh = max(1, int(w * sx)), max(1, int(h * sy))
         # INTER_AREA for downscaling (anti-aliased), INTER_CUBIC for upscaling
@@ -17,6 +17,10 @@ class TransformEngine:
             interp = cv2.INTER_AREA
         else:
             interp = cv2.INTER_CUBIC
+
+        # If fast mode requested, skip premultiply entirely for direct nearest neighbour
+        if fast:
+            return cv2.resize(image, (nw, nh), interpolation=cv2.INTER_NEAREST)
 
         # Premultiply alpha before resizing to prevent colour fringing
         # at semi-transparent edges, then un-premultiply afterwards.
@@ -34,14 +38,15 @@ class TransformEngine:
         return cv2.resize(image, (nw, nh), interpolation=interp)
 
     @staticmethod
-    def rotate(image: np.ndarray, angle: float, expand: bool = True) -> np.ndarray:
+    def rotate(image: np.ndarray, angle: float, expand: bool = True, fast: bool = False) -> np.ndarray:
         h, w = image.shape[:2]
         cx, cy = w / 2, h / 2
         M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
 
         # Premultiply-alpha path for clean transparent-edge rotation
+        # (Skip if fast=True to save allocations/compute during real-time drags)
         has_alpha = image.ndim == 3 and image.shape[2] == 4
-        if has_alpha:
+        if has_alpha and not fast:
             alpha = image[..., 3:4]
             rgb = image[..., :3] * alpha
             image = np.concatenate([rgb, alpha], axis=-1)
@@ -53,10 +58,12 @@ class TransformEngine:
             M[1, 2] += (nh - h) / 2
         else:
             nw, nh = w, h
-        result = cv2.warpAffine(image, M, (nw, nh), borderMode=cv2.BORDER_TRANSPARENT)
+        
+        flags = cv2.INTER_NEAREST if fast else cv2.INTER_LINEAR
+        result = cv2.warpAffine(image, M, (nw, nh), flags=flags, borderMode=cv2.BORDER_TRANSPARENT)
 
         # Un-premultiply alpha if we premultiplied above
-        if has_alpha:
+        if has_alpha and not fast:
             a = result[..., 3:4]
             safe_a = np.where(a > 1e-6, a, 1.0)
             result[..., :3] /= safe_a

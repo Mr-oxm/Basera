@@ -625,11 +625,15 @@ class MoveTool(Tool):
             # Don't clear _active_layer — we need it for re-drags and commit
             return
 
-        if self._mode == _Mode.ROTATE and self._active_layer is not None:
-            if self._active_layer.layer_type != LayerType.GROUP:
-                # ND system: angle already committed during drag via
-                # compute_display; _current_angle is 0 — no-op addition.
-                self._active_layer.transform_angle += self._current_angle
+        if self._mode in (_Mode.ROTATE, _Mode.RESIZE) and self._active_layer is not None:
+            if self._active_layer.layer_type == LayerType.RASTER:
+                self._active_layer.compute_display(fast=False)
+                for mc in getattr(self, '_mask_children', []):
+                    mc.compute_display(fast=False)
+            elif self._active_layer.layer_type == LayerType.GROUP:
+                for child in self._group_children:
+                    if child.layer_type == LayerType.RASTER:
+                        child.compute_display(fast=False)
                 
         # --- Vector Layer Commit ---
         if self._active_layer is not None and self._mode != _Mode.NONE:
@@ -875,7 +879,7 @@ class MoveTool(Tool):
                 if getattr(layer, "_source_pixels", None) is not None:
                     layer.transform_scale_x *= sx
                     layer.transform_scale_y *= sy
-                    layer.compute_display()
+                    layer.compute_display(fast=True)
                 layer.rasterize_transform()
 
     # ------------------------------------------------------------------
@@ -924,7 +928,7 @@ class MoveTool(Tool):
         # Commit scale and recompute display from source
         layer.transform_scale_x = new_sx
         layer.transform_scale_y = new_sy
-        layer.compute_display()
+        layer.compute_display(fast=True)
 
         if is_rot:
             # Position via anchor constraint: the anchor must stay fixed
@@ -976,7 +980,7 @@ class MoveTool(Tool):
 
         # Commit angle and recompute display from source
         layer.transform_angle = total_angle
-        layer.compute_display()
+        layer.compute_display(fast=True)
 
         # Reposition so the center stays fixed
         layer.position = (int(cx - layer.width / 2),
@@ -1003,7 +1007,7 @@ class MoveTool(Tool):
             mc.transform_scale_x = parent.transform_scale_x
             mc.transform_scale_y = parent.transform_scale_y
             mc.transform_angle = parent.transform_angle
-            mc.compute_display()
+            mc.compute_display(fast=True)
             # Keep the mask co-located with the parent
             mc.position = parent.position
 
@@ -1055,7 +1059,7 @@ class MoveTool(Tool):
 
             child.transform_scale_x = base_sx * sx
             child.transform_scale_y = base_sy * sy
-            child.compute_display()
+            child.compute_display(fast=True)
 
             orig_cx, orig_cy = self._group_child_positions[child.id]
             rel_x = orig_cx - bx
@@ -1093,7 +1097,7 @@ class MoveTool(Tool):
 
             base_angle = self._group_child_base_angle[child.id]
             child.transform_angle = base_angle + angle_deg
-            child.compute_display()
+            child.compute_display(fast=True)
 
             # Rotate child center around the group center
             orig_cx, orig_cy = self._group_child_positions[child.id]

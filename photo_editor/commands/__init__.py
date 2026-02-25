@@ -25,6 +25,8 @@ from .layer import (
     RemoveLayerCommand,
     RenameLayerCommand,
     ReorderLayersCommand,
+    ResizeLayerCommand,
+    RotateLayerCommand,
 )
 from .mask import (
     AddMaskLayerCommand,
@@ -55,6 +57,8 @@ __all__ = [
     "RemoveLayerCommand",
     "RenameLayerCommand",
     "ReorderLayersCommand",
+    "ResizeLayerCommand",
+    "RotateLayerCommand",
     # Mask
     "AddMaskLayerCommand",
     "ApplyMaskLayerCommand",

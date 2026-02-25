@@ -143,25 +143,25 @@ PALETTES = {
         "input_bg": "#3a3a3a", "fg_accent": "#ffffff"
     },
     "Light": {
-        "bg1": "#ffffff", "bg2": "#f5f5f5", "bg3": "#e5e5e5", "bg1_alt": "#f0f0f0",
+        "bg1": "#e5e5e5", "bg2": "#f5f5f5", "bg3": "#ffffff", "bg1_alt": "#e0e0e0",
         "fg": "#333333", "fg_dim": "#666666", "border": "#cccccc", "border_light": "#bbbbbb",
         "accent": "#0066cc", "accent_border": "#0055aa", "hover": "#d5d5d5",
         "scroll": "#c0c0c0", "scroll_hover": "#a0a0a0", "btn": "#e0e0e0", "slider_handle": "#666666",
         "input_bg": "#ffffff", "fg_accent": "#ffffff"
     },
     "Dracula": {
-        "bg1": "#282a36", "bg2": "#44475a", "bg3": "#21222c", "bg1_alt": "#282a36",
+        "bg1": "#21222c", "bg2": "#44475a", "bg3": "#282a36", "bg1_alt": "#21222c",
         "fg": "#f8f8f2", "fg_dim": "#6272a4", "border": "#44475a", "border_light": "#6272a4",
         "accent": "#bd93f9", "accent_border": "#ff79c6", "hover": "#6272a4",
         "scroll": "#6272a4", "scroll_hover": "#ff79c6", "btn": "#44475a", "slider_handle": "#ff79c6",
-        "input_bg": "#21222c", "fg_accent": "#282a36"
+        "input_bg": "#282a36", "fg_accent": "#282a36"
     },
     "Midnight Blue": {
-        "bg1": "#0f172a", "bg2": "#1e293b", "bg3": "#0b1120", "bg1_alt": "#0f172a",
+        "bg1": "#0b1120", "bg2": "#1e293b", "bg3": "#0f172a", "bg1_alt": "#0b1120",
         "fg": "#e2e8f0", "fg_dim": "#94a3b8", "border": "#334155", "border_light": "#475569",
         "accent": "#3b82f6", "accent_border": "#60a5fa", "hover": "#334155",
         "scroll": "#475569", "scroll_hover": "#64748b", "btn": "#1e293b", "slider_handle": "#94a3b8",
-        "input_bg": "#0b1120", "fg_accent": "#ffffff"
+        "input_bg": "#0f172a", "fg_accent": "#ffffff"
     },
     "Pitch Black": {
         "bg1": "#000000", "bg2": "#111111", "bg3": "#0a0a0a", "bg1_alt": "#050505",
@@ -192,11 +192,11 @@ PALETTES = {
         "input_bg": "#141414", "fg_accent": "#ffffff"
     },
     "Forest": {
-        "bg1": "#1a251b", "bg2": "#233324", "bg3": "#121a13", "bg1_alt": "#1a251b",
+        "bg1": "#121a13", "bg2": "#233324", "bg3": "#1a251b", "bg1_alt": "#121a13",
         "fg": "#d4decd", "fg_dim": "#8b9c8a", "border": "#2f4231", "border_light": "#425c44",
         "accent": "#4caf50", "accent_border": "#81c784", "hover": "#2f4231",
         "scroll": "#425c44", "scroll_hover": "#c8e6c9", "btn": "#233324", "slider_handle": "#81c784",
-        "input_bg": "#121a13", "fg_accent": "#ffffff"
+        "input_bg": "#1a251b", "fg_accent": "#ffffff"
     }
 }
 
