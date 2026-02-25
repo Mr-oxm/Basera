@@ -113,21 +113,18 @@ class FileTabBar(QWidget):
             self._tab_bar.setTabToolTip(idx, tooltip)
         # Add a custom close button (manually drawn × so it's always visible)
         btn = _CloseButton(self._tab_bar)
-        btn.clicked.connect(lambda _=False, i=idx: self._on_close_clicked(i))
+        btn.clicked.connect(lambda _=False, b=btn: self._on_close_clicked(b))
         self._tab_bar.setTabButton(idx, QTabBar.ButtonPosition.RightSide, btn)
         self._tab_bar.setCurrentIndex(idx)
         return idx
 
-    def _on_close_clicked(self, index: int) -> None:
+    def _on_close_clicked(self, btn) -> None:
         """Resolve the actual current index of the tab (may shift after removals)."""
-        # The captured index may be stale; find via the button reference
-        btn = self.sender()
+        # Find via the button reference
         for i in range(self._tab_bar.count()):
             if self._tab_bar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
                 self.tab_close_requested.emit(i)
                 return
-        # Fallback
-        self.tab_close_requested.emit(index)
 
     def remove_tab(self, index: int) -> None:
         """Remove a tab by index."""
