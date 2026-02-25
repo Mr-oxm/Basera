@@ -351,18 +351,36 @@ class Document:
 
     # ---- History ------------------------------------------------------------
 
+    def _save_live_state(self) -> None:
+        """Push the current uncommitted changes to history as __Live__ so we can return to it."""
+        if not self.history.states:
+            return
+        if self.history.states[-1].name == "__Live__":
+            return
+        # We only want to push the live state if we are currently AT the end of history
+        if self.history.current_index == len(self.history.states): 
+            # Note: history.current_index has +1 offset when at end!
+            self._snapshot("__Live__")
+            self._dirty = True
+
     def undo(self) -> None:
+        if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
+            self._save_live_state()
         state = self.history.undo()
         if state:
             self._restore(state)
 
     def redo(self) -> None:
+        # Redo doesn't need to save live, because if we can redo, we are NOT at the end
         state = self.history.redo()
         if state:
             self._restore(state)
 
     def navigate_history(self, target_index: int) -> None:
         """Jump to a specific history state by index."""
+        if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
+            self._save_live_state()
+            
         while self.history.current_index > target_index and self.history.can_undo:
             self.history.undo()
         while self.history.current_index < target_index and self.history.can_redo:

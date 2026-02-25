@@ -587,7 +587,7 @@ def _tool_icon(tool_type: ToolType) -> QIcon:
 # Flyout popup for multi-tool groups
 # ---------------------------------------------------------------------------
 
-class _ToolFlyout(QFrame):
+class _ToolFlyout(QWidget):
     """Popup panel showing alternate tools in the same group."""
 
     tool_chosen = Signal(ToolType)
@@ -596,12 +596,20 @@ class _ToolFlyout(QFrame):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
+        self._container = QFrame(self)
+        self._container.setObjectName("flyoutContainer")
+        
         from .theme import ThemeManager
         palette = ThemeManager.instance().active_palette
-        self.setStyleSheet(
-            f"QFrame {{ background: {palette['bg2']}; border: 1px solid {palette['border']}; border-radius: 4px; }}"
+        self._container.setStyleSheet(
+            f"#flyoutContainer {{ background: {palette['bg2']}; border: 1px solid {palette['border']}; border-radius: 4px; }}"
         )
-        self._layout = QVBoxLayout(self)
+        
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self._container)
+
+        self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(4, 4, 4, 4)
         self._layout.setSpacing(2)
         self._buttons: list[QToolButton] = []
@@ -644,7 +652,7 @@ class _ToolFlyout(QFrame):
         self.adjustSize()
 
     def _pick(self, tool_type: ToolType) -> None:
-        self.tool_picked.emit(tool_type)
+        self.tool_chosen.emit(tool_type)
         self.close()
 
     def show_beside(self, ref_widget: QWidget) -> None:
