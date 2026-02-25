@@ -114,3 +114,116 @@ class Tool(ABC):
         np.multiply(roi, inv_mask, out=roi)
         roi += color * mask
         np.clip(roi, 0, 1, out=roi)
+
+    def _stamp_tip(
+        self, target: np.ndarray, cx: int, cy: int,
+        tip: np.ndarray, tip_size: int,
+        color: np.ndarray, opacity: float = 1.0,
+        hardness: float = 1.0,
+        sel_mask: np.ndarray | None = None,
+    ) -> None:
+        """Stamp a brush tip image onto *target*.
+
+        *tip* is a grayscale H×W uint8 array where 255 = full opacity.
+        It is scaled to *tip_size* pixels (longest dimension) before stamping.
+        *hardness* (0-1) modulates the tip alpha via a power curve.
+        """
+        h, w = target.shape[:2]
+        th, tw = tip.shape[:2]
+
+        # Scale tip to requested size
+        scale = tip_size / max(th, tw, 1)
+        new_h = max(1, int(th * scale))
+        new_w = max(1, int(tw * scale))
+
+        if new_h != th or new_w != tw:
+            import cv2
+            scaled = cv2.resize(tip, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            scaled = tip
+
+        # Place stamp centred at (cx, cy)
+        half_h = new_h // 2
+        half_w = new_w // 2
+        y0 = cy - half_h
+        x0 = cx - half_w
+
+        # Clip to target bounds
+        src_y0 = max(0, -y0)
+        src_x0 = max(0, -x0)
+        dst_y0 = max(0, y0)
+        dst_x0 = max(0, x0)
+        dst_y1 = min(h, y0 + new_h)
+        dst_x1 = min(w, x0 + new_w)
+        src_y1 = src_y0 + (dst_y1 - dst_y0)
+        src_x1 = src_x0 + (dst_x1 - dst_x0)
+
+        if dst_y1 <= dst_y0 or dst_x1 <= dst_x0:
+            return
+
+        # Build alpha mask from tip slice
+        tip_slice = scaled[src_y0:src_y1, src_x0:src_x1].astype(np.float32) / 255.0
+
+        # Apply hardness: power curve makes soft edges more transparent
+        if hardness < 0.99:
+            np.power(tip_slice, 1.0 / max(hardness, 0.01), out=tip_slice)
+
+        mask = tip_slice * opacity
+
+        # Clip to selection
+        if sel_mask is not None:
+            mask *= sel_mask[dst_y0:dst_y1, dst_x0:dst_x1]
+
+        mask = mask[..., np.newaxis]
+        roi = target[dst_y0:dst_y1, dst_x0:dst_x1]
+        inv_mask = 1.0 - mask
+        np.multiply(roi, inv_mask, out=roi)
+        roi += color * mask
+        np.clip(roi, 0, 1, out=roi)
+
+    def _erase_tip(
+        self, target: np.ndarray, cx: int, cy: int,
+        tip: np.ndarray, tip_size: int,
+        opacity: float = 1.0,
+        sel_mask: np.ndarray | None = None,
+    ) -> None:
+        """Erase (reduce alpha) using a brush tip image as the mask."""
+        h, w = target.shape[:2]
+        th, tw = tip.shape[:2]
+
+        scale = tip_size / max(th, tw, 1)
+        new_h = max(1, int(th * scale))
+        new_w = max(1, int(tw * scale))
+
+        if new_h != th or new_w != tw:
+            import cv2
+            scaled = cv2.resize(tip, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        else:
+            scaled = tip
+
+        half_h = new_h // 2
+        half_w = new_w // 2
+        y0 = cy - half_h
+        x0 = cx - half_w
+
+        src_y0 = max(0, -y0)
+        src_x0 = max(0, -x0)
+        dst_y0 = max(0, y0)
+        dst_x0 = max(0, x0)
+        dst_y1 = min(h, y0 + new_h)
+        dst_x1 = min(w, x0 + new_w)
+        src_y1 = src_y0 + (dst_y1 - dst_y0)
+        src_x1 = src_x0 + (dst_x1 - dst_x0)
+
+        if dst_y1 <= dst_y0 or dst_x1 <= dst_x0:
+            return
+
+        tip_slice = scaled[src_y0:src_y1, src_x0:src_x1].astype(np.float32) / 255.0
+        mask = tip_slice * opacity
+
+        if sel_mask is not None:
+            mask *= sel_mask[dst_y0:dst_y1, dst_x0:dst_x1]
+
+        roi = target[dst_y0:dst_y1, dst_x0:dst_x1]
+        roi *= (1.0 - mask[..., np.newaxis])
+        np.clip(roi, 0, 1, out=roi)

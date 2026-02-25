@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox
 
 from ..commands.base import Command
+from ..core.brush_engine import BrushManager
 from ..core.document import Document
 from ..core.enums import BlendMode, ToolType
 from ..engine.render_pipeline import RenderPipeline
@@ -15,6 +16,7 @@ from ..engine.renderer import RenderScheduler
 from .canvas_view import CanvasView
 from .file_tab_bar import FileTabBar
 from .menus import EditorMenuBar
+from .panels.brushes_panel import BrushesPanel
 from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
@@ -52,6 +54,15 @@ class MainWindow(QMainWindow):
             preview_max_size=0,  # Full res for now; set to 2048 when coord scaling is ready
         )
         self._tools = ToolManager()
+
+        # Brush manager — load ABR files from assets
+        self._brush_mgr = BrushManager.instance()
+        import os
+        _assets_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "brushes"
+        )
+        self._brush_mgr.load_brushes_dir(_assets_dir)
 
         # Multi-document tracking: list of (Document, str|None) pairs
         self._open_docs: list[tuple[Document, str | None]] = []
@@ -125,6 +136,12 @@ class MainWindow(QMainWindow):
         self._render_scheduler.render_ready.connect(self._on_render_ready)
         self._render_scheduler.render_error.connect(self._on_render_error)
         # Shortcuts wired by ShortcutController
+
+        # Wire brush system
+        self._brushes_panel.set_brush_manager(self._brush_mgr)
+        self._props_panel.brush_bar.set_brush_manager(self._brush_mgr)
+        self._brush_mgr.brush_changed.connect(self._on_brush_preset_changed)
+
         self._document_ctrl.new_document(1920, 1080)
 
     # ---- UI assembly --------------------------------------------------------
@@ -189,18 +206,39 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         
         # Dock panels on the sides
+        # Ensure all dock tabs are at the top, not bottom
+        from PySide6.QtWidgets import QTabWidget
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
+        
+        # Force single tabs to be visible and allow grouped dragging by their tabs
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks |
+            QMainWindow.DockOption.AllowNestedDocks |
+            QMainWindow.DockOption.AllowTabbedDocks |
+            QMainWindow.DockOption.GroupedDragging |
+            QMainWindow.DockOption.ForceTabbedDocks
+        )
+
         self._layers_panel = LayersPanel()
         self._layers_dock = self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
         self._history_panel = HistoryPanel()
-        self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
+        self._history_dock = self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
+        
         self._color_panel = ColorPanel()
         self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._color_dock)
-        self._layers_dock.raise_()
         
         self._transform_panel = TransformPanel()
         self._transform_dock = self._dock(self._transform_panel, "Transform", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._transform_dock)
+
+        self._layers_dock.raise_()
+
+        # Brushes panel (docked right, tabbed with history)
+        self._brushes_panel = BrushesPanel()
+        self._brushes_dock = self._dock(self._brushes_panel, "Brushes", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._history_dock, self._brushes_dock)
+        self._history_dock.raise_()
 
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
@@ -208,6 +246,9 @@ class MainWindow(QMainWindow):
     def _dock(self, widget, title: str, area) -> QDockWidget:
         d = QDockWidget(title, self)
         d.setWidget(widget)
+        # Remove the panel header (title bar) since it's already in the tab
+        from PySide6.QtWidgets import QWidget
+        d.setTitleBarWidget(QWidget())
         self.addDockWidget(area, d)
         return d
 
@@ -418,3 +459,8 @@ class MainWindow(QMainWindow):
             f"QToolBar {{ background: {palette['bg3']}; border: none; border-bottom: 1px solid {palette['border']}; spacing: 0; padding: 0; }}"
             f"QToolBar > QWidget {{ background: {palette['bg3']}; }}"
         )
+
+    def _on_brush_preset_changed(self, preset) -> None:
+        """Apply the selected brush preset to the active brush-type tool."""
+        if preset is not None and hasattr(self, "_tool_ctrl"):
+            self._tool_ctrl.apply_brush_preset(preset)

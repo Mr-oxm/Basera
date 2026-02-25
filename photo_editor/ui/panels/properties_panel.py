@@ -13,6 +13,7 @@ from __future__ import annotations
 
 # Re-export from the split properties package for backward compatibility
 from .properties import (
+    BrushPropertiesBar,
     CropPropertiesBar,
     GradientPropertiesBar,
     MovePropertiesBar,
@@ -25,6 +26,7 @@ from .properties import (
 
 __all__ = [
     "PropertiesPanel",
+    "BrushPropertiesBar",
     "TextPropertiesBar",
     "GradientPropertiesBar",
     "MovePropertiesBar",

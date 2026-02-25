@@ -26,6 +26,7 @@ class ToolController:
 
         mw._toolbar.tool_selected.connect(self.on_tool_selected)
         mw._props_panel.value_changed.connect(self.on_prop_changed)
+        mw._props_panel.brush_property_changed.connect(self.on_brush_prop_changed)
 
         mw._canvas.widget_pressed.connect(self.on_widget_press)
         mw._canvas.widget_moved.connect(self.on_widget_move)
@@ -146,6 +147,14 @@ class ToolController:
             mw._props_panel.set_vector_mode(True, tool, mode=_VEC_TOOLS[tool_type])
             return
 
+        # Brush-type tools use specialised bar
+        _BRUSH_TOOLS = {ToolType.BRUSH, ToolType.ERASER,
+                        ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH}
+        if tool_type in _BRUSH_TOOLS:
+            mw._props_panel.clear()
+            mw._props_panel.set_brush_mode(True, tool)
+            return
+
         mw._props_panel.set_text_mode(False)
         mw._props_panel.set_gradient_mode(False)
         mw._props_panel.set_move_mode(False)
@@ -153,6 +162,7 @@ class ToolController:
         mw._props_panel.set_zoom_mode(False)
         mw._props_panel.set_selection_mode(False)
         mw._props_panel.set_vector_mode(False)
+        mw._props_panel.set_brush_mode(False)
         mw._props_panel.clear()
         mw._props_panel.set_title(f"{tool.name} Properties")
         for key, (val, lo, hi) in mw._tools.get_properties().items():
@@ -173,6 +183,46 @@ class ToolController:
                 mw._tools.set_property(key, float(value))
         if key in ("size", "hardness", "opacity", "flow"):
             self.update_brush_cursor()
+
+    def on_brush_prop_changed(self, key: str, value: object) -> None:
+        """Handle property changes from the brush properties bar."""
+        mw = self._mw
+        tool = mw._tools.active_tool
+        if tool is None:
+            return
+        if key == "blend_mode":
+            # Store blend mode on the tool (informational for now)
+            return
+        if key == "rotation":
+            # Rotation is informational for preset-based brushes
+            return
+        if hasattr(tool, key):
+            if isinstance(getattr(tool, key), int):
+                setattr(tool, key, int(value))
+            else:
+                setattr(tool, key, float(value))
+        if key in ("size", "hardness", "opacity", "flow"):
+            self.update_brush_cursor()
+
+    def apply_brush_preset(self, preset) -> None:
+        """Apply a brush preset's settings to the current brush-type tool."""
+        mw = self._mw
+        tool = mw._tools.active_tool
+        if tool is None:
+            return
+        if hasattr(tool, "size"):
+            tool.size = preset.size
+        if hasattr(tool, "hardness"):
+            tool.hardness = preset.hardness
+        if hasattr(tool, "spacing"):
+            tool.spacing = preset.spacing
+        if hasattr(tool, "opacity"):
+            tool.opacity = preset.opacity
+        if hasattr(tool, "flow"):
+            tool.flow = preset.flow
+        # Re-sync the properties bar
+        self.update_properties_panel()
+        self.update_brush_cursor()
 
     def update_brush_cursor(self) -> None:
         mw = self._mw

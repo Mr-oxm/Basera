@@ -126,6 +126,10 @@ class ToolManager:
         if self._active_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT,
                                   ToolType.LASSO, ToolType.MAGIC_WAND):
             return {}
+        # Brush-type tools use their own specialised bar
+        if self._active_type in (ToolType.BRUSH, ToolType.ERASER,
+                                  ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
+            return {}
         defs: dict[str, tuple[float, float, float]] = {}
         _RANGES = {
             "size": (1, 500), "hardness": (0, 1), "opacity": (0, 1),

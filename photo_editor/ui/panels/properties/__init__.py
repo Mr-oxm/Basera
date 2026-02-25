@@ -7,6 +7,7 @@ from .base import (
     SizeComboBoxWithPreview,
     make_separator,
 )
+from .brush_bar import BrushPropertiesBar
 from .crop_bar import CropPropertiesBar
 from .gradient_bar import GradientPropertiesBar
 from .move_bar import MovePropertiesBar
@@ -18,6 +19,7 @@ from .zoom_bar import ZoomPropertiesBar
 
 __all__ = [
     "PropertiesPanel",
+    "BrushPropertiesBar",
     "TextPropertiesBar",
     "GradientPropertiesBar",
     "MovePropertiesBar",
