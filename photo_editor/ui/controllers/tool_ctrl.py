@@ -49,6 +49,13 @@ class ToolController:
         mw._tools.select(t)
         mw._status.set_tool(t.name.replace("_", " ").title())
         mw._canvas.set_tool_cursor(t)
+
+        if t == ToolType.NODE and mw._doc and mw._doc.layers.active_layer:
+            vl = getattr(mw._doc.layers.active_layer, "_vector_data", None)
+            if vl and not vl.selected_objects() and vl.objects:
+                vl.objects[-1].selected = True
+                mw._refresh()
+
         self.update_properties_panel()
         mw._transform_ctrl.update_transform_box()
         self.update_brush_cursor()
@@ -144,7 +151,14 @@ class ToolController:
                       ToolType.VECTOR_SHAPE: "shape"}
         if tool_type in _VEC_TOOLS:
             mw._props_panel.clear()
-            mw._props_panel.set_vector_mode(True, tool, mode=_VEC_TOOLS[tool_type])
+            active_object = None
+            if mw._doc and mw._doc.layers.active_layer:
+                vl = getattr(mw._doc.layers.active_layer, "_vector_data", None)
+                if vl:
+                    objs = vl.selected_objects()
+                    if objs:
+                        active_object = objs[0]
+            mw._props_panel.set_vector_mode(True, tool, mode=_VEC_TOOLS[tool_type], active_object=active_object)
             return
 
         # Brush-type tools use specialised bar

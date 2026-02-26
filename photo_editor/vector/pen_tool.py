@@ -123,9 +123,17 @@ class PenTool(Tool):
         node = PathNode(position=pos, mode=HandleMode.SHARP)
         sp = SubPath([node], closed=False)
         path = VectorPath([sp])
+        import copy
+        fill_paint = copy.deepcopy(getattr(self, "fill_paint", None))
+        if fill_paint is None:
+            fill_paint = SolidPaint(self.fill_color)
+        stroke_paint = copy.deepcopy(getattr(self, "stroke_paint", None))
+        if stroke_paint is None:
+            stroke_paint = SolidPaint(self.stroke_color)
+
         style = VectorStyle(
-            fills=[VectorFill(SolidPaint(self.fill_color))],
-            strokes=[VectorStroke(SolidPaint(self.stroke_color), width=self.stroke_width)],
+            fills=[VectorFill(fill_paint)],
+            strokes=[VectorStroke(stroke_paint, width=self.stroke_width)],
         )
         obj = VectorObject(name="Path", path=path, style=style)
         vl.add(obj)

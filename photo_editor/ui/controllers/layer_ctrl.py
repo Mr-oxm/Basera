@@ -232,8 +232,19 @@ class LayerController:
     def on_layer_selected(self, stack_index: int) -> None:
         if self._mw._doc:
             self._mw._doc.layers.active_index = stack_index
+
+            if self._mw._tools.active_type == ToolType.NODE:
+                al = self._mw._doc.layers.active_layer
+                if al:
+                    vl = getattr(al, "_vector_data", None)
+                    if vl and not vl.selected_objects() and vl.objects:
+                        vl.objects[-1].selected = True
+                        if hasattr(self._mw, "_canvas"):
+                            self._mw._canvas.update()
+
             self._mw._transform_ctrl.update_transform_box()
             self._mw._transform_panel.refresh(self._mw._doc)
+            self._mw._tool_ctrl.update_properties_panel()
 
     def on_move_auto_select(self, stack_index: int) -> None:
         if not self._mw._doc:

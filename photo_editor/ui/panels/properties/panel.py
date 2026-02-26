@@ -191,14 +191,14 @@ class PropertiesPanel(QWidget):
         if enabled and tool is not None:
             self._crop_bar.sync_from_tool(tool)
 
-    def set_vector_mode(self, enabled: bool, tool=None, mode: str = "pen") -> None:
+    def set_vector_mode(self, enabled: bool, tool=None, mode: str = "pen", active_object=None) -> None:
         self._clear_modes()
         self._vector_mode = enabled
         self._props_container.setVisible(not enabled)
         self._hide_all_bars()
         self._vector_bar.setVisible(enabled)
         if enabled and tool is not None:
-            self._vector_bar.sync_from_tool(tool, mode)
+            self._vector_bar.sync_from_tool(tool, mode, active_object=active_object)
 
     @property
     def text_bar(self) -> TextPropertiesBar:

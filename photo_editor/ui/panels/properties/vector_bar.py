@@ -271,30 +271,39 @@ class VectorPropertiesBar(QWidget):
         self._stroke_w.setValue(val)
         self._stroke_w.blockSignals(False)
 
-    def sync_from_tool(self, tool, mode: str) -> None:
+    def sync_from_tool(self, tool, mode: str, active_object=None) -> None:
         self.set_mode(mode)
         if mode in ("pen", "shape", "node"):
             fill_synced = False
             stroke_synced = False
             hit_obj = getattr(tool, "_hit_object", None)
+            if hit_obj is None:
+                hit_obj = active_object
             if hit_obj is not None and hasattr(hit_obj, "style"):
                 style = hit_obj.style
                 if style is not None:
-                    fill = getattr(style, "fill", None)
-                    if fill is not None:
+                    fills = getattr(style, "fills", None)
+                    if fills and len(fills) > 0:
+                        fill = fills[0]
                         fill_paint = getattr(fill, "paint", None)
                         if fill_paint is not None:
                             self.set_fill_paint(fill_paint)
+                            import copy
+                            tool.fill_paint = copy.deepcopy(fill_paint)
                             fill_synced = True
-                    stroke = getattr(style, "stroke", None)
-                    if stroke is not None:
+                    strokes = getattr(style, "strokes", None)
+                    if strokes and len(strokes) > 0:
+                        stroke = strokes[0]
                         stroke_paint = getattr(stroke, "paint", None)
                         if stroke_paint is not None:
                             self.set_stroke_paint(stroke_paint)
+                            import copy
+                            tool.stroke_paint = copy.deepcopy(stroke_paint)
                             stroke_synced = True
                         sw = getattr(stroke, "width", None)
                         if sw is not None:
                             self.set_stroke_width(sw)
+                            tool.stroke_width = sw
 
             if not fill_synced:
                 fp = getattr(tool, "fill_paint", None)
