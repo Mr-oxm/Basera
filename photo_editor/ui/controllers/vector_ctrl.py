@@ -56,6 +56,8 @@ class VectorController:
 
     def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
         mw = self._mw
+        if mw is None:
+            return
         doc = mw._doc
         if doc is None:
             return
@@ -63,8 +65,18 @@ class VectorController:
         from ...vector.style import SolidPaint, GradientPaint
         from ...vector.rasterizer import rasterize_vector_layer_tight
 
+        selected_layer_ids = set()
+        if hasattr(mw, "_layers_panel"):
+            selected_layer_ids = set(mw._layers_panel.selected_layer_ids())
+        else:
+            if doc.layers.active_layer:
+                selected_layer_ids.add(doc.layers.active_layer.id)
+
         any_changed = False
         for layer in doc.layers.layers:
+            if layer.id not in selected_layer_ids:
+                continue
+
             vl = getattr(layer, "_vector_data", None)
             if vl is None:
                 continue
@@ -74,15 +86,23 @@ class VectorController:
                 if not obj.selected:
                     continue
                 if key == "fill_color" and isinstance(value, tuple):
+                    if not obj.style.fills:
+                        obj.style.add_fill()
                     for fill in obj.style.fills:
                         if isinstance(fill.paint, SolidPaint):
                             fill.paint.color = value
-                            changed = True
+                        else:
+                            fill.paint = SolidPaint(color=value)
+                        changed = True
                 elif key == "stroke_color" and isinstance(value, tuple):
+                    if not obj.style.strokes:
+                        obj.style.add_stroke()
                     for stroke in obj.style.strokes:
                         if isinstance(stroke.paint, SolidPaint):
                             stroke.paint.color = value
-                            changed = True
+                        else:
+                            stroke.paint = SolidPaint(color=value)
+                        changed = True
                 elif key == "stroke_width":
                     for stroke in obj.style.strokes:
                         stroke.width = float(value)
@@ -91,6 +111,9 @@ class VectorController:
                     paint = value
                     if isinstance(paint, GradientPaint):
                         paint = self._gradient_to_object_space(paint, obj)
+                    elif hasattr(paint, "color"):
+                        import copy
+                        paint = copy.deepcopy(paint)
                     if obj.style.fills:
                         obj.style.fills[0].paint = paint
                     else:
@@ -102,6 +125,9 @@ class VectorController:
                     paint = value
                     if isinstance(paint, GradientPaint):
                         paint = self._gradient_to_object_space(paint, obj)
+                    elif hasattr(paint, "color"):
+                        import copy
+                        paint = copy.deepcopy(paint)
                     if obj.style.strokes:
                         obj.style.strokes[0].paint = paint
                     else:
@@ -121,14 +147,17 @@ class VectorController:
         """Set gradient start/end to cover the object's bounding box."""
         from ...vector.style import GradientPaint, GradientType
         from ...vector.geometry import Vec2
+        import copy
 
         bb = obj.local_bbox()
         if bb.is_empty:
             return paint
+            
+        stops = copy.deepcopy(paint.stops)
         if paint.gradient_type == GradientType.LINEAR:
             return GradientPaint(
                 gradient_type=GradientType.LINEAR,
-                stops=paint.stops,
+                stops=stops,
                 start=Vec2(bb.min_pt.x, bb.min_pt.y),
                 end=Vec2(bb.max_pt.x, bb.max_pt.y),
             )
@@ -137,7 +166,7 @@ class VectorController:
         r = max(bb.width, bb.height) / 2
         return GradientPaint(
             gradient_type=GradientType.RADIAL,
-            stops=paint.stops,
+            stops=stops,
             start=Vec2(cx, cy),
             end=Vec2(cx, cy),
             radius=r,
