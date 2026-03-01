@@ -77,8 +77,9 @@ def find_layer_at(
     """Return the *stack index* of the topmost visible layer at *(x, y)*.
 
     Iterates from the top of the stack downward.  Group, adjustment,
-    filter, and mask layers are skipped.  Returns ``None`` when no layer
-    is found.
+    filter, and mask layers are skipped.  Hidden layers are always
+    skipped — they can only be selected via the layers panel.
+    Returns ``None`` when no layer is found.
 
     Parameters
     ----------

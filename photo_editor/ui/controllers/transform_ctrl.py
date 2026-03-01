@@ -65,6 +65,29 @@ class TransformController:
             mw._canvas.set_transform_box(None)
             return
 
+        # Multi-selection: display a union bounding box (with rotation)
+        sel = mw._doc.layers.selected_indices
+        if len(sel) > 1:
+            from ...tools.move.hit_test import multi_bbox
+            tool = mw._tools.active_tool
+            angle = 0.0
+            if tool is not None:
+                angle = getattr(tool, '_current_angle', 0.0)
+
+            # During an active rotation or resize drag, use the stored
+            # original bbox so the visual box stays a fixed size and
+            # rotates/scales with the drag instead of jittering.
+            orig = getattr(tool, '_multi_orig_bbox', None) if tool else None
+            if orig is not None and angle != 0.0:
+                mw._canvas.set_transform_box(orig, angle)
+            else:
+                mb = multi_bbox(mw._doc)
+                if mb:
+                    mw._canvas.set_transform_box(mb, angle)
+                else:
+                    mw._canvas.set_transform_box(None)
+            return
+
         if mw._doc.selection.active and mw._doc.selection._mask is not None:
             import numpy as np
             mask = mw._doc.selection._mask

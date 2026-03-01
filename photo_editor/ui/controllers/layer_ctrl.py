@@ -99,11 +99,14 @@ class LayerController:
         lp.edit_adjustment_requested.connect(mw._filter_ctrl.on_edit_adjustment_layer)
         lp.filter_layer_requested.connect(mw._filter_ctrl.on_add_filter_layer)
         lp.edit_filter_requested.connect(mw._filter_ctrl.on_edit_filter_layer)
+        lp.multi_selection_changed.connect(self.on_panel_multi_selection)
 
         # Move tool auto-select
         move_tool = mw._tools._tools.get(ToolType.MOVE)
         if move_tool is not None:
             move_tool.on_layer_auto_selected = self.on_move_auto_select
+            move_tool.on_deselect_all = self.on_move_deselect_all
+            move_tool.on_marquee_select = self.on_move_marquee_select
 
     def on_layer_styles(self) -> None:
         """Open the Layer Styles dialog for the active layer."""
@@ -249,9 +252,77 @@ class LayerController:
     def on_move_auto_select(self, stack_index: int) -> None:
         if not self._mw._doc:
             return
-        self._mw._layers_panel.refresh(self._mw._doc)
+        # Sync the layers panel selection with the model's multi-selection
+        self._sync_panel_selection()
         self._mw._transform_panel.refresh(self._mw._doc)
         self._mw._transform_ctrl.update_transform_box()
+
+    def _sync_panel_selection(self) -> None:
+        """Synchronise the layers panel's visual selection with LayerStack."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        sel_indices = mw._doc.layers.selected_indices
+        panel = mw._layers_panel
+        # Refresh first so rows are up to date
+        panel.refresh(mw._doc)
+        # Now select the correct rows
+        lst = panel._list
+        lst.blockSignals(True)
+        lst.clearSelection()
+        row_ids = panel.row_layer_ids()
+        for si in sel_indices:
+            if 0 <= si < len(mw._doc.layers.layers):
+                lid = mw._doc.layers.layers[si].id
+                if lid in row_ids:
+                    row = row_ids.index(lid)
+                    item = lst.item(row)
+                    if item:
+                        item.setSelected(True)
+        # Set current row to the active layer
+        active = mw._doc.layers.active_layer
+        if active and active.id in row_ids:
+            lst.setCurrentRow(row_ids.index(active.id))
+        lst.blockSignals(False)
+
+    def on_move_deselect_all(self) -> None:
+        """Called when the Move tool clicks on empty canvas — deselect all."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        mw._layers_panel.refresh(mw._doc)
+        mw._transform_ctrl.update_transform_box()
+        mw._canvas.update()
+
+    def on_move_marquee_select(self, indices: list[int]) -> None:
+        """Called after a marquee drag-select completes in the Move tool."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        self._sync_panel_selection()
+        mw._transform_ctrl.update_transform_box()
+        mw._canvas.update()
+
+    def on_panel_multi_selection(self, layer_ids: list) -> None:
+        """Sync panel multi-selection back to LayerStack and update bbox."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        stack = mw._doc.layers
+        # Build a set of selected indices from the panel's selected IDs
+        new_sel: set[int] = set()
+        for lid in layer_ids:
+            for i, layer in enumerate(stack.layers):
+                if layer.id == lid:
+                    new_sel.add(i)
+                    break
+        stack._selected_indices = new_sel
+        # Keep active_index pointing at something sensible
+        if new_sel and stack.active_index not in new_sel:
+            stack._active_index = max(new_sel)
+        elif not new_sel:
+            stack._active_index = -1
+        mw._transform_ctrl.update_transform_box()
 
     def on_opacity(self, val: float) -> None:
         if self._mw._doc and self._mw._doc.layers.active_layer:

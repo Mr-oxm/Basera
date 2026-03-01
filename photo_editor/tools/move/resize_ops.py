@@ -204,3 +204,58 @@ class ResizeMixin:
             rel_x = orig_cx - bx
             rel_y = orig_cy - by
             child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
+
+    # ------------------------------------------------------------------
+    # Multi-selection resize (virtual group)
+    # ------------------------------------------------------------------
+
+    def _apply_multi_resize(self, dx: int, dy: int) -> None:
+        """Non-destructive multi-layer resize: scale each selected layer
+        relative to their combined bounding box — same as group resize."""
+        bbox = getattr(self, "_multi_orig_bbox", None)
+        if bbox is None:
+            return
+
+        bx, by, bw, bh = bbox
+        ow, oh = float(bw), float(bh)
+        ldx, ldy = float(dx), float(dy)
+
+        new_w, new_h = ow, oh
+        h = self._handle
+
+        if h in (_Handle.TL, _Handle.L, _Handle.BL):
+            new_w = max(4.0, ow - ldx)
+        elif h in (_Handle.TR, _Handle.R, _Handle.BR):
+            new_w = max(4.0, ow + ldx)
+
+        if h in (_Handle.TL, _Handle.T, _Handle.TR):
+            new_h = max(4.0, oh - ldy)
+        elif h in (_Handle.BL, _Handle.B, _Handle.BR):
+            new_h = max(4.0, oh + ldy)
+
+        sx = new_w / max(ow, 1)
+        sy = new_h / max(oh, 1)
+
+        new_bx, new_by = float(bx), float(by)
+        if h in (_Handle.TL, _Handle.L, _Handle.BL):
+            new_bx = bx + (ow - new_w)
+        if h in (_Handle.TL, _Handle.T, _Handle.TR):
+            new_by = by + (oh - new_h)
+
+        for child in getattr(self, "_multi_layers", []):
+            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            if child._source_pixels is None:
+                continue
+
+            base_sx = self._multi_base_sx.get(child.id, 1.0)
+            base_sy = self._multi_base_sy.get(child.id, 1.0)
+
+            child.transform_scale_x = base_sx * sx
+            child.transform_scale_y = base_sy * sy
+            child.compute_display(fast=True)
+
+            orig_cx, orig_cy = self._multi_positions[child.id]
+            rel_x = orig_cx - bx
+            rel_y = orig_cy - by
+            child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))

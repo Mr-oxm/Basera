@@ -39,8 +39,9 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-HANDLE_MARGIN = 10        # hit-test radius in document pixels
+HANDLE_MARGIN = 14        # hit-test radius in document pixels (slightly expanded)
 ROTATE_HANDLE_OFFSET = 25  # distance above top-centre for rotation handle
+ROTATE_PROXIMITY = 50     # max distance from a corner/rotation node for rotate cursor
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -51,8 +52,14 @@ def bbox(doc: "Document") -> tuple[int, int, int, int] | None:
     """Return ``(x, y, w, h)`` bounding box of the active layer in document coords.
 
     For group layers the box is the union of all child-layer bounding boxes.
+    When multiple layers are selected, returns the union of all selected layers.
     Returns ``None`` when there is no active layer.
     """
+    # Multi-selection: union of all selected layers
+    sel = doc.layers.selected_indices
+    if len(sel) > 1:
+        return multi_bbox(doc)
+
     layer = doc.layers.active_layer
     if layer is None:
         return None
@@ -60,6 +67,34 @@ def bbox(doc: "Document") -> tuple[int, int, int, int] | None:
         return group_bbox(doc, layer)
     lx, ly = layer.position
     return (lx, ly, layer.width, layer.height)
+
+
+def multi_bbox(doc: "Document") -> tuple[int, int, int, int] | None:
+    """Return ``(x, y, w, h)`` covering all currently selected layers."""
+    min_x, min_y = float("inf"), float("inf")
+    max_x, max_y = float("-inf"), float("-inf")
+    found = False
+    for i in doc.layers.selected_indices:
+        if 0 <= i < len(doc.layers.layers):
+            layer = doc.layers.layers[i]
+            if layer.layer_type == LayerType.GROUP:
+                gb = group_bbox(doc, layer)
+                if gb:
+                    min_x = min(min_x, gb[0])
+                    min_y = min(min_y, gb[1])
+                    max_x = max(max_x, gb[0] + gb[2])
+                    max_y = max(max_y, gb[1] + gb[3])
+                    found = True
+            else:
+                lx, ly = layer.position
+                min_x = min(min_x, lx)
+                min_y = min(min_y, ly)
+                max_x = max(max_x, lx + layer.width)
+                max_y = max(max_y, ly + layer.height)
+                found = True
+    if not found:
+        return None
+    return (int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
 
 
 def group_bbox(doc: "Document", group) -> tuple[int, int, int, int] | None:
@@ -108,6 +143,16 @@ def hit_test(
     if layer is None:
         return _Mode.NONE, _Handle.NONE
 
+    # Multi-selection: always hit-test against the union multi-bbox.
+    # Skip the single-layer rotation branch — the multi-bbox is axis-aligned
+    # and represents the combined bounds of all selected layers.
+    sel = doc.layers.selected_indices
+    if len(sel) > 1:
+        bb = multi_bbox(doc)
+        if bb is None:
+            return _Mode.NONE, _Handle.NONE
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+
     total_angle = layer.transform_angle + current_angle
 
     # When the layer has accumulated rotation, inverse-rotate the click
@@ -146,9 +191,11 @@ def hit_test_rect(
     Detection priority
     ------------------
     1. Rotation handle node (circle above top-centre)
-    2. Resize handles (TL, T, TR, L, R, BL, B, BR)
-    3. Interior  → ``(MOVE, NONE)``
-    4. All else  → ``(ROTATE, NONE)``
+    2. Resize handles (TL, T, TR, L, R, BL, B, BR) — expanded hit area
+    3. Bounding box border lines (thin margin strip)
+    4. Interior  → ``(MOVE, NONE)``
+    5. Near a corner within ROTATE_PROXIMITY → ``(ROTATE, NONE)``
+    6. Everything else → ``(NONE, NONE)``   (no interaction)
     """
     m = HANDLE_MARGIN
     rh_offset = ROTATE_HANDLE_OFFSET
@@ -159,7 +206,7 @@ def hit_test_rect(
     if abs(x - rh_x) <= m and abs(y - rh_y) <= m:
         return _Mode.ROTATE, _Handle.NONE
 
-    # 2. Resize handles
+    # 2. Resize handles (expanded hit area)
     handles = [
         (_Handle.TL, bx,       by),
         (_Handle.T,  mx,       by),
@@ -174,9 +221,33 @@ def hit_test_rect(
         if abs(x - hx) <= m and abs(y - hy) <= m:
             return _Mode.RESIZE, hid
 
-    # 3. Interior
+    # 3. Bounding box border lines (thin strip around the edges)
+    border = 6  # pixels either side of the border line
+    inside_outer = (bx - border <= x <= bx + bw + border
+                    and by - border <= y <= by + bh + border)
+    inside_inner = (bx + border < x < bx + bw - border
+                    and by + border < y < by + bh - border)
+    if inside_outer and not inside_inner:
+        return _Mode.MOVE, _Handle.NONE
+
+    # 4. Interior
     if bx <= x <= bx + bw and by <= y <= by + bh:
         return _Mode.MOVE, _Handle.NONE
 
-    # 4. Outside the box → rotation zone
-    return _Mode.ROTATE, _Handle.NONE
+    # 5. Rotation zones — only near corners and rotation handle, within
+    #    ROTATE_PROXIMITY distance from the closest corner.
+    rp = ROTATE_PROXIMITY
+    corners = [
+        (bx,       by),        # TL
+        (bx + bw,  by),        # TR
+        (bx,       by + bh),   # BL
+        (bx + bw,  by + bh),   # BR
+        (rh_x,     rh_y),      # rotation node
+    ]
+    for (cx, cy) in corners:
+        dist_sq = (x - cx) ** 2 + (y - cy) ** 2
+        if dist_sq <= rp * rp:
+            return _Mode.ROTATE, _Handle.NONE
+
+    # 6. Everything else — no interaction
+    return _Mode.NONE, _Handle.NONE

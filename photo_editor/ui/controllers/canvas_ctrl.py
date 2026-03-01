@@ -107,6 +107,12 @@ class CanvasController:
                         self._dragging = True
                         return
 
+        # Pass shift state to Move tool for multi-select
+        if tool_type == ToolType.MOVE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, "shift_held"):
+                tool.shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
         mw._tools.on_press(mw._doc, x, y, pressure)
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
             self._drag_start = (x, y)
@@ -146,6 +152,11 @@ class CanvasController:
 
         tool_type = mw._tools.active_type
         mw._tools.on_move(mw._doc, x, y, pressure)
+
+        if tool_type == ToolType.MOVE:
+            # Repaint canvas for marquee overlay and transform box updates
+            mw._canvas.update()
+            mw._transform_ctrl.update_transform_box()
 
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT) and self._drag_start is not None:
             sx, sy = self._drag_start
@@ -194,6 +205,9 @@ class CanvasController:
 
         mw._refresh_canvas_only()
         mw._schedule_panel_refresh()
+
+        if tool_type == ToolType.MOVE:
+            mw._transform_ctrl.update_transform_box()
 
         if tool_type == ToolType.TEXT:
             mw._text_ctrl.update_overlay()

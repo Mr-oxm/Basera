@@ -137,6 +137,59 @@ class RotateMixin:
             )
 
     # ------------------------------------------------------------------
+    # Multi-selection rotate (virtual group)
+    # ------------------------------------------------------------------
+
+    def _apply_multi_rotate(self, x: int, y: int) -> None:
+        """Non-destructive multi-layer rotate: rotate every selected layer
+        around their combined bounding-box centre — same as group rotate."""
+        bbox = getattr(self, "_multi_orig_bbox", None)
+        if bbox is None:
+            return
+
+        bx, by, bw, bh = bbox
+        gcx = bx + bw / 2.0
+        gcy = by + bh / 2.0
+
+        a0 = math.atan2(self._start_y - gcy, self._start_x - gcx)
+        a1 = math.atan2(y - gcy, x - gcx)
+        angle_deg = -math.degrees(a1 - a0)
+        self._current_angle = angle_deg
+
+        rad = math.radians(angle_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        for child in getattr(self, "_multi_layers", []):
+            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            if child._source_pixels is None:
+                continue
+
+            multi_base_angle = getattr(self, "_multi_base_angle", {})
+            multi_dims = getattr(self, "_multi_dims", {})
+            multi_positions = getattr(self, "_multi_positions", {})
+
+            base_angle = multi_base_angle.get(child.id, 0.0)
+            child.transform_angle = base_angle + angle_deg
+            child.compute_display(fast=True)
+
+            orig_cx, orig_cy = multi_positions[child.id]
+            orig_cw, orig_ch = multi_dims[child.id]
+
+            child_mid_x = orig_cx + orig_cw / 2.0
+            child_mid_y = orig_cy + orig_ch / 2.0
+            dx_c = child_mid_x - gcx
+            dy_c = child_mid_y - gcy
+            new_dx = dx_c * cos_a + dy_c * sin_a
+            new_dy = -dx_c * sin_a + dy_c * cos_a
+
+            child.position = (
+                int(gcx + new_dx - child.width / 2),
+                int(gcy + new_dy - child.height / 2),
+            )
+
+    # ------------------------------------------------------------------
     # Mask-children sync
     # ------------------------------------------------------------------
 

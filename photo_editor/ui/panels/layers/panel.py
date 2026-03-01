@@ -71,6 +71,7 @@ class LayersPanel(QWidget):
     layers_unparented = Signal(list)
     mask_dropped_on_layer = Signal(str, str)
     adj_filter_dropped_on_layer = Signal(str, str)
+    multi_selection_changed = Signal(list)  # list[str] of selected layer IDs
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -222,6 +223,7 @@ class LayersPanel(QWidget):
         self._list = LayerListWidget()
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._list.currentRowChanged.connect(self._on_row_changed)
+        self._list.itemSelectionChanged.connect(self._on_selection_changed)
         self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._list.layers_reordered.connect(self.layers_reordered.emit)
         self._list.layers_dropped_in_group.connect(self.layers_reparented.emit)
@@ -435,12 +437,43 @@ class LayersPanel(QWidget):
         from .icons import icon_lock
 
         active = document.layers.active_layer
+        if active is None:
+            # No active layer — clear the visual selection
+            self._list.blockSignals(True)
+            self._list.clearSelection()
+            self._list.setCurrentRow(-1)
+            self._list.blockSignals(False)
+            return
         if active:
-            for row in range(self._list.count()):
-                it = self._list.item(row)
-                if it and it.data(ROLE_LAYER_ID) == active.id:
-                    self._list.setCurrentRow(row)
-                    break
+            sel_indices = document.layers.selected_indices
+            self._list.blockSignals(True)
+            if len(sel_indices) > 1:
+                # Multi-selection: set current row first (clears selection
+                # in ExtendedSelection mode), then re-add all selected rows.
+                for row in range(self._list.count()):
+                    it = self._list.item(row)
+                    if it and it.data(ROLE_LAYER_ID) == active.id:
+                        self._list.setCurrentRow(row)
+                        break
+                # Now add all multi-selected rows back
+                for si in sel_indices:
+                    if 0 <= si < len(document.layers.layers):
+                        lid = document.layers.layers[si].id
+                        try:
+                            r = self._row_layer_ids.index(lid)
+                            item = self._list.item(r)
+                            if item:
+                                item.setSelected(True)
+                        except ValueError:
+                            pass
+            else:
+                # Single selection
+                for row in range(self._list.count()):
+                    it = self._list.item(row)
+                    if it and it.data(ROLE_LAYER_ID) == active.id:
+                        self._list.setCurrentRow(row)
+                        break
+            self._list.blockSignals(False)
 
             op_val = int(active.opacity * 100)
             self._opacity_spin.blockSignals(True)
@@ -576,6 +609,15 @@ class LayersPanel(QWidget):
                 if layer.id == lid:
                     self.layer_selected.emit(i)
                     break
+
+    def _on_selection_changed(self) -> None:
+        """Fired when the user (de)selects rows in ExtendedSelection mode."""
+        if self._refreshing or not self._doc:
+            return
+        ids = self.selected_layer_ids()
+        self.multi_selection_changed.emit(ids)
+        # Also update the current row's controls
+        row = self._list.currentRow()
         layer = self._layer_for_row(row)
         if layer:
             op_val = int(layer.opacity * 100)

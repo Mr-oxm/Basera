@@ -91,6 +91,18 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._float_committed_dy: int = 0
         # Vector transform pivot (used by VectorCommitMixin)
         self._orig_center: tuple[float, float] = (0.0, 0.0)
+        # Shift-click multi-select: set externally by CanvasController
+        self.shift_held: bool = False
+        # Callback for deselect-all (no layer active)
+        # Signature: () -> None
+        self.on_deselect_all: callable | None = None
+        # Marquee drag-select state
+        self._marquee_start: tuple[int, int] | None = None
+        self._marquee_current: tuple[int, int] | None = None
+        self._marquee_active: bool = False
+        # Callback for marquee layer selection
+        # Signature: (indices: list[int]) -> None
+        self.on_marquee_select: callable | None = None
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -155,42 +167,84 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         layer = doc.layers.active_layer
 
-        # --- Auto-select: always pick the topmost visible layer at the
-        #     click point, unless the click lands on a resize/rotate
-        #     handle of the active layer's bounding box. -----------------
+        # --- Reset marquee state ---
+        self._marquee_start = None
+        self._marquee_current = None
+        self._marquee_active = False
+
+        # --- Auto-select logic -----------------------------------------------
+        # Suppress auto-select ONLY for resize handles and rotate zones.
+        # The bbox interior (MOVE) still allows auto-select so that:
+        #   - Clicking on a layer that sits on top selects it.
+        #   - Clicking on a transparent pixel of the active layer falls
+        #     through to whatever layer is behind.
         auto_switched = False
+        mode_hit = _Mode.NONE
         if self.auto_select:
             skip_autoselect = False
             if layer is not None:
-                mode_hit, _ = self._hit_test(doc, x, y)
-                # Skip auto-select when clicking inside the bbox (MOVE)
-                # or on a resize handle so the user can transform the
-                # active layer without triggering an unwanted switch.
-                # ROTATE (outside bbox) does NOT skip, so auto-select
-                # can still find a layer underneath.
-                if mode_hit in (_Mode.MOVE, _Mode.RESIZE):
+                mode_hit, _hh = self._hit_test(doc, x, y)
+                # Only suppress for direct handle / rotate interactions
+                if mode_hit in (_Mode.RESIZE, _Mode.ROTATE):
                     skip_autoselect = True
+
+            # Also skip auto-select when there are multiple layers
+            # selected and the click lands inside the multi-bbox
+            # (the user wants to move/transform the group, not re-select).
+            sel_indices = doc.layers.selected_indices
+            if not skip_autoselect and len(sel_indices) > 1:
+                mb = _ht.multi_bbox(doc)
+                if mb is not None:
+                    mbx, mby, mbw, mbh = mb
+                    if mbx <= x <= mbx + mbw and mby <= y <= mby + mbh:
+                        skip_autoselect = True
 
             if not skip_autoselect:
                 topmost_idx = find_layer_at(doc, x, y)
                 if topmost_idx is not None:
                     topmost = doc.layers.layers[topmost_idx]
-                    if layer is None or topmost.id != layer.id:
+                    if self.shift_held:
+                        # Shift+click: add/toggle in multi-selection
+                        doc.layers.select_toggle(topmost_idx)
+                        if self.on_layer_auto_selected:
+                            self.on_layer_auto_selected(
+                                doc.layers.active_index if doc.layers.active_index >= 0 else topmost_idx)
+                        layer = doc.layers.active_layer
+                        auto_switched = True
+                    elif layer is None or topmost.id != layer.id:
                         doc.layers.active_index = topmost_idx
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(topmost_idx)
                         layer = doc.layers.active_layer
                         auto_switched = True
+                    # else: topmost IS the current layer → proceed with move
+                else:
+                    # No visible layer at click point.
+                    # If click is on/near any bbox zone (interior, border,
+                    # handle, or rotation zone), do NOT start a marquee —
+                    # fall through to normal setup (e.g. transparent PNG).
+                    # Only start a marquee when truly on empty canvas.
+                    if mode_hit != _Mode.NONE:
+                        pass  # on/near bbox — fall through to normal setup
+                    else:
+                        # Begin marquee drag-select instead of immediate deselect
+                        self._marquee_start = (x, y)
+                        self._marquee_current = (x, y)
+                        self._dragging = True
+                        return
 
         if layer is None or layer.locked:
             return
 
         self._mode, self._handle = self._hit_test(doc, x, y)
 
+        # If the hit-test returns NONE (click outside any interaction zone)
+        # and auto-select didn't switch, there's nothing to do.
+        if self._mode == _Mode.NONE:
+            return
+
         # If the click lands in the ROTATE zone and auto-select switched
         # layers, demote to MOVE (on opaque pixels) or NONE (empty).
-        # Without a switch, keep ROTATE so the user can rotate the layer
-        # from anywhere outside the bbox.
         if self.auto_select and self._mode == _Mode.ROTATE:
             if auto_switched:
                 if point_on_layer(layer, x, y):
@@ -241,6 +295,39 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # If there's an existing float but we're not continuing it, commit it
         if self._floating:
             self.commit_float(doc)
+
+        # -- Multi-selection setup (treat like a virtual group) -------------
+        self._multi_layers: list = []
+        self._multi_positions: dict[str, tuple[int, int]] = {}
+        self._multi_orig_bbox: tuple[int, int, int, int] | None = None
+        self._multi_base_sx: dict[str, float] = {}
+        self._multi_base_sy: dict[str, float] = {}
+        self._multi_base_angle: dict[str, float] = {}
+        self._multi_dims: dict[str, tuple[int, int]] = {}
+        sel_indices = doc.layers.selected_indices
+        if len(sel_indices) > 1:
+            for si in sorted(sel_indices):
+                if 0 <= si < len(doc.layers.layers):
+                    sl = doc.layers.layers[si]
+                    if not sl.locked:
+                        self._multi_layers.append(sl)
+                        self._multi_positions[sl.id] = sl.position
+                        if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                            sl.init_non_destructive()
+                            self._multi_base_sx[sl.id] = sl.transform_scale_x
+                            self._multi_base_sy[sl.id] = sl.transform_scale_y
+                            self._multi_base_angle[sl.id] = sl.transform_angle
+                            self._multi_dims[sl.id] = (sl.width, sl.height)
+            if self._multi_layers:
+                mb = _ht.multi_bbox(doc)
+                self._multi_orig_bbox = mb
+                if mb and self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                    self._orig_width = mb[2]
+                    self._orig_height = mb[3]
+                    if self._mode == _Mode.ROTATE:
+                        self._orig_position = (mb[0], mb[1])
+                        # _apply_rotate uses orig_position + size for centre
+                    return  # skip single-layer setup below
 
         # -- Group setup ---------------------------------------------------
         self._group_children = []
@@ -326,9 +413,61 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             layer.position[1] + layer.height / 2.0,
         )
 
+    @property
+    def marquee_rect(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        """Return the current marquee rectangle for overlay drawing, or None."""
+        if self._marquee_active and self._marquee_start and self._marquee_current:
+            return (self._marquee_start, self._marquee_current)
+        return None
+
+    def _finish_marquee_select(self, doc: Document) -> None:
+        """Select all layers whose bounding boxes intersect the marquee rect."""
+        if self._marquee_start is None or self._marquee_current is None:
+            return
+        sx, sy = self._marquee_start
+        ex, ey = self._marquee_current
+        # Normalise to min/max rect
+        rx0, rx1 = min(sx, ex), max(sx, ex)
+        ry0, ry1 = min(sy, ey), max(sy, ey)
+        # Minimum 4px drag to count as a marquee
+        if abs(rx1 - rx0) < 4 and abs(ry1 - ry0) < 4:
+            doc.layers.select_clear()
+            if self.on_deselect_all:
+                self.on_deselect_all()
+            return
+        hit_indices: list[int] = []
+        for i, layer in enumerate(doc.layers.layers):
+            if not layer.visible or layer.layer_type in (
+                    LayerType.GROUP, LayerType.ADJUSTMENT, LayerType.FILTER):
+                continue
+            lx, ly = layer.position
+            lx2, ly2 = lx + layer.width, ly + layer.height
+            # AABB overlap test
+            if lx < rx1 and lx2 > rx0 and ly < ry1 and ly2 > ry0:
+                hit_indices.append(i)
+        if hit_indices:
+            doc.layers.select_clear()
+            for idx in hit_indices:
+                doc.layers.select_add(idx)
+            # Set active to the topmost (smallest index) selected layer
+            doc.layers._active_index = min(hit_indices)
+            if self.on_marquee_select:
+                self.on_marquee_select(hit_indices)
+        else:
+            doc.layers.select_clear()
+            if self.on_deselect_all:
+                self.on_deselect_all()
+
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         if not self._dragging:
             return
+
+        # Marquee drag-select update
+        if self._marquee_start is not None:
+            self._marquee_active = True
+            self._marquee_current = (x, y)
+            return
+
         layer = doc.layers.active_layer
         if layer is None:
             return
@@ -345,6 +484,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             return
 
         is_group = layer.layer_type == LayerType.GROUP
+        is_multi = bool(getattr(self, "_multi_layers", []))
 
         if self._mode == _Mode.MOVE:
             ox, oy = self._orig_position
@@ -357,22 +497,46 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             for mc in getattr(self, "_mask_children", []):
                 mcox, mcoy = self._mask_child_positions[mc.id]
                 mc.position = (mcox + dx, mcoy + dy)
+            # Move all multi-selected layers together
+            for sl in getattr(self, "_multi_layers", []):
+                if sl.id != layer.id:
+                    sox, soy = self._multi_positions.get(sl.id, sl.position)
+                    sl.position = (sox + dx, soy + dy)
 
         elif self._mode == _Mode.RESIZE:
-            if is_group:
+            if is_multi:
+                self._apply_multi_resize(dx, dy)
+            elif is_group:
                 self._apply_group_resize(dx, dy)
             else:
                 self._apply_resize(layer, dx, dy)
                 self._sync_mask_transforms(layer)
 
         elif self._mode == _Mode.ROTATE:
-            if is_group:
+            if is_multi:
+                self._apply_multi_rotate(x, y)
+            elif is_group:
                 self._apply_group_rotate(x, y)
             else:
                 self._apply_rotate(layer, x, y)
                 self._sync_mask_transforms(layer)
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
+        # Marquee drag-select: finish and select layers inside the box
+        if self._marquee_start is not None:
+            if self._marquee_active:
+                self._finish_marquee_select(doc)
+            else:
+                # Click without drag on empty space → deselect all
+                doc.layers.select_clear()
+                if self.on_deselect_all:
+                    self.on_deselect_all()
+            self._marquee_start = None
+            self._marquee_current = None
+            self._marquee_active = False
+            self._dragging = False
+            return
+
         # Floating selection: keep the float alive, just commit the offset
         if self._floating and self._active_layer is not None:
             self._float_committed_dx = self._float_dx
@@ -391,6 +555,10 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 for child in self._group_children:
                     if child.layer_type == LayerType.RASTER:
                         child.compute_display(fast=False)
+            # Multi-layer final quality pass
+            for sl in getattr(self, "_multi_layers", []):
+                if sl.layer_type == LayerType.RASTER and sl._source_pixels is not None:
+                    sl.compute_display(fast=False)
 
         # --- Vector layer commit ---
         if self._active_layer is not None and self._mode != _Mode.NONE:
@@ -423,6 +591,13 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._group_child_base_sy = {}
         self._group_child_base_angle = {}
         self._group_child_dims = {}
+        self._multi_layers = []
+        self._multi_positions = {}
+        self._multi_orig_bbox = None
+        self._multi_base_sx = {}
+        self._multi_base_sy = {}
+        self._multi_base_angle = {}
+        self._multi_dims = {}
 
     # ------------------------------------------------------------------
     # Alignment helpers — delegate to align_ops module
