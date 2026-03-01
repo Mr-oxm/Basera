@@ -100,9 +100,14 @@ class VectorCommitMixin:
 
         # 2. Build combined affine transform:
         #    T(new_center) · R(angle) · S(sx, sy) · T(-old_center)
+        #
+        # NOTE: layer.transform_angle follows the cv2 convention where positive
+        # angle means counter-clockwise rotation visually (y-down screen space).
+        # AffineTransform.rotation uses the opposite sign convention (positive =
+        # clockwise in y-down screen space), so the angle must be negated here.
         xf = AffineTransform.translation(new_cx, new_cy)
         if angle_deg != 0.0:
-            xf = xf.rotate(math.radians(angle_deg))
+            xf = xf.rotate(-math.radians(angle_deg))
         if sx != 1.0 or sy != 1.0:
             xf = xf.scale(sx, sy)
         xf = xf.translate(-old_cx, -old_cy)
@@ -167,7 +172,9 @@ class VectorCommitMixin:
 
             angle_deg = child.transform_angle - base_angle
             if angle_deg != 0.0:
-                xf = xf.rotate(math.radians(angle_deg))
+                # Negate: layer.transform_angle uses cv2 sign convention
+                # (positive = CCW visually); AffineTransform uses opposite.
+                xf = xf.rotate(-math.radians(angle_deg))
 
             sx = child.transform_scale_x / max(base_sx, 1e-6)
             sy = child.transform_scale_y / max(base_sy, 1e-6)
@@ -212,7 +219,8 @@ class VectorCommitMixin:
             xf = AffineTransform.translation(new_cx, new_cy)
             angle_deg = child.transform_angle - base_angle
             if angle_deg != 0.0:
-                xf = xf.rotate(math.radians(angle_deg))
+                # Negate to match cv2 sign convention used by transform_angle.
+                xf = xf.rotate(-math.radians(angle_deg))
             sx = child.transform_scale_x / max(base_sx, 1e-6)
             sy = child.transform_scale_y / max(base_sy, 1e-6)
             if sx != 1.0 or sy != 1.0:

@@ -388,8 +388,31 @@ class CanvasOverlays:
         sx = dr.width() / c._doc_w
         sy = dr.height() / c._doc_h
 
-        def _to_screen(dx: float, dy: float) -> QPointF:
-            return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
+        # When the layer has a non-destructive rotation that hasn't been baked
+        # into the vector objects yet, rotate overlay coordinates to match the
+        # cv2-rotated rasterised pixels.
+        nd_angle = layer.transform_angle
+        has_nd_rotation = (
+            nd_angle != 0.0
+            and getattr(layer, "_source_pixels", None) is not None
+        )
+        if has_nd_rotation:
+            import math as _math
+            _rad = _math.radians(nd_angle)
+            _cos_a = _math.cos(_rad)
+            _sin_a = _math.sin(_rad)
+            # Rotation centre = display-bbox centre (kept fixed by _apply_rotate)
+            _rcx = layer.position[0] + layer.width / 2.0
+            _rcy = layer.position[1] + layer.height / 2.0
+
+            def _to_screen(dx: float, dy: float) -> QPointF:
+                # Rotate point around centre (cv2 convention: +angle = CCW screen)
+                rx = _rcx + _cos_a * (dx - _rcx) + _sin_a * (dy - _rcy)
+                ry = _rcy - _sin_a * (dx - _rcx) + _cos_a * (dy - _rcy)
+                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+        else:
+            def _to_screen(dx: float, dy: float) -> QPointF:
+                return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
 
         accent = QColor(100, 180, 255)
         accent_dim = QColor(100, 180, 255, 100)
