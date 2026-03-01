@@ -25,6 +25,7 @@ from PySide6.QtCore import Qt
 
 from ..tools.tool_base import Tool
 from ..core.enums import LayerType
+from ..tools.move.auto_select import find_layer_at as _find_layer_at
 
 from ..vector.geometry import Vec2, BBox
 from ..vector.path import VectorPath, SubPath, PathNode, PathSegment, HandleMode, SegmentType
@@ -76,6 +77,14 @@ class NodeTool(Tool):
         # Throttle rasterize during drag (~12 fps)
         self._last_rasterize_time: float = 0.0
         self._rasterize_interval: float = 0.08
+        # Auto-select: when True and the click misses all objects on the
+        # current vector layer, the tool switches to the topmost SHAPE
+        # layer whose opaque pixels are under the cursor (same logic as
+        # the Move tool, shared via tools.move.auto_select).
+        self.auto_select: bool = True
+        # Callback invoked after an auto-select layer switch.
+        # Signature: (layer_index: int) -> None
+        self.on_layer_auto_selected: callable | None = None
 
     # ---- Tool interface -----------------------------------------------------
 
@@ -205,7 +214,30 @@ class NodeTool(Tool):
             self._body_drag_origin = pos
             return
 
-        # 5. Miss — start marquee or deselect
+        # 5. Miss — try auto-select before falling back to marquee/deselect
+        if self.auto_select:
+            hit_idx = _find_layer_at(doc, x, y)
+            if hit_idx is not None:
+                hit_layer = doc.layers.layers[hit_idx]
+                active = doc.layers.active_layer
+                if hit_layer.layer_type == LayerType.SHAPE and (
+                    active is None or hit_layer.id != active.id
+                ):
+                    doc.layers.active_index = hit_idx
+                    if self.on_layer_auto_selected:
+                        self.on_layer_auto_selected(hit_idx)
+                    # Select the topmost vector object on the new layer
+                    new_vl = getattr(hit_layer, "_vector_data", None)
+                    if new_vl is not None:
+                        new_vl.deselect_all()
+                        hit_obj2 = new_vl.hit_test(pos, self.stroke_tolerance)
+                        if hit_obj2 is not None:
+                            hit_obj2.selected = True
+                            self._hit_object = hit_obj2
+                            self._body_drag = True
+                            self._body_drag_origin = pos
+                    return
+
         vl.deselect_all()
         self._deselect_all_nodes(vl)
         self._marquee_start = pos
