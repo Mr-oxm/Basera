@@ -47,11 +47,13 @@ class VectorPropertiesBar(QWidget):
         lbl_fill = QLabel("Fill")
         lbl_fill.setStyleSheet(LABEL)
         layout.addWidget(lbl_fill)
-        self._fill_btn = ColorDropdown(show_gradient=True, parent=self)
-        self._fill_btn.setFixedSize(36, 24)
+        self._fill_btn = ColorDropdown(show_gradient=True, show_none_btn=True, parent=self)
+        self._fill_btn.setFixedSize(56, 24)
         self._fill_btn.color_changed.connect(self._on_fill_changed)
         self._fill_btn.color_committed.connect(self._on_fill_changed)
         self._fill_btn.gradient_changed.connect(self._on_fill_gradient_changed)
+        self._fill_btn.none_toggled.connect(
+            lambda v: self.property_changed.emit("fill_none", v))
         layout.addWidget(self._fill_btn)
 
         layout.addSpacing(4)
@@ -59,11 +61,13 @@ class VectorPropertiesBar(QWidget):
         lbl_stroke = QLabel("Stroke")
         lbl_stroke.setStyleSheet(LABEL)
         layout.addWidget(lbl_stroke)
-        self._stroke_btn = ColorDropdown(show_gradient=True, parent=self)
-        self._stroke_btn.setFixedSize(36, 24)
+        self._stroke_btn = ColorDropdown(show_gradient=True, show_none_btn=True, parent=self)
+        self._stroke_btn.setFixedSize(56, 24)
         self._stroke_btn.color_changed.connect(self._on_stroke_changed)
         self._stroke_btn.color_committed.connect(self._on_stroke_changed)
         self._stroke_btn.gradient_changed.connect(self._on_stroke_gradient_changed)
+        self._stroke_btn.none_toggled.connect(
+            lambda v: self.property_changed.emit("stroke_none", v))
         layout.addWidget(self._stroke_btn)
 
         lbl_sw = QLabel("W")
@@ -260,11 +264,19 @@ class VectorPropertiesBar(QWidget):
     def set_fill_paint(self, paint: FillPaint) -> None:
         self._fill_btn.set_paint(paint)
 
+    def set_fill_none(self, is_none: bool) -> None:
+        """Reflect fill visibility state on the swatch button."""
+        self._fill_btn.set_none(is_none)
+
     def set_stroke_color(self, r: float, g: float, b: float, a: float) -> None:
         self._stroke_btn.set_color(Color(r, g, b, a))
 
     def set_stroke_paint(self, paint: FillPaint) -> None:
         self._stroke_btn.set_paint(paint)
+
+    def set_stroke_none(self, is_none: bool) -> None:
+        """Reflect stroke visibility state on the swatch button."""
+        self._stroke_btn.set_none(is_none)
 
     def set_stroke_width(self, val: float) -> None:
         self._stroke_w.blockSignals(True)
@@ -291,6 +303,11 @@ class VectorPropertiesBar(QWidget):
                             import copy
                             tool.fill_paint = copy.deepcopy(fill_paint)
                             fill_synced = True
+                        # Reflect none state: fill exists but is invisible
+                        self.set_fill_none(not getattr(fill, "visible", True))
+                    else:
+                        # No fill entries → treat as none
+                        self.set_fill_none(True)
                     strokes = getattr(style, "strokes", None)
                     if strokes and len(strokes) > 0:
                         stroke = strokes[0]
@@ -300,10 +317,15 @@ class VectorPropertiesBar(QWidget):
                             import copy
                             tool.stroke_paint = copy.deepcopy(stroke_paint)
                             stroke_synced = True
+                        # Reflect none state: stroke exists but is invisible
+                        self.set_stroke_none(not getattr(stroke, "visible", True))
                         sw = getattr(stroke, "width", None)
                         if sw is not None:
                             self.set_stroke_width(sw)
                             tool.stroke_width = sw
+                    else:
+                        # No stroke entries → treat as none
+                        self.set_stroke_none(True)
 
             if not fill_synced:
                 fp = getattr(tool, "fill_paint", None)

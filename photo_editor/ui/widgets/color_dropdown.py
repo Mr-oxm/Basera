@@ -291,7 +291,11 @@ class _ColorPopup(QWidget):
 # ============================================================================
 
 class _ColorButton(QWidget):
-    """Small rounded-rect button showing the current color or gradient."""
+    """Small rounded-rect button showing the current color or gradient.
+
+    When *none_mode* is True the swatch shows a red ⊘ (no-entry) symbol
+    indicating that fill or stroke is disabled.
+    """
 
     clicked = Signal()
 
@@ -300,10 +304,15 @@ class _ColorButton(QWidget):
         self._color = Color.black()
         self._gradient: GradientPaint | None = None
         self._hovered = False
+        self._none_mode = False
         self.setFixedSize(32, 24)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setToolTip("Click to open color picker")
+
+    def set_none_mode(self, none: bool) -> None:
+        self._none_mode = none
+        self.update()
 
     def set_color(self, c: Color) -> None:
         self._color = c
@@ -320,7 +329,7 @@ class _ColorButton(QWidget):
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         radius = 5.0
 
-        # Checkerboard
+        # Checkerboard background (always drawn)
         clip = QPainterPath()
         clip.addRoundedRect(rect, radius, radius)
         p.setClipPath(clip)
@@ -336,7 +345,21 @@ class _ColorButton(QWidget):
                 p.fillRect(x, y, cs, cs, c)
         p.setClipping(False)
 
-        if self._gradient is not None and self._gradient.stops:
+        if self._none_mode:
+            # Draw ⊘ stop-sign: thin circle + diagonal line in vivid red
+            cx = rect.center().x()
+            cy = rect.center().y()
+            r_val = min(rect.width(), rect.height()) / 2.0 - 2.0
+            red = QColor(220, 50, 50)
+            p.setPen(QPen(red, 2.0, Qt.PenStyle.SolidLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QRectF(cx - r_val, cy - r_val, r_val * 2, r_val * 2))
+            diag = r_val * 0.70
+            p.drawLine(
+                QRectF(cx - diag, cy - diag, diag * 2, diag * 2).bottomLeft(),
+                QRectF(cx - diag, cy - diag, diag * 2, diag * 2).topRight(),
+            )
+        elif self._gradient is not None and self._gradient.stops:
             # Render gradient preview
             from PySide6.QtGui import QLinearGradient
             grad = QLinearGradient(rect.left(), rect.center().y(),
@@ -346,14 +369,13 @@ class _ColorButton(QWidget):
                                    int(stop.color[1] * 255),
                                    int(stop.color[2] * 255),
                                    int(stop.color[3] * 255) if len(stop.color) > 3 else 255)
-                # Support both vector.style (offset) and core.color (position) stops
                 pos = getattr(stop, 'offset', None) or getattr(stop, 'position', 0.0)
                 grad.setColorAt(pos, QColor(r8, g8, b8, a8))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(rect, radius, radius)
         else:
-            # Color fill
+            # Solid color fill
             r, g, b, a = self._color.to_rgb8()
             p.setBrush(QColor(r, g, b, a))
             p.setPen(Qt.PenStyle.NoPen)
@@ -415,6 +437,7 @@ class ColorDropdown(QWidget):
     color_changed = Signal(object)
     color_committed = Signal(object)
     gradient_changed = Signal(object)
+    none_toggled = Signal(bool)   # True = none/disabled, False = has paint
 
     def __init__(
         self,
@@ -423,16 +446,18 @@ class ColorDropdown(QWidget):
         show_gradient: bool = True,
         show_wheel: bool = False,
         default_tab: int = 0,
+        show_none_btn: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._show_gradient = show_gradient
         self._show_wheel = show_wheel
         self._default_tab = default_tab
+        self._is_none = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
 
         if label:
             self._lbl = QLabel(label)
@@ -441,6 +466,23 @@ class ColorDropdown(QWidget):
         self._btn = _ColorButton()
         self._btn.clicked.connect(self._toggle_popup)
         layout.addWidget(self._btn)
+
+        # Optional ⊘ toggle button to disable fill/stroke
+        self._none_btn: QPushButton | None = None
+        if show_none_btn:
+            self._none_btn = QPushButton("⊘")
+            self._none_btn.setFixedSize(18, 18)
+            self._none_btn.setCheckable(True)
+            self._none_btn.setToolTip("Toggle none (disable fill/stroke)")
+            self._none_btn.setStyleSheet(
+                "QPushButton { font-size: 11px; padding: 0; border: 1px solid rgba(255,255,255,0.1);"
+                " border-radius: 3px; background: rgba(0,0,0,0.2); color: #888; }"
+                "QPushButton:checked { color: #e05555; border-color: #c04040;"
+                " background: rgba(200,40,40,0.2); }"
+                "QPushButton:hover { background: rgba(255,255,255,0.1); }"
+            )
+            self._none_btn.toggled.connect(self._on_none_toggled)
+            layout.addWidget(self._none_btn)
 
         self._popup: _ColorPopup | None = None
         self._color = Color.black()
@@ -456,6 +498,25 @@ class ColorDropdown(QWidget):
                 "font-family: 'Segoe UI', 'Inter', sans-serif;"
             )
         self._btn.update()
+
+    # ---- None toggle --------------------------------------------------------
+
+    def _on_none_toggled(self, checked: bool) -> None:
+        self._is_none = checked
+        self._btn.set_none_mode(checked)
+        self.none_toggled.emit(checked)
+
+    def set_none(self, none: bool) -> None:
+        """Programmatically set the none state (disables/re-enables the paint)."""
+        self._is_none = none
+        self._btn.set_none_mode(none)
+        if self._none_btn is not None:
+            self._none_btn.blockSignals(True)
+            self._none_btn.setChecked(none)
+            self._none_btn.blockSignals(False)
+
+    def is_none(self) -> bool:
+        return self._is_none
 
     # ---- Public API ---------------------------------------------------------
 

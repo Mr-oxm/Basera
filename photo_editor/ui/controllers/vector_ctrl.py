@@ -50,8 +50,13 @@ class VectorController:
             tool.fill_paint = value
         elif key == "stroke_paint":
             tool.stroke_paint = value
+        elif key == "fill_none":
+            tool.fill_none = bool(value)
+        elif key == "stroke_none":
+            tool.stroke_none = bool(value)
 
-        if key in ("fill_color", "stroke_color", "stroke_width", "fill_paint", "stroke_paint"):
+        if key in ("fill_color", "stroke_color", "stroke_width",
+                   "fill_paint", "stroke_paint", "fill_none", "stroke_none"):
             self._apply_style_to_selected_objects(key, value)
 
     def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
@@ -133,6 +138,33 @@ class VectorController:
                     else:
                         obj.style.add_stroke()
                         obj.style.strokes[0].paint = paint
+                    obj.invalidate()
+                    changed = True
+
+                elif key == "fill_none":
+                    # Toggle fill visibility (keep the paint intact)
+                    is_none = bool(value)
+                    if obj.style.fills:
+                        for fill in obj.style.fills:
+                            fill.visible = not is_none
+                    else:
+                        # No fills yet — add a default one if re-enabling
+                        if not is_none:
+                            from ...vector.style import VectorFill, SolidPaint
+                            obj.style.fills.append(VectorFill(SolidPaint((0.8, 0.8, 0.8, 1.0))))
+                    obj.invalidate()
+                    changed = True
+                elif key == "stroke_none":
+                    # Toggle stroke visibility (keep the paint intact)
+                    is_none = bool(value)
+                    if obj.style.strokes:
+                        for stroke in obj.style.strokes:
+                            stroke.visible = not is_none
+                    else:
+                        # No strokes yet — add a default one if re-enabling
+                        if not is_none:
+                            from ...vector.style import VectorStroke, SolidPaint
+                            obj.style.strokes.append(VectorStroke(SolidPaint((0.0, 0.0, 0.0, 1.0)), width=1.0))
                     obj.invalidate()
                     changed = True
 
