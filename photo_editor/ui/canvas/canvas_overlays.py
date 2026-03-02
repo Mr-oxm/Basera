@@ -396,6 +396,53 @@ class CanvasOverlays:
             nd_angle != 0.0
             and getattr(layer, "_source_pixels", None) is not None
         )
+
+        # ---- Live move/scale correction for the Move tool -------------------
+        # During a Move-tool drag the vector node coordinates (stored in the
+        # VectorObject transforms) are NOT updated mid-drag — only layer.position
+        # and layer.transform_scale_x/y change.  We reconstruct the same affine
+        # offset/scale that _commit_vector_transform will bake on release so the
+        # overlay follows the layer exactly while dragging.
+        _live_dx: float = 0.0
+        _live_dy: float = 0.0
+        _live_sx: float = 1.0
+        _live_sy: float = 1.0
+        _live_old_cx: float = 0.0
+        _live_old_cy: float = 0.0
+        _live_new_cx: float = 0.0
+        _live_new_cy: float = 0.0
+        _apply_live_scale: bool = False
+
+        if c._current_tool_type is not None:
+            from ...core.enums import ToolType as _TT
+            if c._current_tool_type == _TT.MOVE and c._tool_manager_ref is not None:
+                from ...tools.move.move_tool import MoveTool as _MT
+                from ...tools.move._enums import _Mode as _MMode
+                _mt = c._tool_manager_ref.active_tool
+                if (
+                    isinstance(_mt, _MT)
+                    and _mt._dragging
+                    and _mt._active_layer is layer
+                    and layer.layer_type.name == "SHAPE"
+                ):
+                    if _mt._mode == _MMode.MOVE:
+                        # Simple translation: difference between original and
+                        # current layer position
+                        _ox, _oy = _mt._orig_position
+                        _live_dx = layer.position[0] - _ox
+                        _live_dy = layer.position[1] - _oy
+                    elif _mt._mode == _MMode.RESIZE:
+                        # Scale around the original centre, then translate to
+                        # the new centre — mirrors _commit_vector_transform.
+                        _live_old_cx, _live_old_cy = _mt._orig_center
+                        _live_new_cx = layer.position[0] + layer.width / 2.0
+                        _live_new_cy = layer.position[1] + layer.height / 2.0
+                        _ow = _mt._orig_width
+                        _oh = _mt._orig_height
+                        _live_sx = layer.width / max(_ow, 1.0)
+                        _live_sy = layer.height / max(_oh, 1.0)
+                        _apply_live_scale = True
+
         if has_nd_rotation:
             import math as _math
             _rad = _math.radians(nd_angle)
@@ -410,6 +457,20 @@ class CanvasOverlays:
                 rx = _rcx + _cos_a * (dx - _rcx) + _sin_a * (dy - _rcy)
                 ry = _rcy - _sin_a * (dx - _rcx) + _cos_a * (dy - _rcy)
                 return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+        elif _apply_live_scale:
+            def _to_screen(dx: float, dy: float) -> QPointF:
+                # Apply: T(new_center) · S(sx, sy) · T(-old_center)
+                lx = dx - _live_old_cx
+                ly = dy - _live_old_cy
+                lx *= _live_sx
+                ly *= _live_sy
+                rx = lx + _live_new_cx
+                ry = ly + _live_new_cy
+                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+        elif _live_dx != 0.0 or _live_dy != 0.0:
+            def _to_screen(dx: float, dy: float) -> QPointF:
+                return QPointF(dr.left() + (dx + _live_dx) * sx,
+                               dr.top() + (dy + _live_dy) * sy)
         else:
             def _to_screen(dx: float, dy: float) -> QPointF:
                 return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)

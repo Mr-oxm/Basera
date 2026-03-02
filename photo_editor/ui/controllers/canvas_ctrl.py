@@ -234,3 +234,11 @@ class CanvasController:
                 tool.insert_node_on_segment(mw._doc, x, y)
                 mw._refresh()
                 return
+        # Double-click a selected vector layer with the Move tool → switch to Node tool
+        if tool_type == ToolType.MOVE and mw._doc is not None:
+            layer = mw._doc.layers.active_layer
+            if layer is not None and layer.layer_type.name == "SHAPE":
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    mw._toolbar.select_tool(ToolType.NODE)
+                    return

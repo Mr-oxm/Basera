@@ -526,7 +526,7 @@ class CanvasView(_BASE_CLASS):
             self._overlays.draw_guides(p, dr)
 
         # Vector object overlay (node handles, path outlines)
-        if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
+        if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE, ToolType.MOVE):
             self._overlays.draw_vector_overlay(p, dr)
 
         p.end()
