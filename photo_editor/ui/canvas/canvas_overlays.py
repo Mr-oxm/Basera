@@ -371,12 +371,7 @@ class CanvasOverlays:
         doc = c._doc_ref
         if doc is None or c._doc_w == 0 or c._doc_h == 0:
             return
-        layer = doc.layers.active_layer
-        if layer is None:
-            return
-        vl = getattr(layer, "_vector_data", None)
-        if vl is None:
-            return
+            
         try:
             from ...vector.path import SegmentType, HandleMode
         except ImportError:
@@ -387,94 +382,7 @@ class CanvasOverlays:
 
         sx = dr.width() / c._doc_w
         sy = dr.height() / c._doc_h
-
-        # When the layer has a non-destructive rotation that hasn't been baked
-        # into the vector objects yet, rotate overlay coordinates to match the
-        # cv2-rotated rasterised pixels.
-        nd_angle = layer.transform_angle
-        has_nd_rotation = (
-            nd_angle != 0.0
-            and getattr(layer, "_source_pixels", None) is not None
-        )
-
-        # ---- Live move/scale correction for the Move tool -------------------
-        # During a Move-tool drag the vector node coordinates (stored in the
-        # VectorObject transforms) are NOT updated mid-drag — only layer.position
-        # and layer.transform_scale_x/y change.  We reconstruct the same affine
-        # offset/scale that _commit_vector_transform will bake on release so the
-        # overlay follows the layer exactly while dragging.
-        _live_dx: float = 0.0
-        _live_dy: float = 0.0
-        _live_sx: float = 1.0
-        _live_sy: float = 1.0
-        _live_old_cx: float = 0.0
-        _live_old_cy: float = 0.0
-        _live_new_cx: float = 0.0
-        _live_new_cy: float = 0.0
-        _apply_live_scale: bool = False
-
-        if c._current_tool_type is not None:
-            from ...core.enums import ToolType as _TT
-            if c._current_tool_type == _TT.MOVE and c._tool_manager_ref is not None:
-                from ...tools.move.move_tool import MoveTool as _MT
-                from ...tools.move._enums import _Mode as _MMode
-                _mt = c._tool_manager_ref.active_tool
-                if (
-                    isinstance(_mt, _MT)
-                    and _mt._dragging
-                    and _mt._active_layer is layer
-                    and layer.layer_type.name == "SHAPE"
-                ):
-                    if _mt._mode == _MMode.MOVE:
-                        # Simple translation: difference between original and
-                        # current layer position
-                        _ox, _oy = _mt._orig_position
-                        _live_dx = layer.position[0] - _ox
-                        _live_dy = layer.position[1] - _oy
-                    elif _mt._mode == _MMode.RESIZE:
-                        # Scale around the original centre, then translate to
-                        # the new centre — mirrors _commit_vector_transform.
-                        _live_old_cx, _live_old_cy = _mt._orig_center
-                        _live_new_cx = layer.position[0] + layer.width / 2.0
-                        _live_new_cy = layer.position[1] + layer.height / 2.0
-                        _ow = _mt._orig_width
-                        _oh = _mt._orig_height
-                        _live_sx = layer.width / max(_ow, 1.0)
-                        _live_sy = layer.height / max(_oh, 1.0)
-                        _apply_live_scale = True
-
-        if has_nd_rotation:
-            import math as _math
-            _rad = _math.radians(nd_angle)
-            _cos_a = _math.cos(_rad)
-            _sin_a = _math.sin(_rad)
-            # Rotation centre = display-bbox centre (kept fixed by _apply_rotate)
-            _rcx = layer.position[0] + layer.width / 2.0
-            _rcy = layer.position[1] + layer.height / 2.0
-
-            def _to_screen(dx: float, dy: float) -> QPointF:
-                # Rotate point around centre (cv2 convention: +angle = CCW screen)
-                rx = _rcx + _cos_a * (dx - _rcx) + _sin_a * (dy - _rcy)
-                ry = _rcy - _sin_a * (dx - _rcx) + _cos_a * (dy - _rcy)
-                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
-        elif _apply_live_scale:
-            def _to_screen(dx: float, dy: float) -> QPointF:
-                # Apply: T(new_center) · S(sx, sy) · T(-old_center)
-                lx = dx - _live_old_cx
-                ly = dy - _live_old_cy
-                lx *= _live_sx
-                ly *= _live_sy
-                rx = lx + _live_new_cx
-                ry = ly + _live_new_cy
-                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
-        elif _live_dx != 0.0 or _live_dy != 0.0:
-            def _to_screen(dx: float, dy: float) -> QPointF:
-                return QPointF(dr.left() + (dx + _live_dx) * sx,
-                               dr.top() + (dy + _live_dy) * sy)
-        else:
-            def _to_screen(dx: float, dy: float) -> QPointF:
-                return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
-
+        
         accent = QColor(100, 180, 255)
         accent_dim = QColor(100, 180, 255, 100)
         white = QColor(255, 255, 255)
@@ -492,78 +400,218 @@ class CanvasOverlays:
         is_node_tool = c._current_tool_type == ToolType.NODE
         show_nodes = c._current_tool_type in (ToolType.PEN, ToolType.NODE)
 
-        for obj in vl.objects:
-            if not obj.visible:
+        selected_indices = doc.layers.selected_indices
+        shape_layers = []
+        for idx in selected_indices:
+            l = doc.layers.layers[idx]
+            if getattr(l, "_vector_data", None) is not None:
+                shape_layers.append(l)
+
+        active_layer = doc.layers.active_layer
+        if not shape_layers and active_layer and getattr(active_layer, "_vector_data", None) is not None:
+            shape_layers.append(active_layer)
+
+        if not shape_layers:
+            p.restore()
+            return
+            
+        def _get_to_screen_func(layer, dr, sx, sy):
+            nd_angle = layer.transform_angle
+            has_nd_rotation = (
+                nd_angle != 0.0
+                and getattr(layer, "_source_pixels", None) is not None
+            )
+
+            _live_dx: float = 0.0
+            _live_dy: float = 0.0
+            _live_sx: float = 1.0
+            _live_sy: float = 1.0
+            _live_old_cx: float = 0.0
+            _live_old_cy: float = 0.0
+            _live_new_cx: float = 0.0
+            _live_new_cy: float = 0.0
+            _apply_live_scale: bool = False
+
+            if c._current_tool_type is not None:
+                from ...core.enums import ToolType as _TT
+                if c._current_tool_type == _TT.MOVE and c._tool_manager_ref is not None:
+                    from ...tools.move.move_tool import MoveTool as _MT
+                    from ...tools.move._enums import _Mode as _MMode
+                    _mt = c._tool_manager_ref.active_tool
+                    if (
+                        isinstance(_mt, _MT)
+                        and _mt._dragging
+                        and layer.layer_type.name == "SHAPE"
+                        and (layer is getattr(_mt, "_active_layer", None) or layer in getattr(_mt, "_multi_layers", []))
+                    ):
+                        is_multi = layer in getattr(_mt, "_multi_layers", [])
+                        if is_multi:
+                            # Direct affine mapping handling multi-selection
+                            from ...vector.geometry import AffineTransform
+                            import math as _math
+                            
+                            _multi_positions = getattr(_mt, "_multi_positions", {})
+                            _multi_dims = getattr(_mt, "_multi_dims", {})
+                            _base_sx = getattr(_mt, "_multi_base_sx", {}).get(layer.id, 1.0)
+                            _base_sy = getattr(_mt, "_multi_base_sy", {}).get(layer.id, 1.0)
+                            _base_angle = getattr(_mt, "_multi_base_angle", {}).get(layer.id, 0.0)
+                            
+                            _ox, _oy = _multi_positions.get(layer.id, layer.position)
+                            _ow, _oh = _multi_dims.get(layer.id, (layer.width, layer.height))
+                            
+                            _orig_cx = _ox + _ow / 2.0
+                            _orig_cy = _oy + _oh / 2.0
+                            _new_cx = layer.position[0] + layer.width / 2.0
+                            _new_cy = layer.position[1] + layer.height / 2.0
+                            
+                            xf = AffineTransform.translation(_new_cx, _new_cy)
+                            angle_deg = layer.transform_angle - _base_angle
+                            if angle_deg != 0.0:
+                                xf = xf.rotate(-_math.radians(angle_deg))
+                                
+                            scale_x = layer.transform_scale_x / max(abs(_base_sx), 1e-6)
+                            scale_y = layer.transform_scale_y / max(abs(_base_sy), 1e-6)
+                            if _base_sx < 0: scale_x = -scale_x
+                            if _base_sy < 0: scale_y = -scale_y
+                            if scale_x != 1.0 or scale_y != 1.0:
+                                xf = xf.scale(scale_x, scale_y)
+                                
+                            xf = xf.translate(-_orig_cx, -_orig_cy)
+                            
+                            def f_multi(dx: float, dy: float) -> QPointF:
+                                rx = xf.a * dx + xf.b * dy + xf.tx
+                                ry = xf.c * dx + xf.d * dy + xf.ty
+                                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                            return f_multi
+
+                        # Single layer handling
+                        if _mt._mode == _MMode.MOVE:
+                            _ox, _oy = getattr(_mt, "_orig_position", layer.position)
+                            _live_dx = layer.position[0] - _ox
+                            _live_dy = layer.position[1] - _oy
+                        elif _mt._mode == _MMode.RESIZE:
+                            _live_old_cx, _live_old_cy = getattr(_mt, "_orig_center", (0, 0))
+                            _ow = getattr(_mt, "_orig_width", layer.width)
+                            _oh = getattr(_mt, "_orig_height", layer.height)
+                            _live_sx = layer.width / max(_ow, 1.0)
+                            _live_sy = layer.height / max(_oh, 1.0)
+                            _live_new_cx = layer.position[0] + layer.width / 2.0
+                            _live_new_cy = layer.position[1] + layer.height / 2.0
+                            _apply_live_scale = True
+
+            if has_nd_rotation:
+                import math as _math
+                _rad = _math.radians(nd_angle)
+                _cos_a = _math.cos(_rad)
+                _sin_a = _math.sin(_rad)
+                _rcx = layer.position[0] + layer.width / 2.0
+                _rcy = layer.position[1] + layer.height / 2.0
+
+                def f(dx: float, dy: float) -> QPointF:
+                    rx = _rcx + _cos_a * (dx - _rcx) + _sin_a * (dy - _rcy)
+                    ry = _rcy - _sin_a * (dx - _rcx) + _cos_a * (dy - _rcy)
+                    return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                return f
+            elif _apply_live_scale:
+                def f(dx: float, dy: float) -> QPointF:
+                    lx = dx - _live_old_cx
+                    ly = dy - _live_old_cy
+                    lx *= _live_sx
+                    ly *= _live_sy
+                    rx = lx + _live_new_cx
+                    ry = ly + _live_new_cy
+                    return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                return f
+            elif _live_dx != 0.0 or _live_dy != 0.0:
+                def f(dx: float, dy: float) -> QPointF:
+                    return QPointF(dr.left() + (dx + _live_dx) * sx,
+                                   dr.top() + (dy + _live_dy) * sy)
+                return f
+            else:
+                def f(dx: float, dy: float) -> QPointF:
+                    return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
+                return f
+
+        for layer in shape_layers:
+            vl = getattr(layer, "_vector_data", None)
+            if not vl:
                 continue
-            is_obj_selected = obj.selected
-            path = obj.transformed_path()
+                
+            _to_screen = _get_to_screen_func(layer, dr, sx, sy)
 
-            for sp in path.sub_paths:
-                if not sp.nodes:
+            for obj in vl.objects:
+                if not obj.visible:
                     continue
+                is_obj_selected = obj.selected
+                path = obj.transformed_path()
 
-                pp = QPainterPath()
-                origin = sp.nodes[0].position
-                pp.moveTo(_to_screen(origin.x, origin.y))
-                for seg in sp.segments:
-                    if seg.seg_type == SegmentType.LINE:
-                        pp.lineTo(_to_screen(seg.end.x, seg.end.y))
-                    elif seg.seg_type == SegmentType.CUBIC:
-                        pp.cubicTo(
-                            _to_screen(seg.cp1.x, seg.cp1.y),
-                            _to_screen(seg.cp2.x, seg.cp2.y),
-                            _to_screen(seg.end.x, seg.end.y),
-                        )
-                    elif seg.seg_type == SegmentType.CLOSE:
-                        pp.closeSubpath()
-                p.setPen(path_pen_sel if is_obj_selected else path_pen)
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawPath(pp)
+                for sp in path.sub_paths:
+                    if not sp.nodes:
+                        continue
 
-                if show_nodes and (is_obj_selected or is_pen_tool):
-                    for node in sp.nodes:
-                        np_ = _to_screen(node.position.x, node.position.y)
-                        node_sel = getattr(node, "selected", False)
+                    pp = QPainterPath()
+                    origin = sp.nodes[0].position
+                    pp.moveTo(_to_screen(origin.x, origin.y))
+                    for seg in sp.segments:
+                        if seg.seg_type == SegmentType.LINE:
+                            pp.lineTo(_to_screen(seg.end.x, seg.end.y))
+                        elif seg.seg_type == SegmentType.CUBIC:
+                            pp.cubicTo(
+                                _to_screen(seg.cp1.x, seg.cp1.y),
+                                _to_screen(seg.cp2.x, seg.cp2.y),
+                                _to_screen(seg.end.x, seg.end.y),
+                            )
+                        elif seg.seg_type == SegmentType.CLOSE:
+                            pp.closeSubpath()
+                    p.setPen(path_pen_sel if is_obj_selected else path_pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawPath(pp)
 
-                        if node_sel:
-                            if node.in_handle and not node.in_handle.approx_eq(node.position):
-                                hp = _to_screen(node.in_handle.x, node.in_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
-                            if node.out_handle and not node.out_handle.approx_eq(node.position):
-                                hp = _to_screen(node.out_handle.x, node.out_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
+                    if show_nodes and (is_obj_selected or is_pen_tool):
+                        for node in sp.nodes:
+                            np_ = _to_screen(node.position.x, node.position.y)
+                            node_sel = getattr(node, "selected", False)
 
-                        p.setPen(QPen(accent, 1.2))
-                        mode = getattr(node, "mode", None)
-                        if node_sel:
-                            p.setBrush(accent)
-                        else:
-                            p.setBrush(white)
+                            if node_sel:
+                                if node.in_handle and not node.in_handle.approx_eq(node.position):
+                                    hp = _to_screen(node.in_handle.x, node.in_handle.y)
+                                    p.setPen(handle_pen)
+                                    p.drawLine(np_, hp)
+                                    p.setPen(QPen(accent, 0.8))
+                                    p.setBrush(QColor(100, 180, 255, 150))
+                                    p.drawEllipse(hp, 3, 3)
+                                if node.out_handle and not node.out_handle.approx_eq(node.position):
+                                    hp = _to_screen(node.out_handle.x, node.out_handle.y)
+                                    p.setPen(handle_pen)
+                                    p.drawLine(np_, hp)
+                                    p.setPen(QPen(accent, 0.8))
+                                    p.setBrush(QColor(100, 180, 255, 150))
+                                    p.drawEllipse(hp, 3, 3)
 
-                        if mode == HandleMode.SHARP:
-                            p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
-                        elif mode == HandleMode.SMOOTH:
-                            p.drawEllipse(np_, 3.5, 3.5)
-                        elif mode == HandleMode.SYMMETRIC:
-                            diamond = QPainterPath()
-                            diamond.moveTo(np_.x(), np_.y() - 4)
-                            diamond.lineTo(np_.x() + 4, np_.y())
-                            diamond.lineTo(np_.x(), np_.y() + 4)
-                            diamond.lineTo(np_.x() - 4, np_.y())
-                            diamond.closeSubpath()
-                            p.drawPath(diamond)
-                        else:
-                            p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
+                            p.setPen(QPen(accent, 1.2))
+                            mode = getattr(node, "mode", None)
+                            if node_sel:
+                                p.setBrush(accent)
+                            else:
+                                p.setBrush(white)
 
-        if is_pen_tool and c._tool_manager_ref is not None:
+                            if mode == HandleMode.SHARP:
+                                p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
+                            elif mode == HandleMode.SMOOTH:
+                                p.drawEllipse(np_, 3.5, 3.5)
+                            elif mode == HandleMode.SYMMETRIC:
+                                diamond = QPainterPath()
+                                diamond.moveTo(np_.x(), np_.y() - 4)
+                                diamond.lineTo(np_.x() + 4, np_.y())
+                                diamond.lineTo(np_.x(), np_.y() + 4)
+                                diamond.lineTo(np_.x() - 4, np_.y())
+                                diamond.closeSubpath()
+                                p.drawPath(diamond)
+                            else:
+                                p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
+
+        if is_pen_tool and c._tool_manager_ref is not None and active_layer:
+            _to_screen = _get_to_screen_func(active_layer, dr, sx, sy)
             from ...vector.pen_tool import PenTool
             tool = c._tool_manager_ref.active_tool
             if isinstance(tool, PenTool) and tool.is_drawing and tool.preview_point:
@@ -592,7 +640,8 @@ class CanvasOverlays:
                             p.setBrush(Qt.BrushStyle.NoBrush)
                             p.drawEllipse(first_screen, 6, 6)
 
-        if is_node_tool and c._tool_manager_ref is not None:
+        if is_node_tool and c._tool_manager_ref is not None and active_layer:
+            _to_screen = _get_to_screen_func(active_layer, dr, sx, sy)
             from ...vector.node_tool import NodeTool
             tool = c._tool_manager_ref.active_tool
             if isinstance(tool, NodeTool):

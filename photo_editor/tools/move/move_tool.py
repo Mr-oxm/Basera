@@ -597,7 +597,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
 
         # --- Vector layer commit ---
         if self._active_layer is not None and self._mode != _Mode.NONE:
-            if self._active_layer.layer_type == LayerType.SHAPE:
+            if getattr(self, "_multi_layers", []):
+                self._commit_multi_vector_transforms(doc)
+            elif self._active_layer.layer_type == LayerType.SHAPE:
                 vl = getattr(self._active_layer, "_vector_data", None)
                 if vl:
                     self._commit_vector_transform(doc, self._active_layer, vl)

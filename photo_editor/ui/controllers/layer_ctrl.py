@@ -271,6 +271,13 @@ class LayerController:
         lst.blockSignals(True)
         lst.clearSelection()
         row_ids = panel.row_layer_ids()
+
+        # Set current row to the active layer FIRST, 
+        # because in ExtendedSelection mode it clears other selections.
+        active = mw._doc.layers.active_layer
+        if active and active.id in row_ids:
+            lst.setCurrentRow(row_ids.index(active.id))
+
         for si in sel_indices:
             if 0 <= si < len(mw._doc.layers.layers):
                 lid = mw._doc.layers.layers[si].id
@@ -279,10 +286,6 @@ class LayerController:
                     item = lst.item(row)
                     if item:
                         item.setSelected(True)
-        # Set current row to the active layer
-        active = mw._doc.layers.active_layer
-        if active and active.id in row_ids:
-            lst.setCurrentRow(row_ids.index(active.id))
         lst.blockSignals(False)
 
     def on_move_deselect_all(self) -> None:

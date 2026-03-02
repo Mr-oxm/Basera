@@ -8,10 +8,11 @@ layer is then re-rasterized from the updated vector data.
 
 This module handles three cases:
 
-1. A single ``SHAPE`` layer  (``VectorCommitMixin._commit_vector_transform``).
 2. A ``GROUP`` layer whose children include ``SHAPE`` layers
    (``VectorCommitMixin._commit_group_vector_transforms``).
-3. Nested groups, handled recursively via
+3. Multiple selected layers including ``SHAPE`` layers
+   (``VectorCommitMixin._commit_multi_vector_transforms``).
+4. Nested groups, handled recursively via
    ``VectorCommitMixin._bake_transform_into_descendants``.
 
 Exported symbol
@@ -237,6 +238,66 @@ class VectorCommitMixin:
             child.transform_base_w = 0
             child.transform_base_h = 0
             child._pixels_dirty = False
+
+    # ------------------------------------------------------------------
+    # MULTI-SELECTION layers
+    # ------------------------------------------------------------------
+
+    def _commit_multi_vector_transforms(self, doc: "Document") -> None:
+        """Bake multi-selection move/resize/rotate into all selected SHAPE layers."""
+        from ...vector.geometry import AffineTransform
+        from ...vector.rasterizer import rasterize_vector_layer_tight
+
+        for child in getattr(self, "_multi_layers", []):
+            if child.layer_type != LayerType.SHAPE:
+                continue
+            vl = getattr(child, "_vector_data", None)
+            if vl is None:
+                continue
+
+            multi_positions = getattr(self, "_multi_positions", {})
+            orig_pos = multi_positions.get(child.id)
+            if orig_pos is None:
+                continue
+
+            base_sx = getattr(self, "_multi_base_sx", {}).get(child.id, 1.0)
+            base_sy = getattr(self, "_multi_base_sy", {}).get(child.id, 1.0)
+            base_angle = getattr(self, "_multi_base_angle", {}).get(child.id, 0.0)
+            orig_dims = getattr(self, "_multi_dims", {}).get(child.id, (child.width, child.height))
+            orig_w, orig_h = orig_dims
+
+            orig_cx = orig_pos[0] + orig_w / 2.0
+            orig_cy = orig_pos[1] + orig_h / 2.0
+            new_cx = child.position[0] + child.width / 2.0
+            new_cy = child.position[1] + child.height / 2.0
+
+            xf = AffineTransform.translation(new_cx, new_cy)
+
+            angle_deg = child.transform_angle - base_angle
+            if angle_deg != 0.0:
+                xf = xf.rotate(-math.radians(angle_deg))
+
+            sx = child.transform_scale_x / max(base_sx, 1e-6)
+            sy = child.transform_scale_y / max(base_sy, 1e-6)
+            if sx != 1.0 or sy != 1.0:
+                xf = xf.scale(sx, sy)
+
+            xf = xf.translate(-orig_cx, -orig_cy)
+
+            for obj in getattr(vl, "objects", []):
+                obj.transform = xf.concat(obj.transform)
+                obj.invalidate()
+
+            child._source_pixels = None
+            child._source_mask = None
+            child.transform_scale_x = 1.0
+            child.transform_scale_y = 1.0
+            child.transform_angle = 0.0
+            child.transform_base_w = 0
+            child.transform_base_h = 0
+            child._pixels_dirty = False
+
+            rasterize_vector_layer_tight(doc, layer=child, force=True)
 
     # ------------------------------------------------------------------
     # Recursive descendant baking

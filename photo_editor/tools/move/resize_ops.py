@@ -248,8 +248,8 @@ class ResizeMixin:
             if child._source_pixels is None:
                 continue
 
-            base_sx = self._multi_base_sx.get(child.id, 1.0)
-            base_sy = self._multi_base_sy.get(child.id, 1.0)
+            base_sx = getattr(self, "_multi_base_sx", {}).get(child.id, 1.0)
+            base_sy = getattr(self, "_multi_base_sy", {}).get(child.id, 1.0)
 
             child.transform_scale_x = base_sx * sx
             child.transform_scale_y = base_sy * sy
