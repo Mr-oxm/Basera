@@ -103,6 +103,10 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # Callback for marquee layer selection
         # Signature: (indices: list[int]) -> None
         self.on_marquee_select: callable | None = None
+        # Deferred auto-select: when press lands on a MOVE zone we hold off
+        # switching until we know it's a click (not a drag).  Stores the
+        # topmost layer index found by find_layer_at, or None.
+        self._pending_autoselect_idx: int | None = None
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -173,13 +177,17 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._marquee_active = False
 
         # --- Auto-select logic -----------------------------------------------
-        # Suppress auto-select ONLY for resize handles and rotate zones.
-        # The bbox interior (MOVE) still allows auto-select so that:
-        #   - Clicking on a layer that sits on top selects it.
-        #   - Clicking on a transparent pixel of the active layer falls
-        #     through to whatever layer is behind.
+        # Strategy:
+        #   • RESIZE / ROTATE handles  → never auto-select (suppress immediately).
+        #   • Multi-bbox interior       → skip auto-select (move the group).
+        #   • MOVE zone on active layer → DEFER auto-select to on_release so
+        #     that a drag on an already-selected layer moves it instead of
+        #     accidentally pulling a layer from behind.
+        #   • Click on empty / transparent area → marquee on drag, deselect on
+        #     click.
         auto_switched = False
         mode_hit = _Mode.NONE
+        self._pending_autoselect_idx = None  # reset deferred state every press
         if self.auto_select:
             skip_autoselect = False
             if layer is not None:
@@ -204,20 +212,33 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 if topmost_idx is not None:
                     topmost = doc.layers.layers[topmost_idx]
                     if self.shift_held:
-                        # Shift+click: add/toggle in multi-selection
+                        # Shift+click: immediate — toggling a multi-select is
+                        # always a deliberate single-click action.
                         doc.layers.select_toggle(topmost_idx)
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(
                                 doc.layers.active_index if doc.layers.active_index >= 0 else topmost_idx)
                         layer = doc.layers.active_layer
                         auto_switched = True
-                    elif layer is None or topmost.id != layer.id:
+                    elif layer is not None and topmost.id == layer.id:
+                        # Topmost IS the current layer → normal move, no switch.
+                        pass
+                    elif mode_hit == _Mode.MOVE and layer is not None:
+                        # Click is inside the active layer's bbox (opaque OR
+                        # transparent pixel) — defer the switch until release.
+                        # This prevents dragging from an empty area of the layer
+                        # from accidentally selecting the layer behind it.
+                        # If the user just clicks (no drag), on_release will
+                        # apply the switch to the correct topmost layer.
+                        self._pending_autoselect_idx = topmost_idx
+                    else:
+                        # Clearly clicking on a different layer (e.g. transparent
+                        # area of active layer, or no active layer) — switch now.
                         doc.layers.active_index = topmost_idx
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(topmost_idx)
                         layer = doc.layers.active_layer
                         auto_switched = True
-                    # else: topmost IS the current layer → proceed with move
                 else:
                     # No visible layer at click point.
                     # If click is on/near any bbox zone (interior, border,
@@ -468,6 +489,10 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._marquee_current = (x, y)
             return
 
+        # A real drag has started — cancel any pending deferred auto-select
+        # so we never switch layers mid-drag.
+        self._pending_autoselect_idx = None
+
         layer = doc.layers.active_layer
         if layer is None:
             return
@@ -536,6 +561,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._marquee_active = False
             self._dragging = False
             return
+
+        # Deferred auto-select: if a pending switch was recorded on press and
+        # _pending_autoselect_idx is still set (i.e. no drag cleared it),
+        # apply the layer switch now — this was a pure click.
+        if self._pending_autoselect_idx is not None:
+            idx = self._pending_autoselect_idx
+            self._pending_autoselect_idx = None
+            doc.layers.active_index = idx
+            if self.on_layer_auto_selected:
+                self.on_layer_auto_selected(idx)
 
         # Floating selection: keep the float alive, just commit the offset
         if self._floating and self._active_layer is not None:
