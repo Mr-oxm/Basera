@@ -401,11 +401,13 @@ class CanvasOverlays:
         show_nodes = c._current_tool_type in (ToolType.PEN, ToolType.NODE)
 
         selected_indices = doc.layers.selected_indices
+        num_layers = len(doc.layers.layers)
         shape_layers = []
         for idx in selected_indices:
-            l = doc.layers.layers[idx]
-            if getattr(l, "_vector_data", None) is not None:
-                shape_layers.append(l)
+            if 0 <= idx < num_layers:
+                l = doc.layers.layers[idx]
+                if getattr(l, "_vector_data", None) is not None:
+                    shape_layers.append(l)
 
         active_layer = doc.layers.active_layer
         if not shape_layers and active_layer and getattr(active_layer, "_vector_data", None) is not None:
@@ -656,6 +658,23 @@ class CanvasOverlays:
                     p.setBrush(QColor(100, 180, 255, 30))
                     p.drawRect(QRectF(ss, se).normalized())
 
+                # Node-add hover indicator (plus sign on the segment)
+                hover_pt = getattr(tool, "_hover_seg_pos", None)
+                if hover_pt is not None:
+                    hp = _to_screen(hover_pt.x, hover_pt.y)
+                    # Outer ring
+                    p.setPen(QPen(accent, 1.5))
+                    p.setPen(QPen(accent, 1.5))
+                    p.setBrush(white)
+                    p.drawEllipse(hp, 5, 5)
+                    # Small plus sign inside the circle
+                    p.setPen(QPen(accent, 1.4))
+                    cross = 2.8
+                    p.drawLine(QPointF(hp.x() - cross, hp.y()),
+                               QPointF(hp.x() + cross, hp.y()))
+                    p.drawLine(QPointF(hp.x(), hp.y() - cross),
+                               QPointF(hp.x(), hp.y() + cross))
+
         p.restore()
 
     def draw_text_cursor(self, p: QPainter, dr: QRectF) -> None:
@@ -775,4 +794,174 @@ class CanvasOverlays:
         p.setBrush(QColor(60, 130, 220, 80))
         for rx, ry, rw, rh in c._text_selection_rects:
             p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy, rw * sx, rh * sy))
+        p.restore()
+
+    # ---- Boolean preview overlay ------------------------------------------
+
+    def draw_boolean_preview(self, p: QPainter, dr: QRectF) -> None:
+        """Draw semi-transparent preview of a hovered boolean operation.
+
+        The canvas stores the preview state in:
+        * ``_bool_preview_path``  — ``VectorPath`` result of the operation
+        * ``_bool_source_ids``    — set of layer IDs to outline in red dashes
+        """
+        c = self._canvas
+        preview_path = getattr(c, "_bool_preview_path", None)
+        source_ids = getattr(c, "_bool_source_ids", None)
+        if preview_path is None or c._doc_w == 0 or c._doc_h == 0:
+            return
+
+        sx = dr.width() / c._doc_w
+        sy = dr.height() / c._doc_h
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Draw the result shape as blue semi-transparent fill
+        from ...vector.path import SegmentType
+        for sp in preview_path.sub_paths:
+            if not sp.nodes:
+                continue
+            pp = QPainterPath()
+            origin = sp.nodes[0].position
+            pp.moveTo(QPointF(dr.left() + origin.x * sx, dr.top() + origin.y * sy))
+            for seg in sp.segments:
+                ex = dr.left() + seg.end.x * sx
+                ey = dr.top() + seg.end.y * sy
+                if seg.seg_type == SegmentType.LINE:
+                    pp.lineTo(QPointF(ex, ey))
+                elif seg.seg_type == SegmentType.CUBIC:
+                    c1x = dr.left() + seg.cp1.x * sx
+                    c1y = dr.top() + seg.cp1.y * sy
+                    c2x = dr.left() + seg.cp2.x * sx
+                    c2y = dr.top() + seg.cp2.y * sy
+                    pp.cubicTo(QPointF(c1x, c1y), QPointF(c2x, c2y), QPointF(ex, ey))
+                elif seg.seg_type == SegmentType.CLOSE:
+                    pp.closeSubpath()
+            p.setPen(QPen(QColor(60, 130, 220, 140), 1.5))
+            p.setBrush(QColor(60, 130, 220, 50))
+            p.drawPath(pp)
+
+        # Draw red dashed outlines for source layers that will be removed
+        if source_ids:
+            doc = c._doc_ref
+            if doc:
+                dash_pen = QPen(QColor(220, 60, 60, 180), 1.5, Qt.PenStyle.DashLine)
+                dash_pen.setCosmetic(True)
+                p.setPen(dash_pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                for layer in doc.layers.layers:
+                    if layer.id not in source_ids:
+                        continue
+                    vl = getattr(layer, "_vector_data", None)
+                    if vl is None:
+                        continue
+                    for obj in vl.objects:
+                        path = obj.transformed_path()
+                        for sp2 in path.sub_paths:
+                            if not sp2.nodes:
+                                continue
+                            pp2 = QPainterPath()
+                            o2 = sp2.nodes[0].position
+                            pp2.moveTo(QPointF(dr.left() + o2.x * sx,
+                                               dr.top() + o2.y * sy))
+                            for seg2 in sp2.segments:
+                                ex2 = dr.left() + seg2.end.x * sx
+                                ey2 = dr.top() + seg2.end.y * sy
+                                if seg2.seg_type == SegmentType.LINE:
+                                    pp2.lineTo(QPointF(ex2, ey2))
+                                elif seg2.seg_type == SegmentType.CUBIC:
+                                    c1 = QPointF(dr.left() + seg2.cp1.x * sx,
+                                                 dr.top() + seg2.cp1.y * sy)
+                                    c2 = QPointF(dr.left() + seg2.cp2.x * sx,
+                                                 dr.top() + seg2.cp2.y * sy)
+                                    pp2.cubicTo(c1, c2, QPointF(ex2, ey2))
+                                elif seg2.seg_type == SegmentType.CLOSE:
+                                    pp2.closeSubpath()
+                            p.drawPath(pp2)
+        p.restore()
+
+    # ---- Pick-segments overlay --------------------------------------------
+
+    def draw_pick_segments(self, p: QPainter, dr: QRectF) -> None:
+        """Draw pick-segments mode overlay: segments, hover glow, chip."""
+        c = self._canvas
+        pick_state = getattr(c, "_pick_segments_state", None)
+        if pick_state is None or not pick_state.active:
+            return
+        if c._doc_w == 0 or c._doc_h == 0:
+            return
+
+        sx = dr.width() / c._doc_w
+        sy = dr.height() / c._doc_h
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        for seg in pick_state.segments:
+            if len(seg.points) < 2:
+                continue
+
+            is_hovered = seg.id == pick_state.hovered_id
+
+            if seg.included:
+                r, g, b, a = seg.color
+                pen_w = 3.5 if is_hovered else 2.0
+                pen = QPen(QColor(r, g, b, a), pen_w)
+            else:
+                pen = QPen(QColor(120, 120, 120, 150), 1.5, Qt.PenStyle.DashLine)
+                if is_hovered:
+                    pen.setWidthF(2.5)
+
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
+            pp = QPainterPath()
+            p0 = seg.points[0]
+            pp.moveTo(QPointF(dr.left() + p0.x * sx, dr.top() + p0.y * sy))
+            for pt in seg.points[1:]:
+                pp.lineTo(QPointF(dr.left() + pt.x * sx, dr.top() + pt.y * sy))
+            p.drawPath(pp)
+
+        # Live result preview: build included segments into a filled shape
+        included = [s for s in pick_state.segments if s.included]
+        if included:
+            preview_pen = QPen(QColor(60, 180, 120, 100), 1.0)
+            preview_pen.setCosmetic(True)
+            p.setPen(preview_pen)
+            p.setBrush(QColor(60, 180, 120, 30))
+            for seg in included:
+                if len(seg.points) < 2:
+                    continue
+                pp = QPainterPath()
+                p0 = seg.points[0]
+                pp.moveTo(QPointF(dr.left() + p0.x * sx, dr.top() + p0.y * sy))
+                for pt in seg.points[1:]:
+                    pp.lineTo(QPointF(dr.left() + pt.x * sx, dr.top() + pt.y * sy))
+                p.drawPath(pp)
+
+        # Status chip
+        closed_n = pick_state.closed_count()
+        has_open = pick_state.has_open()
+        if closed_n > 0 and not has_open:
+            chip_text = f"Ready \u2014 {closed_n} shape(s) found"
+            chip_color = QColor(40, 160, 80, 200)
+        else:
+            chip_text = "Open path \u2014 keep selecting"
+            chip_color = QColor(200, 140, 40, 200)
+
+        font = p.font()
+        font.setPixelSize(11)
+        p.setFont(font)
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(chip_text) + 16
+        th = fm.height() + 8
+        chip_rect = QRectF(dr.left() + 10, dr.top() + 10, tw, th)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(chip_color)
+        p.drawRoundedRect(chip_rect, 4, 4)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, chip_text)
+
         p.restore()

@@ -249,6 +249,13 @@ class LayerController:
             self._mw._transform_panel.refresh(self._mw._doc)
             self._mw._tool_ctrl.update_properties_panel()
 
+            # Refresh boolean toolbar when a single layer is selected
+            if self._mw._tools.active_type == ToolType.NODE:
+                tool = self._mw._tools.active_tool
+                if tool is not None and hasattr(tool, '_sync_bool_selection'):
+                    tool._sync_bool_selection(self._mw._doc)
+                self._mw._vector_ctrl.refresh_bool_state()
+
     def on_move_auto_select(self, stack_index: int) -> None:
         if not self._mw._doc:
             return
@@ -326,6 +333,13 @@ class LayerController:
         elif not new_sel:
             stack._active_index = -1
         mw._transform_ctrl.update_transform_box()
+
+        # Refresh boolean toolbar state when selection changes from the panel
+        if mw._tools.active_type == ToolType.NODE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, '_sync_bool_selection'):
+                tool._sync_bool_selection(mw._doc)
+            mw._vector_ctrl.refresh_bool_state()
 
     def on_opacity(self, val: float) -> None:
         if self._mw._doc and self._mw._doc.layers.active_layer:

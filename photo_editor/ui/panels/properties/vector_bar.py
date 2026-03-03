@@ -5,12 +5,230 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget,
 )
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QPainterPath, QColor, QPen, QBrush
 
 from ...widgets.color_dropdown import ColorDropdown
 from ....core.color import Color, LinearGradient, RadialGradient
 from ....core.color_engine import ConicalGradient, DiamondGradient
 from ....vector.style import FillPaint, SolidPaint, GradientPaint, GradientType, GradientStop as VecGradientStop
 from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator
+
+def _bool_icon(op: str) -> QIcon:
+    from ...theme import ThemeManager
+    palette = ThemeManager.instance().active_palette
+    fg = QColor(palette['fg'])
+    accent = QColor(palette['accent'])
+    fg_dim = QColor(palette.get('fg_dim', '#999999'))
+    
+    pix = QPixmap(18, 18)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    p.setPen(Qt.PenStyle.NoPen)
+    
+    path_a = QPainterPath()
+    path_a.addRect(2.5, 2.5, 9, 9)
+    path_b = QPainterPath()
+    path_b.addRect(6.5, 6.5, 9, 9)
+        
+    if op == "union":
+        res = path_a.united(path_b)
+        p.setBrush(accent)
+        p.drawPath(res)
+        p.setPen(QPen(fg, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(res)
+    elif op == "subtract":
+        res = path_b.subtracted(path_a)
+        p.setBrush(accent)
+        p.drawPath(res)
+        p.setPen(QPen(fg, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(res)
+        
+        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
+        p.drawRect(2.5, 2.5, 9, 9)
+    elif op == "intersect":
+        res = path_a.intersected(path_b)
+        p.setBrush(accent)
+        p.drawPath(res)
+        p.setPen(QPen(fg, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(res)
+        
+        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
+        p.drawPath(path_a.subtracted(path_b))
+        p.drawPath(path_b.subtracted(path_a))
+    elif op == "exclude":
+        res = path_a.united(path_b).subtracted(path_a.intersected(path_b))
+        p.setBrush(accent)
+        p.drawPath(res)
+        p.setPen(QPen(fg, 1.2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(res)
+        
+        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
+        p.drawRect(6.5, 6.5, 5, 5)
+    elif op == "divide":
+        res1 = path_a.subtracted(path_b)
+        res2 = path_b.subtracted(path_a)
+        res3 = path_a.intersected(path_b)
+        
+        p.setBrush(accent)
+        p.setPen(QPen(fg, 1))
+        
+        p.save()
+        p.translate(-0.5, -0.5)
+        p.drawPath(res1)
+        p.restore()
+        
+        p.save()
+        p.translate(0.5, 0.5)
+        p.drawPath(res2)
+        p.restore()
+        
+        p.save()
+        p.translate(0, 0)
+        p.drawPath(res3)
+        p.restore()
+    elif op == "pick_segments":
+        # Curve from 90 to 180 degrees (top left)
+        p.setPen(QPen(fg_dim, 1.5, Qt.PenStyle.DashLine))
+        p.drawArc(3, 4, 12, 12, 16 * 90, 16 * 90)
+        
+        # Curve from 0 to 90 degrees (top right) - Highlighted
+        p.setPen(QPen(accent, 2))
+        p.drawArc(3, 4, 12, 12, 16 * 0, 16 * 90)
+
+        # Draw nodes
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fg)
+        p.drawRect(1.5, 8.5, 3, 3)   # left 
+        p.drawRect(7.5, 2.5, 3, 3)   # top 
+        p.drawRect(13.5, 8.5, 3, 3)  # right 
+
+        # Draw a mouse pointer cursor pointing to the top-right segment
+        cursor = QPainterPath()
+        cx, cy = 11, 4.5
+        cursor.moveTo(cx, cy)
+        cursor.lineTo(cx, cy + 7)
+        cursor.lineTo(cx + 2, cy + 5)
+        cursor.lineTo(cx + 3.5, cy + 8.5)
+        cursor.lineTo(cx + 4.5, cy + 8)
+        cursor.lineTo(cx + 3, cy + 4.5)
+        cursor.lineTo(cx + 6, cy + 4.5)
+        cursor.closeSubpath()
+
+        p.setPen(QPen(QColor(palette['bg1']), 1))
+        p.setBrush(fg)
+        p.drawPath(cursor)
+        
+    p.end()
+    return QIcon(pix)
+
+def _node_icon(op: str) -> QIcon:
+    from ...theme import ThemeManager
+    palette = ThemeManager.instance().active_palette
+    fg = QColor(palette['fg'])
+    accent = QColor(palette['accent'])
+    fg_dim = QColor(palette.get('fg_dim', '#999999'))
+    
+    pix = QPixmap(18, 18)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    
+    if op == "sharp":
+        p.setPen(QPen(fg_dim, 1.5))
+        p.drawLine(3, 14, 9, 4)
+        p.drawLine(9, 4, 15, 14)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRect(7.5, 2.5, 3, 3)
+        p.setBrush(fg)
+        p.drawRect(1.5, 12.5, 3, 3)
+        p.drawRect(13.5, 12.5, 3, 3)
+
+    elif op == "smooth":
+        p.setPen(QPen(fg_dim, 1.5))
+        # path showing a smooth continuous curve
+        path = QPainterPath()
+        path.moveTo(3, 13)
+        path.cubicTo(6, 4, 12, 4, 15, 13)
+        p.drawPath(path)
+        
+        # handles for the node
+        p.setPen(QPen(accent, 1))
+        p.drawLine(5, 7, 13, 7)
+        p.setBrush(fg)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(4, 6, 2, 2)
+        p.drawEllipse(12, 6, 2, 2)
+        
+        # Center node
+        p.setBrush(accent)
+        p.drawRect(7.5, 5.5, 3, 3)
+        
+        # End nodes
+        p.setBrush(fg)
+        p.drawRect(1.5, 11.5, 3, 3)
+        p.drawRect(13.5, 11.5, 3, 3)
+
+    elif op == "symmetric":
+        p.setPen(QPen(fg_dim, 1.5))
+        path = QPainterPath()
+        path.moveTo(3, 13)
+        path.cubicTo(6, 4, 12, 4, 15, 13)
+        p.drawPath(path)
+        
+        # Symmetric horizontal handles
+        p.setPen(QPen(accent, 1.5))
+        p.drawLine(6, 7, 12, 7)
+        p.setBrush(fg)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRect(5, 6, 2, 2)
+        p.drawRect(11, 6, 2, 2)
+        
+        p.setBrush(accent)
+        p.drawRect(7.5, 5.5, 3, 3)
+
+    elif op == "delete":
+        p.setPen(QPen(fg_dim, 1.5))
+        p.drawLine(4, 4, 14, 14)
+        p.drawLine(14, 4, 4, 14)
+
+    elif op == "break":
+        p.setPen(QPen(fg_dim, 1.5))
+        path_l = QPainterPath()
+        path_l.moveTo(2, 12)
+        path_l.quadTo(5, 6, 8, 4)
+        p.drawPath(path_l)
+        
+        path_r = QPainterPath()
+        path_r.moveTo(10, 5)
+        path_r.quadTo(13, 7, 16, 13)
+        p.drawPath(path_r)
+        
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRect(6.5, 2.5, 3, 3)
+        p.drawRect(8.5, 3.5, 3, 3)
+        
+    elif op == "select_all":
+        p.setPen(QPen(fg, 1, Qt.PenStyle.DashLine))
+        p.drawRect(2, 2, 14, 14)
+        
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawRect(4, 4, 3, 3)
+        p.drawRect(11, 4, 3, 3)
+        p.drawRect(4, 11, 3, 3)
+        p.drawRect(11, 11, 3, 3)
+
+    p.end()
+    return QIcon(pix)
 
 _VECTOR_BTN = """
     QPushButton {
@@ -28,12 +246,64 @@ _VECTOR_BTN = """
     }
 """
 
+_BOOL_BTN = """
+    QPushButton {
+        font-size: 10px; padding: 2px 6px; font-weight: 600;
+        background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px;
+        color: #8090a0; min-height: 22px; max-height: 22px;
+    }
+    QPushButton:hover {
+        background: rgba(60,130,220,0.25); color: #c0d0e0;
+        border: 1px solid rgba(60,130,220,0.4);
+    }
+    QPushButton:pressed {
+        background: rgba(60,130,220,0.35); color: #ffffff;
+        border: 1px solid rgba(60,130,220,0.6);
+    }
+    QPushButton:disabled {
+        background: rgba(0,0,0,0.12); color: #505458;
+        border: 1px solid rgba(255,255,255,0.02);
+    }
+    QPushButton:checked {
+        background: rgba(60,130,220,0.35); color: #ffffff;
+        border: 1px solid rgba(60,130,220,0.6);
+    }
+"""
+
+_BOOL_APPLY_BTN = """
+    QPushButton {
+        font-size: 10.5px; padding: 2px 10px; font-weight: 600;
+        background: rgba(40,160,80,0.3); border: 1px solid rgba(40,160,80,0.4); border-radius: 4px;
+        color: #a0e0b0; min-height: 22px; max-height: 22px;
+    }
+    QPushButton:hover { background: rgba(40,160,80,0.45); color: #ffffff; }
+    QPushButton:pressed { background: rgba(40,160,80,0.6); color: #ffffff; }
+"""
+
+_BOOL_CANCEL_BTN = """
+    QPushButton {
+        font-size: 10.5px; padding: 2px 10px; font-weight: 600;
+        background: rgba(200,60,60,0.25); border: 1px solid rgba(200,60,60,0.3); border-radius: 4px;
+        color: #e0a0a0; min-height: 22px; max-height: 22px;
+    }
+    QPushButton:hover { background: rgba(200,60,60,0.4); color: #ffffff; }
+    QPushButton:pressed { background: rgba(200,60,60,0.55); color: #ffffff; }
+"""
+
+_SUBTRACT_LBL = """
+    QLabel {
+        font-size: 9px; color: #7090b0; padding: 0 2px;
+    }
+"""
+
 class VectorPropertiesBar(QWidget):
     """Horizontal bar that adapts to the active vector tool: Pen, Node, or Shape."""
 
     from PySide6.QtCore import Signal
     property_changed = Signal(str, object)
     action_requested = Signal(str)
+    boolean_hover = Signal(str)     # op name on hover, "" on leave
+    boolean_hover_end = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -131,21 +401,28 @@ class VectorPropertiesBar(QWidget):
         self._sep_shape = make_separator()
         layout.addWidget(self._sep_shape)
 
-        self._sharp_btn = QPushButton("■ Sharp")
+        from PySide6.QtCore import QSize
+        self._sharp_btn = QPushButton(" Sharp")
+        self._sharp_btn.setIcon(_node_icon("sharp"))
+        self._sharp_btn.setIconSize(QSize(16, 16))
         self._sharp_btn.setFixedHeight(24)
         self._sharp_btn.setStyleSheet(_VECTOR_BTN)
         self._sharp_btn.setToolTip("Set selected nodes to sharp (straight)")
         self._sharp_btn.clicked.connect(lambda: self.action_requested.emit("set_sharp"))
         layout.addWidget(self._sharp_btn)
 
-        self._smooth_btn = QPushButton("● Smooth")
+        self._smooth_btn = QPushButton(" Smooth")
+        self._smooth_btn.setIcon(_node_icon("smooth"))
+        self._smooth_btn.setIconSize(QSize(16, 16))
         self._smooth_btn.setFixedHeight(24)
         self._smooth_btn.setStyleSheet(_VECTOR_BTN)
         self._smooth_btn.setToolTip("Set selected nodes to smooth (collinear handles)")
         self._smooth_btn.clicked.connect(lambda: self.action_requested.emit("set_smooth"))
         layout.addWidget(self._smooth_btn)
 
-        self._symmetric_btn = QPushButton("◆ Symmetric")
+        self._symmetric_btn = QPushButton(" Symmetric")
+        self._symmetric_btn.setIcon(_node_icon("symmetric"))
+        self._symmetric_btn.setIconSize(QSize(16, 16))
         self._symmetric_btn.setFixedHeight(24)
         self._symmetric_btn.setStyleSheet(_VECTOR_BTN)
         self._symmetric_btn.setToolTip("Set selected nodes to symmetric (equal handles)")
@@ -155,26 +432,92 @@ class VectorPropertiesBar(QWidget):
         self._sep_node_types = make_separator()
         layout.addWidget(self._sep_node_types)
 
-        self._delete_btn = QPushButton("Delete")
+        self._delete_btn = QPushButton(" Delete")
+        self._delete_btn.setIcon(_node_icon("delete"))
+        self._delete_btn.setIconSize(QSize(16, 16))
         self._delete_btn.setFixedHeight(24)
         self._delete_btn.setStyleSheet(_VECTOR_BTN)
         self._delete_btn.setToolTip("Delete selected nodes (or whole object)")
         self._delete_btn.clicked.connect(lambda: self.action_requested.emit("delete_nodes"))
         layout.addWidget(self._delete_btn)
 
-        self._break_btn = QPushButton("Break")
+        self._break_btn = QPushButton(" Break")
+        self._break_btn.setIcon(_node_icon("break"))
+        self._break_btn.setIconSize(QSize(16, 16))
         self._break_btn.setFixedHeight(24)
         self._break_btn.setStyleSheet(_VECTOR_BTN)
         self._break_btn.setToolTip("Break path at selected nodes")
         self._break_btn.clicked.connect(lambda: self.action_requested.emit("break_path"))
         layout.addWidget(self._break_btn)
 
-        self._selall_btn = QPushButton("Sel All")
+        self._selall_btn = QPushButton(" Sel All")
+        self._selall_btn.setIcon(_node_icon("select_all"))
+        self._selall_btn.setIconSize(QSize(16, 16))
         self._selall_btn.setFixedHeight(24)
         self._selall_btn.setStyleSheet(_VECTOR_BTN)
         self._selall_btn.setToolTip("Select all nodes (Ctrl+A)")
         self._selall_btn.clicked.connect(lambda: self.action_requested.emit("select_all"))
         layout.addWidget(self._selall_btn)
+
+        # ---- Boolean operations group ----
+        self._sep_bool = make_separator()
+        layout.addWidget(self._sep_bool)
+
+        self._bool_union_btn = self._make_bool_btn(
+            "", "Union — combine all shapes (Ctrl+Shift+U)",
+            "bool_union", layout, icon_op="union")
+        self._bool_subtract_btn = self._make_bool_btn(
+            "", "Subtract — cut top from bottom (Ctrl+Shift+S)",
+            "bool_subtract", layout, icon_op="subtract")
+        self._bool_intersect_btn = self._make_bool_btn(
+            "", "Intersect — keep overlap only (Ctrl+Shift+I)",
+            "bool_intersect", layout, icon_op="intersect")
+        self._bool_exclude_btn = self._make_bool_btn(
+            "", "Exclude (XOR) — remove overlap (Ctrl+Shift+E)",
+            "bool_exclude", layout, icon_op="exclude")
+        self._bool_divide_btn = self._make_bool_btn(
+            "", "Divide — split into fragments (Ctrl+Shift+D)",
+            "bool_divide", layout, icon_op="divide")
+
+        self._sep_bool2 = make_separator()
+        layout.addWidget(self._sep_bool2)
+
+        self._pick_seg_btn = QPushButton("")
+        from PySide6.QtCore import QSize
+        self._pick_seg_btn.setIcon(_bool_icon("pick_segments"))
+        self._pick_seg_btn.setIconSize(QSize(16, 16))
+        self._pick_seg_btn.setFixedHeight(24)
+        self._pick_seg_btn.setCheckable(True)
+        self._pick_seg_btn.setStyleSheet(_BOOL_BTN)
+        self._pick_seg_btn.setToolTip("Pick Segments — manually select curve segments")
+        self._pick_seg_btn.clicked.connect(
+            lambda checked: self.action_requested.emit(
+                "pick_segments_enter" if checked else "pick_segments_cancel"))
+        layout.addWidget(self._pick_seg_btn)
+
+        self._subtract_lbl = QLabel("")
+        self._subtract_lbl.setStyleSheet(_SUBTRACT_LBL)
+        self._subtract_lbl.setVisible(False)
+        layout.addWidget(self._subtract_lbl)
+
+        # ---- Pick-segments mode buttons (Apply / Cancel) ----
+        self._ps_apply_btn = QPushButton("\u2713 Apply")
+        self._ps_apply_btn.setFixedHeight(24)
+        self._ps_apply_btn.setStyleSheet(_BOOL_APPLY_BTN)
+        self._ps_apply_btn.setToolTip("Apply — create shapes from included segments")
+        self._ps_apply_btn.clicked.connect(
+            lambda: self.action_requested.emit("pick_segments_apply"))
+        self._ps_apply_btn.setVisible(False)
+        layout.addWidget(self._ps_apply_btn)
+
+        self._ps_cancel_btn = QPushButton("\u2715 Cancel")
+        self._ps_cancel_btn.setFixedHeight(24)
+        self._ps_cancel_btn.setStyleSheet(_BOOL_CANCEL_BTN)
+        self._ps_cancel_btn.setToolTip("Cancel — exit pick-segments mode")
+        self._ps_cancel_btn.clicked.connect(
+            lambda: self.action_requested.emit("pick_segments_cancel"))
+        self._ps_cancel_btn.setVisible(False)
+        layout.addWidget(self._ps_cancel_btn)
 
         layout.addStretch()
 
@@ -188,6 +531,37 @@ class VectorPropertiesBar(QWidget):
                               self._symmetric_btn, self._sep_node_types,
                               self._delete_btn, self._break_btn,
                               self._selall_btn]
+        self._bool_widgets = [
+            self._sep_bool,
+            self._bool_union_btn, self._bool_subtract_btn,
+            self._bool_intersect_btn, self._bool_exclude_btn,
+            self._bool_divide_btn,
+            self._sep_bool2, self._pick_seg_btn,
+            self._subtract_lbl,
+        ]
+        self._pick_seg_widgets = [self._ps_apply_btn, self._ps_cancel_btn]
+
+        # Track pick-segments mode so set_mode can handle it
+        self._in_pick_segments: bool = False
+
+        from ...theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self, palette: dict) -> None:
+        """Update dynamically rendered icons when the theme changes."""
+        self._sharp_btn.setIcon(_node_icon("sharp"))
+        self._smooth_btn.setIcon(_node_icon("smooth"))
+        self._symmetric_btn.setIcon(_node_icon("symmetric"))
+        self._delete_btn.setIcon(_node_icon("delete"))
+        self._break_btn.setIcon(_node_icon("break"))
+        self._selall_btn.setIcon(_node_icon("select_all"))
+
+        self._bool_union_btn.setIcon(_bool_icon("union"))
+        self._bool_subtract_btn.setIcon(_bool_icon("subtract"))
+        self._bool_intersect_btn.setIcon(_bool_icon("intersect"))
+        self._bool_exclude_btn.setIcon(_bool_icon("exclude"))
+        self._bool_divide_btn.setIcon(_bool_icon("divide"))
+        self._pick_seg_btn.setIcon(_bool_icon("pick_segments"))
 
     _SHAPE_PARAMS: dict[str, tuple[str, str]] = {
         "Rectangle":      ("Radius", ""),
@@ -220,6 +594,10 @@ class VectorPropertiesBar(QWidget):
             w.setVisible(is_shape)
         for w in self._node_widgets:
             w.setVisible(is_node)
+        for w in self._bool_widgets:
+            w.setVisible(is_node and not self._in_pick_segments)
+        for w in self._pick_seg_widgets:
+            w.setVisible(is_node and self._in_pick_segments)
 
         if is_node:
             for w in self._fill_widgets + self._stroke_widgets:
@@ -394,6 +772,80 @@ class VectorPropertiesBar(QWidget):
     def _on_stroke_gradient_changed(self, fill_obj) -> None:
         paint = self._convert_to_vector_paint(fill_obj)
         self.property_changed.emit("stroke_paint", paint)
+
+    # ---- Boolean state API ------------------------------------------------
+
+    def _make_bool_btn(
+        self, text: str, tooltip: str, action: str, layout: QHBoxLayout, icon_op: str = ""
+    ) -> QPushButton:
+        """Create a boolean-operation button with hover event filter."""
+        btn = QPushButton(text)
+        if icon_op:
+            from PySide6.QtCore import QSize
+            btn.setIcon(_bool_icon(icon_op))
+            btn.setIconSize(QSize(16, 16))
+        btn.setFixedHeight(24)
+        btn.setStyleSheet(_BOOL_BTN)
+        btn.setToolTip(tooltip)
+        btn.setEnabled(False)  # starts disabled
+        btn.clicked.connect(lambda: self.action_requested.emit(action))
+        btn.installEventFilter(self)
+        btn.setProperty("_bool_action", action)  # for hover detection
+        layout.addWidget(btn)
+        return btn
+
+    def eventFilter(self, obj, event) -> bool:
+        """Emit hover signal when mouse enters/leaves a boolean button."""
+        action = obj.property("_bool_action") if obj else None
+        if action and isinstance(action, str):
+            if event.type() == QEvent.Type.Enter and obj.isEnabled():
+                self.boolean_hover.emit(action)
+            elif event.type() == QEvent.Type.Leave:
+                self.boolean_hover_end.emit()
+        return super().eventFilter(obj, event)
+
+    def update_boolean_state(
+        self,
+        selected_count: int,
+        top_name: str = "",
+        bottom_name: str = "",
+    ) -> None:
+        """Enable/disable boolean buttons based on selection count."""
+        has2 = selected_count >= 2
+        self._bool_union_btn.setEnabled(has2)
+        self._bool_subtract_btn.setEnabled(selected_count == 2)
+        self._bool_intersect_btn.setEnabled(has2)
+        self._bool_exclude_btn.setEnabled(selected_count == 2)
+        self._bool_divide_btn.setEnabled(has2)
+        self._pick_seg_btn.setEnabled(has2)
+
+        self._subtract_lbl.setVisible(False)
+
+    def enter_pick_segments(self) -> None:
+        """Switch toolbar to pick-segments Apply/Cancel mode."""
+        self._in_pick_segments = True
+        self._pick_seg_btn.blockSignals(True)
+        self._pick_seg_btn.setChecked(True)
+        self._pick_seg_btn.blockSignals(False)
+        # Hide normal node + boolean widgets
+        for w in self._node_widgets + self._bool_widgets:
+            w.setVisible(False)
+        for w in self._fill_widgets + self._stroke_widgets:
+            w.setVisible(False)
+        # Show apply/cancel
+        for w in self._pick_seg_widgets:
+            w.setVisible(True)
+
+    def exit_pick_segments(self) -> None:
+        """Restore toolbar after leaving pick-segments mode."""
+        self._in_pick_segments = False
+        self._pick_seg_btn.blockSignals(True)
+        self._pick_seg_btn.setChecked(False)
+        self._pick_seg_btn.blockSignals(False)
+        for w in self._pick_seg_widgets:
+            w.setVisible(False)
+        # Restore full node mode
+        self.set_mode("node")
 
     def _convert_to_vector_paint(self, fill) -> FillPaint:
         if isinstance(fill, (LinearGradient, RadialGradient, ConicalGradient, DiamondGradient)):

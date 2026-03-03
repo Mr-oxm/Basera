@@ -31,6 +31,8 @@ class PropertiesPanel(QWidget):
     crop_cancel = Signal()
     vector_property_changed = Signal(str, object)
     vector_action = Signal(str)
+    vector_boolean_hover = Signal(str)
+    vector_boolean_hover_end = Signal()
     brush_property_changed = Signal(str, object)
 
     _PANEL_BG = "#2e2e2e"
@@ -97,6 +99,10 @@ class PropertiesPanel(QWidget):
             lambda k, v: self.vector_property_changed.emit(k, v))
         self._vector_bar.action_requested.connect(
             lambda a: self.vector_action.emit(a))
+        self._vector_bar.boolean_hover.connect(
+            lambda op: self.vector_boolean_hover.emit(op))
+        self._vector_bar.boolean_hover_end.connect(
+            self.vector_boolean_hover_end.emit)
         self._vector_bar.hide()
         self._main_layout.addWidget(self._vector_bar)
 

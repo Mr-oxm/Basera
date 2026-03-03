@@ -138,6 +138,13 @@ class CanvasView(_BASE_CLASS):
         self._doc_ref = None          # Document | None
         self._tool_manager_ref = None  # ToolManager | None
 
+        # Boolean preview overlay state (set by VectorController)
+        self._bool_preview_path = None   # VectorPath | None
+        self._bool_source_ids: set = set()
+
+        # Pick-segments mode overlay state (set by VectorController)
+        self._pick_segments_state = None  # PickSegmentsState | None
+
         self._overlays = CanvasOverlays(self)
         self._input_handler = CanvasInputHandler(self)
 
@@ -528,6 +535,16 @@ class CanvasView(_BASE_CLASS):
         # Vector object overlay (node handles, path outlines)
         if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE, ToolType.MOVE):
             self._overlays.draw_vector_overlay(p, dr)
+
+        # Boolean preview overlay (hover over toolbar buttons)
+        if getattr(self, "_bool_preview_path", None) is not None:
+            self._overlays.draw_boolean_preview(p, dr)
+
+        # Pick-segments overlay
+        if getattr(self, "_pick_segments_state", None) is not None:
+            ps = self._pick_segments_state
+            if ps.active:
+                self._overlays.draw_pick_segments(p, dr)
 
         p.end()
 

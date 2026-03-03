@@ -47,6 +47,15 @@ class CanvasController:
                 mw._v_ruler.set_cursor_position(wy)
         if mw._tools.active_type == ToolType.TEXT:
             mw._text_ctrl.update_hover_cursor(x, y)
+        elif mw._tools.active_type == ToolType.NODE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, "pick_segments") and tool.pick_segments.active:
+                tool.pick_segments_hover(x, y)
+                mw._canvas.update()
+            elif tool is not None and hasattr(tool, "update_hover"):
+                doc = mw._doc
+                if doc is not None and tool.update_hover(doc, x, y):
+                    mw._canvas.update()
         elif mw._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
             tool = mw._tools.active_tool
             if tool is not None and tool.source_set:
@@ -230,6 +239,8 @@ class CanvasController:
                 mw._refresh()
                 return
         if tool_type == ToolType.NODE and tool is not None:
+            if hasattr(tool, 'pick_segments') and tool.pick_segments.active:
+                return  # suppress node insertion while picking segments
             if hasattr(tool, 'insert_node_on_segment'):
                 tool.insert_node_on_segment(mw._doc, x, y)
                 mw._refresh()

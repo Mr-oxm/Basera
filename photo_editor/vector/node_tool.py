@@ -30,6 +30,7 @@ from ..tools.move.auto_select import find_layer_at as _find_layer_at
 from ..vector.geometry import Vec2, BBox
 from ..vector.path import VectorPath, SubPath, PathNode, PathSegment, HandleMode, SegmentType
 from ..vector.scene import VectorObject, VectorLayer
+from ..vector.pick_segments import PickSegmentsState
 
 if TYPE_CHECKING:
     from ..core.document import Document
@@ -66,6 +67,8 @@ class NodeTool(Tool):
         self._seg_drag_si: int = -1
         self._seg_drag_seg_idx: int = -1
         self._seg_drag_t: float = 0.5
+        # Hover preview for node insertion on segment
+        self._hover_seg_pos: Vec2 | None = None  # world-space position on the curve
         # Tolerances (screen pixels)
         self.node_tolerance: float = 8.0
         self.handle_tolerance: float = 7.0
@@ -85,10 +88,24 @@ class NodeTool(Tool):
         # Callback invoked after an auto-select layer switch.
         # Signature: (layer_index: int) -> None
         self.on_layer_auto_selected: callable | None = None
+        # --- Multi-layer boolean selection ---
+        # IDs of layers currently selected for boolean operations.
+        # Updated by auto-select + Shift logic and exposed to the toolbar.
+        self._bool_selected_layer_ids: list[str] = []
+        # Callback to refresh the toolbar state.  Set by main_window.
+        # Signature: () -> None
+        self.on_bool_selection_changed: callable | None = None
+        # --- Pick Segments mode ---
+        self.pick_segments: PickSegmentsState = PickSegmentsState()
 
     # ---- Tool interface -----------------------------------------------------
 
     def on_press(self, doc: "Document", x: int, y: int, pressure: float = 1.0) -> None:
+        # If pick-segments mode is active, intercept clicks for segment toggling
+        if self.pick_segments.active:
+            self.pick_segments_click(doc, x, y)
+            return
+
         pos = Vec2(float(x), float(y))
         self._drag_start = pos
         self._drag_current = pos
@@ -101,6 +118,7 @@ class NodeTool(Tool):
         self._marquee_active = False
         self._moving_nodes.clear()
         self._seg_drag = False
+        self._hover_seg_pos = None  # clear hover preview on press
 
         vl = self._get_vector_layer(doc)
         if vl is None:
@@ -223,7 +241,13 @@ class NodeTool(Tool):
                 if hit_layer.layer_type == LayerType.SHAPE and (
                     active is None or hit_layer.id != active.id
                 ):
-                    doc.layers.active_index = hit_idx
+                    if shift_held:
+                        # Multi-layer selection for boolean ops
+                        doc.layers.select_add(hit_idx)
+                        self._sync_bool_selection(doc, newly_added_idx=hit_idx)
+                    else:
+                        doc.layers.active_index = hit_idx
+                        self._sync_bool_selection(doc)
                     if self.on_layer_auto_selected:
                         self.on_layer_auto_selected(hit_idx)
                     # Select the topmost vector object on the new layer
@@ -238,13 +262,19 @@ class NodeTool(Tool):
                             self._body_drag_origin = pos
                     return
 
-        vl.deselect_all()
-        self._deselect_all_nodes(vl)
+        if not shift_held:
+            vl.deselect_all()
+            self._deselect_all_nodes(vl)
         self._marquee_start = pos
         self._marquee_current = pos
         self._hit_object = None
 
     def on_move(self, doc: "Document", x: int, y: int, pressure: float = 1.0) -> None:
+        # If pick-segments mode is active, intercept moves for hover highlighting
+        if self.pick_segments.active:
+            self.pick_segments_hover(x, y)
+            return
+
         pos = Vec2(float(x), float(y))
         self._drag_current = pos
 
@@ -404,6 +434,12 @@ class NodeTool(Tool):
         if self._dragging and self._snapshot_taken:
             self._rasterize_to_layer(doc)
 
+        # Single click on a segment (no drag) → insert a node there
+        if (self._seg_drag and not self._dragging
+                and self._hit_object is not None
+                and self._hit_component == "segment"):
+            self._insert_node_at_seg_hit(doc, pos)
+
         # Reset state
         self._drag_start = None
         self._drag_current = None
@@ -414,6 +450,38 @@ class NodeTool(Tool):
         self._marquee_current = None
         self._marquee_active = False
         self._moving_nodes.clear()
+        self._seg_drag = False
+
+    # ---- Hover preview for node-add indicator ---------------------------
+
+    def update_hover(self, doc: "Document", x: int, y: int) -> bool:
+        """Update the hover-segment indicator.  Returns True if state changed."""
+        if self.pick_segments.active:
+            return False
+        vl = self._get_vector_layer(doc)
+        if vl is None:
+            old = self._hover_seg_pos
+            self._hover_seg_pos = None
+            return old is not None
+        pos = Vec2(float(x), float(y))
+        for obj in vl.selected_objects():
+            seg_hit = self._hit_test_segment(obj, pos)
+            if seg_hit is not None:
+                si, seg_idx, t = seg_hit
+                # Evaluate the point on the curve at t
+                sp = obj.effective_path().sub_paths[si]
+                curves = list(sp.iter_curves())
+                if seg_idx < len(curves):
+                    _, nearest = curves[seg_idx].nearest_point(
+                        obj.transform.inverse().apply(pos)
+                    )
+                    world_pt = obj.transform.apply(nearest)
+                    old = self._hover_seg_pos
+                    self._hover_seg_pos = world_pt
+                    return old is None or not old.approx_eq(world_pt)
+        old = self._hover_seg_pos
+        self._hover_seg_pos = None
+        return old is not None
 
     # ---- Node operations (called by keyboard shortcuts / main_window) -------
 
@@ -636,21 +704,45 @@ class NodeTool(Tool):
             return 20.0
         return max(5.0, (total / count) * 0.33)
 
+    def _insert_node_at_seg_hit(self, doc: "Document", pos: Vec2) -> None:
+        """Insert a node using the segment hit info captured during on_press.
+
+        Called from on_release when a segment was clicked without dragging.
+        """
+        obj = self._hit_object
+        if obj is None:
+            return
+        si = self._seg_drag_si
+        seg_idx = self._seg_drag_seg_idx
+        t = max(0.05, min(0.95, self._seg_drag_t))
+
+        vl = self._get_vector_layer(doc)
+        if vl is not None:
+            self._deselect_all_nodes(vl)
+
+        doc.save_snapshot("Node: insert")
+        obj.detach_shape()
+        sp = obj.effective_path().sub_paths[si]
+        new_node = sp.insert_node_at_t(seg_idx, t)
+        if new_node:
+            new_node.selected = True
+        sp.invalidate()
+        obj.effective_path().invalidate()
+        obj.invalidate()
+        self._rasterize_to_layer(doc)
+
     def insert_node_on_segment(self, doc: "Document", x: int, y: int) -> None:
-        """Insert a node at the point on the path nearest to (x, y)."""
+        """Insert a node at the point on the path nearest to (x, y).
+
+        Legacy entry-point kept for double-click compatibility.
+        """
         pos = Vec2(float(x), float(y))
         vl = self._get_vector_layer(doc)
         if vl is None:
             return
 
-        def _point_line_distance(p: Vec2, a: Vec2, b: Vec2) -> float:
-            ab = b - a
-            d2 = ab.length_sq()
-            if d2 == 0:
-                return p.distance_to(a)
-            t = max(0.0, min(1.0, (p - a).dot(ab) / d2))
-            proj = a + ab * t
-            return p.distance_to(proj)
+        # Deselect all previous nodes first
+        self._deselect_all_nodes(vl)
 
         for obj in vl.selected_objects():
             obj.detach_shape()
@@ -908,3 +1000,136 @@ class NodeTool(Tool):
         if count < 2:
             return None
         return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+    # ---- Multi-layer boolean selection helpers ------------------------------
+
+    def _sync_bool_selection(self, doc: "Document", newly_added_idx: int | None = None) -> None:
+        """Synchronise ``_bool_selected_layer_ids`` with the layer stack's
+        multi-selection, keeping only SHAPE layers.
+
+        *Preserves selection order*: existing IDs keep their position;
+        newly selected layers are appended at the end.  When
+        ``newly_added_idx`` is provided the layer at that index is
+        guaranteed to appear last (it was just Shift-clicked).
+        """
+        current_set = set()
+        for idx in doc.layers.selected_indices:
+            if 0 <= idx < len(doc.layers.layers):
+                layer = doc.layers.layers[idx]
+                if (layer.layer_type == LayerType.SHAPE
+                        and getattr(layer, "_vector_data", None) is not None):
+                    current_set.add(layer.id)
+
+        # Keep existing order for IDs still selected
+        new_list = [lid for lid in self._bool_selected_layer_ids if lid in current_set]
+        # Append any IDs that weren't already in the ordered list
+        existing_set = set(new_list)
+        # If a specific index was just added, make sure it goes last
+        newly_added_id: str | None = None
+        if newly_added_idx is not None and 0 <= newly_added_idx < len(doc.layers.layers):
+            layer = doc.layers.layers[newly_added_idx]
+            if layer.id in current_set:
+                newly_added_id = layer.id
+        for lid in current_set - existing_set:
+            if lid != newly_added_id:
+                new_list.append(lid)
+        if newly_added_id and newly_added_id not in existing_set:
+            new_list.append(newly_added_id)
+
+        self._bool_selected_layer_ids = new_list
+        if self.on_bool_selection_changed:
+            self.on_bool_selection_changed()
+
+    def bool_selected_count(self) -> int:
+        """Number of vector layers currently selected for boolean ops."""
+        return len(self._bool_selected_layer_ids)
+
+    def bool_layer_names(self, doc: "Document") -> tuple[str, str]:
+        """Return (first_name, second_name) — for the Subtract label.
+
+        The first-selected layer is the base, the second is the cutter.
+        The order matches the user's Shift-click sequence.
+        """
+        ids = self._bool_selected_layer_ids
+        if len(ids) < 2:
+            return ("", "")
+        layer_map = {l.id: l for l in doc.layers.layers}
+        first = layer_map.get(ids[0])
+        second = layer_map.get(ids[1])
+        return (
+            first.name if first else "",
+            second.name if second else "",
+        )
+
+    # ---- Boolean operations ------------------------------------------------
+
+    def do_boolean(self, doc: "Document", op: str) -> str | list[str] | None:
+        """Execute a boolean operation.  *op* is one of
+        ``'bool_union'``, ``'bool_subtract'``, ``'bool_intersect'``,
+        ``'bool_exclude'``, ``'bool_divide'``.
+        Returns the new layer ID(s) or None.
+        """
+        from .boolean_ops import (
+            perform_union, perform_subtract, perform_intersect,
+            perform_exclude, perform_divide,
+        )
+        ids = list(self._bool_selected_layer_ids)
+        if len(ids) < 2:
+            return None
+
+        result = None
+        if op == "bool_union":
+            result = perform_union(doc, ids)
+        elif op == "bool_subtract":
+            result = perform_subtract(doc, ids)
+        elif op == "bool_intersect":
+            result = perform_intersect(doc, ids)
+        elif op == "bool_exclude":
+            result = perform_exclude(doc, ids)
+        elif op == "bool_divide":
+            result = perform_divide(doc, ids)
+
+        # Clear tracked IDs (source layers are gone)
+        self._bool_selected_layer_ids.clear()
+        self._hit_object = None
+        if self.on_bool_selection_changed:
+            self.on_bool_selection_changed()
+        return result
+
+    # ---- Pick Segments mode ------------------------------------------------
+
+    def enter_pick_segments(self, doc: "Document") -> bool:
+        """Start pick-segments interactive mode.  Returns False on failure."""
+        ids = list(self._bool_selected_layer_ids)
+        if len(ids) < 2:
+            return False
+        return self.pick_segments.enter(doc, ids)
+
+    def cancel_pick_segments(self) -> None:
+        self.pick_segments.cancel()
+
+    def apply_pick_segments(self, doc: "Document") -> list[str]:
+        """Apply pick-segments selection and create result layers."""
+        new_ids = self.pick_segments.apply(doc)
+        self._bool_selected_layer_ids.clear()
+        self._hit_object = None
+        if self.on_bool_selection_changed:
+            self.on_bool_selection_changed()
+        return new_ids
+
+    def pick_segments_click(self, doc: "Document", x: int, y: int) -> None:
+        """Handle a canvas click while in pick-segments mode."""
+        if not self.pick_segments.active:
+            return
+        pos = Vec2(float(x), float(y))
+        seg_id = self.pick_segments.hit_test(pos)
+        if seg_id is not None:
+            self.pick_segments.toggle(seg_id)
+
+    def pick_segments_hover(self, x: int, y: int) -> None:
+        """Update hover state in pick-segments mode."""
+        if not self.pick_segments.active:
+            return
+        pos = Vec2(float(x), float(y))
+        seg_id = self.pick_segments.hit_test(pos)
+        self.pick_segments.set_hover(seg_id)

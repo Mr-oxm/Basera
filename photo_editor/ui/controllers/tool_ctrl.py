@@ -59,6 +59,10 @@ class ToolController:
         self.update_properties_panel()
         mw._transform_ctrl.update_transform_box()
         self.update_brush_cursor()
+
+        # Ensure boolean toolbar state is correct when entering Node tool
+        if t == ToolType.NODE:
+            mw._vector_ctrl.refresh_bool_state()
         if t in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
             tool = mw._tools.active_tool
             if tool is not None and tool.source_set:

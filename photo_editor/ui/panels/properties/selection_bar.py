@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
-from .base import ACCENT, LABEL, SPIN, make_separator
+from .base import ACCENT, LABEL, SPIN, make_separator, CompactPropertyWidget
 
 _SEL_MODE_BTN = """
     QPushButton {
@@ -73,32 +73,17 @@ class SelectionPropertiesBar(QWidget):
 
         layout.addWidget(make_separator())
 
-        lbl2 = QLabel("Feather")
-        lbl2.setStyleSheet(LABEL)
-        layout.addWidget(lbl2)
-        self._feather_spin = QSpinBox()
-        self._feather_spin.setRange(0, 100)
-        self._feather_spin.setValue(0)
-        self._feather_spin.setSuffix(" px")
-        self._feather_spin.setFixedWidth(70)
-        self._feather_spin.setMaximumHeight(22)
-        self._feather_spin.setStyleSheet(SPIN.format(max_w=70, accent=ACCENT))
-        self._feather_spin.valueChanged.connect(
-            lambda v: self.property_changed.emit("feather", v))
-        layout.addWidget(self._feather_spin)
+        self._feather_widget = CompactPropertyWidget(
+            "feather", "Feather", 0, 0, 100, 1.0, decimals=0, suffix=" px", parent=self
+        )
+        self._feather_widget.value_changed.connect(lambda k, v: self.property_changed.emit("feather", v))
+        layout.addWidget(self._feather_widget)
 
-        self._tol_label = QLabel("Tolerance")
-        self._tol_label.setStyleSheet(LABEL)
-        layout.addWidget(self._tol_label)
-        self._tolerance_spin = QSpinBox()
-        self._tolerance_spin.setRange(0, 255)
-        self._tolerance_spin.setValue(32)
-        self._tolerance_spin.setFixedWidth(60)
-        self._tolerance_spin.setMaximumHeight(22)
-        self._tolerance_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._tolerance_spin.valueChanged.connect(
-            lambda v: self.property_changed.emit("tolerance", v))
-        layout.addWidget(self._tolerance_spin)
+        self._tolerance_widget = CompactPropertyWidget(
+            "tolerance", "Tolerance", 32, 0, 255, 1.0, decimals=0, suffix="", parent=self
+        )
+        self._tolerance_widget.value_changed.connect(lambda k, v: self.property_changed.emit("tolerance", v))
+        layout.addWidget(self._tolerance_widget)
 
         self._contiguous_btn = QPushButton("Contiguous")
         self._contiguous_btn.setCheckable(True)
@@ -133,17 +118,16 @@ class SelectionPropertiesBar(QWidget):
         self.property_changed.emit("mode", mode)
 
     def set_wand_mode(self, is_wand: bool) -> None:
-        self._tol_label.setVisible(is_wand)
-        self._tolerance_spin.setVisible(is_wand)
+        self._tolerance_widget.setVisible(is_wand)
         self._contiguous_btn.setVisible(is_wand)
 
     def sync_from_tool(self, tool) -> None:
         self.blockSignals(True)
         try:
             if hasattr(tool, "feather"):
-                self._feather_spin.setValue(tool.feather)
+                self._feather_widget.set_value(tool.feather)
             if hasattr(tool, "tolerance"):
-                self._tolerance_spin.setValue(tool.tolerance)
+                self._tolerance_widget.set_value(tool.tolerance)
             if hasattr(tool, "contiguous"):
                 self._contiguous_btn.setChecked(tool.contiguous)
             if hasattr(tool, "mode"):
