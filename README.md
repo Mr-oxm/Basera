@@ -1,6 +1,6 @@
-# Photo Editor
+# Basera - بصيرة
 
-> **v0.4-alpha** — Vector layers, SVG support, advanced masking, retouching tools, major refactoring and major UI improvements.
+> **v0.4-alpha** — Performance optimizations, dynamic themes, full brush system, advanced vector booleans, UI overhaul, and multi-layer select.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
@@ -23,7 +23,40 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ---
 
-## What's New in v0.3.0
+## What's New in v0.4.0 (Basera - بصيرة)
+
+### Performance & Engine Optimizations
+- **Off-UI-Thread Compositing**: Rendering is now fully asynchronous in a background worker.
+- **Render Scheduler**: Debouncing and throttling limits renders to ~30 FPS during rapid events.
+- **Image Pool (Buffer Reuse)**: Reduces allocation churn and GC pressure during interactive rendering.
+- **Tile Processor**: Infrastructure ready for parallel filter processing.
+- **Async Operations**: Saving documents runs off the UI thread to avoid freezes.
+
+### Full Brush System
+- **Brush Engine**: Support for standard `.abr` Photoshop brush files!
+- **Brush Panel & Selector**: New dedicated panel and selector to configure brush dynamics.
+- **Tool Support**: Complete brush system integrated across Brush Tool, Eraser, and Masks.
+
+### Advanced Vector Boolean Operations
+- **Full Boolean System**: Union, Subtract, Intersection, Extrude, and Divide.
+- **Pick Segments**: Click to selectively include/exclude sub-paths across layers to create complex curves.
+
+### Multi-Layer Handling
+- **Multi-layer Selection**: Ability to select and manipulate multiple pixel and vector layers simultaneously.
+
+### UI & Identity Overhaul
+- **Dynamic Themes**: Fully dynamic real-time theme switching capability.
+- **New App Identity**: Rebranded as Basera - بصيرة with a new localized name, logo, and splash screen.
+- **Improved Toolbars & Panels**: New tool bar with updated UI icons.
+- **Channels Panel**: New dedicated channels panel to toggle visibility of Red, Green, Blue, and Alpha channels.
+
+### Quality of Life & Bug Fixes
+- **Tool Refinements**: Quality improvements across Node Tool, Gradient Tool, Move Tool, and Selection Tools.
+- **Stability**: Multiple bug fixes in history, transformations, rotations, accidental clicks, UI behaviors, and vectors.
+
+---
+
+## Previous v0.3.0 Highlights
 
 ### Vector Revolution
 - **Full Vector Support**: SVG import/export and scalable vector layers
@@ -48,22 +81,11 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 ### Tool Enhancements
 - **Crop Tool**: Now fully functional at both layer and canvas levels
 
-### Previous v0.2.0 Highlights
+## Previous v0.2.0 Highlights
 - **Text Layers**: Rich text editing with real-time preview
 - **Redesigned Color System**: Color wheel, HSV/RGB/Hex modes
 - **Layers Panel Overhaul**: Group layers, adjustment layers, layer effects
 - **Multi-Project Support**: Tabs for multiple open documents
-
-### Still Not Working
-- Brush engine pressure sensitivity (partial support)
-- Brush system 
-- Vector boolean features
-- Layer as a mask
-- Text to curves
-- Trace bitmap
-- Multi-select layers
-- Layer skew
-- Refatored Logic (almost done)
 
 ---
 
@@ -275,6 +297,7 @@ photo_editor/
 ├── __main__.py              # Entry point
 ├── app.py                   # QApplication bootstrap
 ├── core/                    # Data models & enums
+│   ├── brush_engine.py      # Brush dynamics & ABR parsing
 │   ├── canvas.py
 │   ├── color.py
 │   ├── document.py
@@ -283,6 +306,7 @@ photo_editor/
 │   ├── layer.py
 │   ├── layer_stack.py
 │   └── selection.py
+├── commands/                # Action handling & undo system
 ├── engine/                  # Rendering pipeline
 │   ├── compositor.py
 │   ├── render_engine.py
@@ -290,6 +314,8 @@ photo_editor/
 │   └── tile_cache.py
 ├── vector/                  # Vector engine & tools
 │   ├── svg.py               # SVG import/export
+│   ├── boolean.py           # Vector boolean ops (union, subtract...)
+│   ├── pick_segments.py     # Pick segment selection for complex curves
 │   ├── shapes.py            # Shape primitives
 │   ├── path.py              # Bezier path logic
 │   ├── pen_tool.py          # Pen tool implementation
@@ -312,7 +338,7 @@ photo_editor/
 │   ├── stylize/
 │   └── render/
 ├── tools/                   # Interactive tools
-│   ├── brush.py
+│   ├── brush.py             # Brush dynamics and abr support
 │   ├── clone_stamp.py
 │   ├── healing_brush.py
 │   ├── selection_tools.py
@@ -322,16 +348,17 @@ photo_editor/
 ├── effects/                 # Effect pipeline
 ├── masks/                   # Mask manager & operations
 ├── transforms/              # Geometric transforms
-├── vector/                  # Vector System
 ├── ui/                      # PySide6 interface
+│   ├── theme.py             # Dynamic themes setup
 │   ├── main_window.py
 │   ├── canvas_view.py
-│   ├── toolbar.py
+│   ├── toolbar.py           # New dynamic toolbar UI
 │   ├── menus.py
-│   ├── theme.py
 │   ├── status_bar.py
 │   ├── panels/
 │   │   ├── layers_panel.py
+│   │   ├── channels_panel.py # New channels panel
+│   │   ├── brushes_panel.py  # Setting panel for brushes
 │   │   ├── history_panel.py
 │   │   ├── adjustments_panel.py
 │   │   ├── properties_bar.py
@@ -394,7 +421,7 @@ This is an early alpha — the following are known problems that need to be addr
 - [x] ~~**Crop tool** incomplete — selection-to-crop pipeline missing~~ (fixed — works on layer and canvas level)
 - [x] ~~**Selection tools** (Lasso, Magic Wand, etc.) have no visible selection box / marching ants indicator~~ (fixed — new selection engine)
 - [ ] Text tool has limited editing — no in-canvas text reflow
-- [ ] Brush engine lacks pressure sensitivity and dynamics
+- [ ] Brush engine pressure sensitivity (partial support)
 - [x] ~~Transform handles are not rendered on the canvas~~ (fixed — bounding box with 8 handles, rotates with content)
 - [x] ~~**Gradient tool** not functional~~ (fixed — real-time manipulation and preview)
 - [x] ~~**Eyedropper tool** not working~~ (fixed)
@@ -414,7 +441,9 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] Plugin system with hot-reload
 - [ ] PSD file import/export
 - [ ] RAW file support (via rawpy)
-- [ ] Brush engine with texture and dynamics
+- [x] ~~Brush engine with texture, dynamics and .abr support~~ (v0.4.0)
+- [x] ~~Multi-layer selection~~ (v0.4.0)
+- [x] ~~Vector boolean operations~~ (v0.4.0)
 - [x] ~~Vector layer rendering (SVG)~~ (v0.3.0)
 - [ ] Smart Object editing
 - [ ] Content-Aware Fill
