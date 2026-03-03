@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
 from ...widgets.color_dropdown import ColorDropdown
-from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator
+from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator, CompactPropertyWidget
 
 
 class GradientPropertiesBar(QWidget):
@@ -50,16 +50,11 @@ class GradientPropertiesBar(QWidget):
         lbl2.setStyleSheet(LABEL)
         layout.addWidget(lbl2)
 
-        self._opacity_spin = QSpinBox()
-        self._opacity_spin.setRange(0, 100)
-        self._opacity_spin.setValue(100)
-        self._opacity_spin.setSuffix("%")
-        self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._opacity_spin.setMaximumWidth(60)
-        self._opacity_spin.setMaximumHeight(22)
-        self._opacity_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._opacity_spin.valueChanged.connect(self._on_opacity_changed)
-        layout.addWidget(self._opacity_spin)
+        self._opacity_widget = CompactPropertyWidget(
+            "opacity", "Opacity", 100, 0, 100, 1.0, decimals=0, suffix=" %", parent=self
+        )
+        self._opacity_widget.value_changed.connect(lambda k, v: self._on_opacity_changed(v))
+        layout.addWidget(self._opacity_widget)
 
         layout.addWidget(make_separator())
 
@@ -93,6 +88,6 @@ class GradientPropertiesBar(QWidget):
                 )
                 self._type_combo.setCurrentIndex(idx)
             if hasattr(tool, "opacity"):
-                self._opacity_spin.setValue(int(tool.opacity * 100))
+                self._opacity_widget.set_value(int(tool.opacity * 100))
         finally:
             self.blockSignals(False)

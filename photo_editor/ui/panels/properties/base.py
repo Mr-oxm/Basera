@@ -196,10 +196,24 @@ class PropertyDropdown(QWidget):
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimumWidth(200)
         layout.addWidget(self.slider)
-        self.setStyleSheet("""
-            PropertyDropdown {
-                background-color: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
-            }
+
+        from ...theme import ThemeManager
+        try:
+            ThemeManager.instance().theme_changed.connect(self._apply_theme)
+            self._apply_theme(ThemeManager.instance().active_palette)
+        except Exception:
+            self.setStyleSheet("""
+                PropertyDropdown {
+                    background-color: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
+                }
+            """)
+
+    def _apply_theme(self, palette: dict) -> None:
+        """Update popup background style based on active theme palette."""
+        self.setStyleSheet(f"""
+            PropertyDropdown {{
+                background-color: {palette['bg2']}; border: 1px solid {palette['border']}; border-radius: 4px;
+            }}
         """)
 
 
@@ -208,7 +222,8 @@ class CompactPropertyWidget(QWidget):
     value_changed = Signal(str, object)
 
     def __init__(self, key: str, label: str, value: float,
-                 min_val: float, max_val: float, step: float = 1.0, parent=None):
+                 min_val: float, max_val: float, step: float = 1.0, 
+                 decimals: int = 0, suffix: str = "", parent=None):
         super().__init__(parent)
         self.key = key
         self.label_text = label
@@ -220,20 +235,25 @@ class CompactPropertyWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        name_label = QLabel(label)
-        name_label.setMinimumWidth(40)
-        name_label.setMaximumWidth(70)
-        name_label.setStyleSheet(_LABEL)
-        layout.addWidget(name_label)
+        if label:
+            name_label = QLabel(label)
+            name_label.setMinimumWidth(40)
+            name_label.setMaximumWidth(60)
+            name_label.setStyleSheet(_LABEL)
+            layout.addWidget(name_label)
         self.value_spin = QDoubleSpinBox()
         self.value_spin.setRange(min_val, max_val)
         self.value_spin.setSingleStep(step)
+        if decimals is not None:
+            self.value_spin.setDecimals(decimals)
         self.value_spin.setValue(value)
-        self.value_spin.setMaximumWidth(60)
+        if suffix:
+            self.value_spin.setSuffix(suffix)
+        self.value_spin.setMaximumWidth(70)
         self.value_spin.setMinimumHeight(22)
         self.value_spin.setMaximumHeight(22)
         self.value_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.value_spin.setStyleSheet(_SPIN.format(max_w=60, accent=_ACCENT))
+        self.value_spin.setStyleSheet(_SPIN.format(max_w=70, accent=_ACCENT))
         self.value_spin.valueChanged.connect(self._on_value_changed)
         layout.addWidget(self.value_spin)
         self.expand_btn = QPushButton("▾")
@@ -257,11 +277,6 @@ class CompactPropertyWidget(QWidget):
     def _create_dropdown(self):
         if self.dropdown is None:
             self.dropdown = PropertyDropdown(self.window())
-            self.dropdown.setStyleSheet("""
-                PropertyDropdown {
-                    background-color: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 6px;
-                }
-            """)
             self.slider = self.dropdown.slider
             if self.step == 1.0:
                 self.slider.setRange(int(self.min_val), int(self.max_val))

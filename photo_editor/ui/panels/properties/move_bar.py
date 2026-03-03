@@ -37,8 +37,10 @@ def _make_align_icons():
     from PySide6.QtCore import QRectF, QPointF
 
     icons = {}
-    _C_MAIN = QC(230, 230, 240)
-    _C_ACCENT = QC(110, 180, 255)
+    from ...theme import ThemeManager
+    palette = ThemeManager.instance().active_palette
+    _C_MAIN = QC(palette['fg'])
+    _C_ACCENT = QC(palette['accent'])
     _SHADOW = QC(0, 0, 0, 80)
 
     def _pen(color, w=1.5):
@@ -153,8 +155,10 @@ def _make_transform_icons():
     from PySide6.QtGui import QPolygonF
 
     icons = {}
-    _C_MAIN = QC(230, 230, 240)
-    _C_ACCENT = QC(110, 180, 255)
+    from ...theme import ThemeManager
+    palette = ThemeManager.instance().active_palette
+    _C_MAIN = QC(palette['fg'])
+    _C_ACCENT = QC(palette['accent'])
     _SHADOW = QC(0, 0, 0, 80)
 
     def _pen(color=_C_MAIN, w=1.4):
@@ -315,6 +319,24 @@ class MovePropertiesBar(QWidget):
             layout.addWidget(btn)
 
         layout.addStretch()
+
+        from ...theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self, palette: dict) -> None:
+        a_icons = _make_align_icons()
+        t_icons = _make_transform_icons()
+        
+        actions = (
+            "align_left", "align_center_h", "align_right",
+            "align_top", "align_middle_v", "align_bottom",
+            "flip_horizontal", "flip_vertical", "rotate_90_cw", "rotate_90_ccw"
+        )
+        for i, action in enumerate(actions):
+            if i < 6:
+                self._btns[i].setIcon(a_icons[action])
+            else:
+                self._btns[i].setIcon(t_icons[action])
 
     def _make_btn(self, icon: QIcon, action: str) -> QPushButton:
         btn = QPushButton()

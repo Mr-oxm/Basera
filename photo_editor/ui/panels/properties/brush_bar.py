@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator
+from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator, CompactPropertyWidget
 
 
 class BrushPropertiesBar(QWidget):
@@ -45,115 +45,56 @@ class BrushPropertiesBar(QWidget):
         layout.addWidget(make_separator())
 
         # ----- Size -----
-        lbl_size = QLabel("Size")
-        lbl_size.setStyleSheet(LABEL)
-        layout.addWidget(lbl_size)
-
-        self._size_spin = QSpinBox()
-        self._size_spin.setRange(1, 5000)
-        self._size_spin.setValue(20)
-        self._size_spin.setSuffix(" px")
-        self._size_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._size_spin.setMaximumWidth(70)
-        self._size_spin.setMaximumHeight(22)
-        self._size_spin.setStyleSheet(SPIN.format(max_w=70, accent=ACCENT))
-        self._size_spin.valueChanged.connect(lambda v: self._emit("size", v))
-        layout.addWidget(self._size_spin)
+        self._size_widget = CompactPropertyWidget(
+            "size", "Size", 20, 1, 5000, 1.0, decimals=0, suffix=" px", parent=self
+        )
+        self._size_widget.value_changed.connect(lambda k, v: self._emit(k, v))
+        layout.addWidget(self._size_widget)
 
         layout.addWidget(make_separator())
 
         # ----- Hardness -----
-        lbl_hard = QLabel("Hardness")
-        lbl_hard.setStyleSheet(LABEL)
-        layout.addWidget(lbl_hard)
-
-        self._hardness_spin = QSpinBox()
-        self._hardness_spin.setRange(0, 100)
-        self._hardness_spin.setValue(80)
-        self._hardness_spin.setSuffix(" %")
-        self._hardness_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._hardness_spin.setMaximumWidth(60)
-        self._hardness_spin.setMaximumHeight(22)
-        self._hardness_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._hardness_spin.valueChanged.connect(
-            lambda v: self._emit("hardness", v / 100.0))
-        layout.addWidget(self._hardness_spin)
+        self._hardness_widget = CompactPropertyWidget(
+            "hardness", "Hardness", 80, 0, 100, 1.0, decimals=0, suffix=" %", parent=self
+        )
+        self._hardness_widget.value_changed.connect(lambda k, v: self._emit(k, v / 100.0))
+        layout.addWidget(self._hardness_widget)
 
         layout.addWidget(make_separator())
 
         # ----- Opacity -----
-        lbl_op = QLabel("Opacity")
-        lbl_op.setStyleSheet(LABEL)
-        layout.addWidget(lbl_op)
-
-        self._opacity_spin = QSpinBox()
-        self._opacity_spin.setRange(0, 100)
-        self._opacity_spin.setValue(100)
-        self._opacity_spin.setSuffix(" %")
-        self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._opacity_spin.setMaximumWidth(60)
-        self._opacity_spin.setMaximumHeight(22)
-        self._opacity_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._opacity_spin.valueChanged.connect(
-            lambda v: self._emit("opacity", v / 100.0))
-        layout.addWidget(self._opacity_spin)
+        self._opacity_widget = CompactPropertyWidget(
+            "opacity", "Opacity", 100, 0, 100, 1.0, decimals=0, suffix=" %", parent=self
+        )
+        self._opacity_widget.value_changed.connect(lambda k, v: self._emit(k, v / 100.0))
+        layout.addWidget(self._opacity_widget)
 
         layout.addWidget(make_separator())
 
         # ----- Flow -----
-        lbl_flow = QLabel("Flow")
-        lbl_flow.setStyleSheet(LABEL)
-        layout.addWidget(lbl_flow)
-
-        self._flow_spin = QSpinBox()
-        self._flow_spin.setRange(0, 100)
-        self._flow_spin.setValue(100)
-        self._flow_spin.setSuffix(" %")
-        self._flow_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._flow_spin.setMaximumWidth(60)
-        self._flow_spin.setMaximumHeight(22)
-        self._flow_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._flow_spin.valueChanged.connect(
-            lambda v: self._emit("flow", v / 100.0))
-        layout.addWidget(self._flow_spin)
+        self._flow_widget = CompactPropertyWidget(
+            "flow", "Flow", 100, 0, 100, 1.0, decimals=0, suffix=" %", parent=self
+        )
+        self._flow_widget.value_changed.connect(lambda k, v: self._emit(k, v / 100.0))
+        layout.addWidget(self._flow_widget)
 
         layout.addWidget(make_separator())
 
         # ----- Spacing -----
-        lbl_sp = QLabel("Spacing")
-        lbl_sp.setStyleSheet(LABEL)
-        layout.addWidget(lbl_sp)
-
-        self._spacing_spin = QSpinBox()
-        self._spacing_spin.setRange(1, 200)
-        self._spacing_spin.setValue(25)
-        self._spacing_spin.setSuffix(" %")
-        self._spacing_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._spacing_spin.setMaximumWidth(60)
-        self._spacing_spin.setMaximumHeight(22)
-        self._spacing_spin.setStyleSheet(SPIN.format(max_w=60, accent=ACCENT))
-        self._spacing_spin.valueChanged.connect(
-            lambda v: self._emit("spacing", v / 100.0))
-        layout.addWidget(self._spacing_spin)
+        self._spacing_widget = CompactPropertyWidget(
+            "spacing", "Spacing", 25, 1, 200, 1.0, decimals=0, suffix=" %", parent=self
+        )
+        self._spacing_widget.value_changed.connect(lambda k, v: self._emit(k, v / 100.0))
+        layout.addWidget(self._spacing_widget)
 
         layout.addWidget(make_separator())
 
         # ----- Rotation -----
-        lbl_rot = QLabel("Rotation")
-        lbl_rot.setStyleSheet(LABEL)
-        layout.addWidget(lbl_rot)
-
-        self._rotation_spin = QSpinBox()
-        self._rotation_spin.setRange(0, 360)
-        self._rotation_spin.setValue(0)
-        self._rotation_spin.setSuffix("°")
-        self._rotation_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self._rotation_spin.setMaximumWidth(55)
-        self._rotation_spin.setMaximumHeight(22)
-        self._rotation_spin.setStyleSheet(SPIN.format(max_w=55, accent=ACCENT))
-        self._rotation_spin.valueChanged.connect(
-            lambda v: self._emit("rotation", float(v)))
-        layout.addWidget(self._rotation_spin)
+        self._rotation_widget = CompactPropertyWidget(
+            "rotation", "Rotation", 0, 0, 360, 1.0, decimals=0, suffix="°", parent=self
+        )
+        self._rotation_widget.value_changed.connect(lambda k, v: self._emit(k, v))
+        layout.addWidget(self._rotation_widget)
 
         layout.addWidget(make_separator())
 
@@ -332,12 +273,12 @@ class BrushPropertiesBar(QWidget):
             # Sync spin values from the preset
             self._syncing = True
             try:
-                self._size_spin.setValue(preset.size)
-                self._hardness_spin.setValue(int(preset.hardness * 100))
-                self._opacity_spin.setValue(int(preset.opacity * 100))
-                self._flow_spin.setValue(int(preset.flow * 100))
-                self._spacing_spin.setValue(int(preset.spacing * 100))
-                self._rotation_spin.setValue(int(preset.rotation))
+                self._size_widget.set_value(preset.size)
+                self._hardness_widget.set_value(preset.hardness * 100)
+                self._opacity_widget.set_value(preset.opacity * 100)
+                self._flow_widget.set_value(preset.flow * 100)
+                self._spacing_widget.set_value(preset.spacing * 100)
+                self._rotation_widget.set_value(preset.rotation)
             finally:
                 self._syncing = False
         else:
@@ -350,20 +291,19 @@ class BrushPropertiesBar(QWidget):
         self._tool = tool
         try:
             if hasattr(tool, "size"):
-                self._size_spin.setValue(int(tool.size))
+                self._size_widget.set_value(tool.size)
             if hasattr(tool, "hardness"):
-                self._hardness_spin.setValue(int(tool.hardness * 100))
+                self._hardness_widget.set_value(tool.hardness * 100)
             if hasattr(tool, "opacity"):
-                self._opacity_spin.setValue(int(tool.opacity * 100))
+                self._opacity_widget.set_value(tool.opacity * 100)
             if hasattr(tool, "flow"):
-                self._flow_spin.setValue(int(getattr(tool, "flow", 1.0) * 100))
+                self._flow_widget.set_value(getattr(tool, "flow", 1.0) * 100)
             else:
-                self._flow_spin.setValue(100)
+                self._flow_widget.set_value(100)
             if hasattr(tool, "spacing"):
-                self._spacing_spin.setValue(int(tool.spacing * 100))
+                self._spacing_widget.set_value(tool.spacing * 100)
             # Show/hide flow for tools that don't have it
             has_flow = hasattr(tool, "flow")
-            # Flow label is the parent of the spin
-            self._flow_spin.setVisible(has_flow)
+            self._flow_widget.setVisible(has_flow)
         finally:
             self._syncing = False

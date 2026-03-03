@@ -71,10 +71,7 @@ _TOOL_GROUPS: list[tuple[str, str, list[tuple[ToolType, str, str]]]] = [
         (ToolType.NODE, "Node", "A"),
     ]),
     ("shape", "U", [
-        (ToolType.SHAPE, "Shape", "U"),
-    ]),
-    ("vector_shape", "Shift+U", [
-        (ToolType.VECTOR_SHAPE, "Vector Shape", "Shift+U"),
+        (ToolType.VECTOR_SHAPE, "Vector Shape", "U"),
     ]),
     ("text", "T", [
         (ToolType.TEXT, "Text", "T"),
@@ -562,10 +559,9 @@ _ICON_MAP: dict[ToolType, callable] = {
     ToolType.GRADIENT: _ico_gradient,
     ToolType.PAINT_BUCKET: _ico_paint_bucket,
     ToolType.TEXT: _ico_text,
-    ToolType.SHAPE: _ico_shape,
     ToolType.PEN: _ico_pen,
     ToolType.NODE: _ico_node,
-    ToolType.VECTOR_SHAPE: _ico_vector_shape,
+    ToolType.VECTOR_SHAPE: _ico_shape,
     ToolType.ZOOM: _ico_zoom,
     ToolType.PAN: _ico_pan,
 }
