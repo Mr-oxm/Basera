@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox
 
 from ..commands.base import Command
@@ -38,8 +39,16 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Photo Editor")
+        self.setWindowTitle("Basera")
         self.resize(1440, 900)
+        
+        import os
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "app", "logo.png"
+        )
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         
         ThemeManager.instance().theme_changed.connect(
             lambda _: self.setStyleSheet(THEMES[ThemeManager.instance().active_theme_name])
@@ -455,14 +464,23 @@ class MainWindow(QMainWindow):
 
     def _on_about(self) -> None:
         """Show the About dialog."""
-        QMessageBox.about(
-            self,
-            "About Photo Editor",
-            "<h3>Photo Editor</h3>"
-            "<p>A professional raster image editor built with PySide6.</p>"
-            "<p>Features include layers, masks, blending modes, "
-            "filters, adjustments, and more.</p>",
+        about_text = (
+            "<h3>Basera (v0.4-alpha)</h3>"
+            "<p><b>A professional-grade, Photoshop-style photo editor</b> built in Python "
+            "with a modular, extensible architecture.</p>"
+            "<p><b>Key Features:</b><ul>"
+            "<li>Full Vector Support (SVG, shapes, pen/node tools)</li>"
+            "<li>Advanced Selection & Masking workflows</li>"
+            "<li>Retouching Power (Healing Brush, Clone Stamp)</li>"
+            "<li>Layer System with 28 Blending Modes</li>"
+            "<li>15 Non-Destructive Adjustments & 24 Filters</li>"
+            "<li>Professional UI with dockable panels, rulers, and guides</li>"
+            "</ul></p>"
+            "<hr>"
+            "<p>Developed by <b>Omar Ahmed Emara</b><br>"
+            "GitHub: <a href='https://github.com/Mr-oxm'>https://github.com/Mr-oxm</a></p>"
         )
+        QMessageBox.about(self, "About Basera", about_text)
 
     def _on_theme_changed(self, palette: dict) -> None:
         self._props_toolbar.setStyleSheet(

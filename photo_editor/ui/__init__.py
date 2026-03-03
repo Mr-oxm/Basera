@@ -1,4 +1,4 @@
-"""PySide6 user interface components for the Photo Editor.
+"""PySide6 user interface components for the Basera.
 
 This package contains all UI code: main window, canvas, panels, dialogs,
 widgets, controllers, and supporting modules. The architecture separates

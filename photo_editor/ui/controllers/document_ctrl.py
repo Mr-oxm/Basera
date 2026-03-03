@@ -115,7 +115,7 @@ class DocumentController:
 
         def on_success(_result: object) -> None:
             mw._doc.mark_clean()
-            mw.setWindowTitle(f"Photo Editor — {Path(path).name}")
+            mw.setWindowTitle(f"Basera — {Path(path).name}")
             idx = mw._file_tabs.current_index()
             if 0 <= idx < len(mw._open_docs):
                 mw._open_docs[idx] = (mw._doc, path)
@@ -314,7 +314,7 @@ class DocumentController:
         self._mw._canvas.zoom_to_fit()
         name = Path(path).name if path else doc.name
         self._mw._status.set_document_info(name, doc.width, doc.height)
-        self._mw.setWindowTitle(f"Photo Editor — {name}")
+        self._mw.setWindowTitle(f"Basera — {name}")
 
     def on_tab_close(self, index: int) -> None:
         if index < 0 or index >= len(self._mw._open_docs):
