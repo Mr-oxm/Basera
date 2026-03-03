@@ -1,11 +1,15 @@
 # Photo Editor
 
-> **v0.3.1-alpha** — Vector layers, SVG support, advanced masking, retouching tools, major refactoring and major UI improvements.
+> **v0.4-alpha** — Vector layers, SVG support, advanced masking, retouching tools, major refactoring and major UI improvements.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
 > [!WARNING]
 > This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
+
+### v0.4.0
+<img width="1919" height="992" alt="Screenshot 2026-03-03 173450" src="https://github.com/user-attachments/assets/117edfc0-33bd-4099-b474-c23a7984a5b8" />
+<img width="1919" height="984" alt="Screenshot 2026-03-03 175004" src="https://github.com/user-attachments/assets/84e2f4a3-3430-4eb4-bc12-0262acc14cab" />
 
 ### v0.3.0
 <img width="1919" height="990" alt="Screenshot 2026-02-16 221017" src="https://github.com/user-attachments/assets/ff11c565-47d9-4877-b1bc-538bf4efb923" />
