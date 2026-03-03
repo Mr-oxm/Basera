@@ -39,6 +39,11 @@ class Layer:
     mask_enabled: bool = True
     clipping_mask: bool = False
     parent_id: str | None = None
+    # Channel visibility toggles
+    channel_r: bool = True
+    channel_g: bool = True
+    channel_b: bool = True
+    channel_a: bool = True
     # Persistent transform tracking
     transform_angle: float = 0.0
     transform_scale_x: float = 1.0
@@ -287,6 +292,10 @@ class Layer:
             transform_scale_y=self.transform_scale_y,
             transform_base_w=self.transform_base_w,
             transform_base_h=self.transform_base_h,
+            channel_r=self.channel_r,
+            channel_g=self.channel_g,
+            channel_b=self.channel_b,
+            channel_a=self.channel_a,
         )
         new._pixels = self._pixels.copy()
         if self._mask is not None:

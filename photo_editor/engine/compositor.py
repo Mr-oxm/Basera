@@ -76,6 +76,17 @@ class Compositor:
         np.clip(pixels, 0, 1, out=pixels)
         return pixels, pad
 
+    @staticmethod
+    def _apply_channels(pixels: np.ndarray, layer: Layer) -> np.ndarray:
+        if layer.channel_r and layer.channel_g and layer.channel_b and layer.channel_a:
+            return pixels
+        res = pixels.copy()
+        if not layer.channel_r: res[..., 0] = 0.0
+        if not layer.channel_g: res[..., 1] = 0.0
+        if not layer.channel_b: res[..., 2] = 0.0
+        if not layer.channel_a: res[..., 3] = 0.0
+        return res
+
     def _get_effective_mask(self, layer: Layer, stack: LayerStack) -> np.ndarray | None:
         """Compute the combined mask for *layer*.
 
@@ -167,6 +178,7 @@ class Compositor:
                 if layer.styles:
                     group_img = StyleEngine.apply_styles(group_img, layer.styles)
                     np.clip(group_img, 0, 1, out=group_img)
+                group_img = self._apply_channels(group_img, layer)
                 # Apply mask layers attached to the group
                 group_mask = self._get_effective_mask(layer, stack)
                 if group_mask is not None:
@@ -202,6 +214,7 @@ class Compositor:
             pixels = layer.pixels
             if layer.styles:
                 pixels = StyleEngine.apply_styles(pixels, layer.styles)
+            pixels = self._apply_channels(pixels, layer)
             blend_pos = layer.position
             if layer.id in adj_children:
                 pixels, pad = self._apply_filters_padded(
@@ -275,6 +288,7 @@ class Compositor:
             pixels = layer.pixels
             if layer.styles:
                 pixels = StyleEngine.apply_styles(pixels, layer.styles)
+            pixels = self._apply_channels(pixels, layer)
             blend_pos = layer.position
             if layer.id in adj_children:
                 pixels, pad = self._apply_filters_padded(
@@ -328,6 +342,7 @@ class Compositor:
             return None
         if layer.styles:
             pixels = StyleEngine.apply_styles(pixels, layer.styles)
+        pixels = self._apply_channels(pixels, layer)
         if layer.id in adj_children:
             pixels, _pad = self._apply_filters_padded(
                 pixels, adj_children[layer.id],

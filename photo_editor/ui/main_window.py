@@ -22,6 +22,7 @@ from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
 from .panels.properties_panel import PropertiesPanel
 from .panels.transform_panel import TransformPanel
+from .panels.channels_panel import ChannelsPanel
 from .controllers import DocumentController
 from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
@@ -238,6 +239,11 @@ class MainWindow(QMainWindow):
         self._brushes_panel = BrushesPanel()
         self._brushes_dock = self._dock(self._brushes_panel, "Brushes", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._history_dock, self._brushes_dock)
+        
+        self._channels_panel = ChannelsPanel()
+        self._channels_dock = self._dock(self._channels_panel, "Channels", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._brushes_dock, self._channels_dock)
+
         self._history_dock.raise_()
 
         self._status = EditorStatusBar(self)
@@ -271,6 +277,7 @@ class MainWindow(QMainWindow):
         # text/gradient/align/vector wired by TextController, GradientController,
         # TransformController, VectorController
         self._transform_panel.value_changed.connect(lambda: self._refresh(invalidate=True))
+        self._channels_panel.value_changed.connect(lambda: self._refresh(invalidate=True))
 
     # ---- Wiring: file tabs --------------------------------------------------
 
@@ -314,6 +321,7 @@ class MainWindow(QMainWindow):
             self._layers_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
             self._transform_panel.refresh(self._doc)
+            self._channels_panel.refresh(self._doc)
             self._selection_ctrl.update_selection_overlay()
             self._transform_ctrl.update_transform_box()
             self._view_ctrl.update_rulers()
@@ -350,6 +358,7 @@ class MainWindow(QMainWindow):
         self._selection_ctrl.update_selection_overlay()
         self._transform_ctrl.update_transform_box()
         self._transform_panel.refresh(self._doc)
+        self._channels_panel.refresh(self._doc)
         self._view_ctrl.update_rulers()
         if full_refresh:
             self._layers_panel.refresh(self._doc)
@@ -418,6 +427,7 @@ class MainWindow(QMainWindow):
         if self._doc:
             self._layers_panel.refresh(self._doc, thumbnails=False)
             self._transform_panel.refresh(self._doc)
+            self._channels_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
 
     # ---- Key event handling -------------------------------------------------

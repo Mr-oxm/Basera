@@ -247,6 +247,8 @@ class LayerController:
 
             self._mw._transform_ctrl.update_transform_box()
             self._mw._transform_panel.refresh(self._mw._doc)
+            if hasattr(self._mw, '_channels_panel'):
+                self._mw._channels_panel.refresh(self._mw._doc)
             self._mw._tool_ctrl.update_properties_panel()
 
             # Refresh boolean toolbar when a single layer is selected
@@ -262,6 +264,8 @@ class LayerController:
         # Sync the layers panel selection with the model's multi-selection
         self._sync_panel_selection()
         self._mw._transform_panel.refresh(self._mw._doc)
+        if hasattr(self._mw, '_channels_panel'):
+            self._mw._channels_panel.refresh(self._mw._doc)
         self._mw._transform_ctrl.update_transform_box()
 
     def _sync_panel_selection(self) -> None:
@@ -311,6 +315,8 @@ class LayerController:
             return
         self._sync_panel_selection()
         mw._transform_ctrl.update_transform_box()
+        if hasattr(mw, '_channels_panel'):
+            mw._channels_panel.refresh(mw._doc)
         mw._canvas.update()
 
     def on_panel_multi_selection(self, layer_ids: list) -> None:
@@ -333,6 +339,8 @@ class LayerController:
         elif not new_sel:
             stack._active_index = -1
         mw._transform_ctrl.update_transform_box()
+        if hasattr(mw, '_channels_panel'):
+            mw._channels_panel.refresh(mw._doc)
 
         # Refresh boolean toolbar state when selection changes from the panel
         if mw._tools.active_type == ToolType.NODE:
