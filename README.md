@@ -1,4 +1,7 @@
 # Basera - بصيرة
+![splash](https://github.com/user-attachments/assets/c00cfe66-a38b-4bf6-99df-6dcc78d992d8)
+
+
 
 > **v0.4-alpha** — Performance optimizations, dynamic themes, full brush system, advanced vector booleans, UI overhaul, and multi-layer select.
 
