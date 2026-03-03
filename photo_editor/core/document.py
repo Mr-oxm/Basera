@@ -275,6 +275,8 @@ class Document:
         """Convert the current selection to a mask layer.
 
         If no target_id is given, attaches to the active layer.
+        The selection is cropped to the target layer's spatial extent so
+        the mask layer dimensions and position match the target.
         """
         if not self.selection.active or self.selection.mask is None:
             return None
@@ -282,8 +284,31 @@ class Document:
             active = self.layers.active_layer
             if active.layer_type != LayerType.MASK:
                 target_id = active.id
+
+        sel_mask = self.selection.mask
+        mw, mh = self.width, self.height
+
+        # When attaching to a target layer, crop the canvas-sized selection
+        # to the target's spatial extent so the mask is properly aligned.
+        if target_id:
+            target = self.layers.get(target_id)
+            if target is not None:
+                lx, ly = target.position
+                tw, th = target.width, target.height
+                mw, mh = tw, th
+                dh, dw = sel_mask.shape[:2]
+                cropped = np.zeros((th, tw), dtype=np.float32)
+                # Compute overlapping region
+                dy0, dy1 = max(0, ly), min(dh, ly + th)
+                dx0, dx1 = max(0, lx), min(dw, lx + tw)
+                if dy1 > dy0 and dx1 > dx0:
+                    sy0, sy1 = dy0 - ly, dy1 - ly
+                    sx0, sx1 = dx0 - lx, dx1 - lx
+                    cropped[sy0:sy1, sx0:sx1] = sel_mask[dy0:dy1, dx0:dx1]
+                sel_mask = cropped
+
         mask = self.layers.selection_to_mask_layer(
-            target_id, self.selection.mask, self.width, self.height,
+            target_id, sel_mask, mw, mh,
         )
         if mask:
             self._snapshot("Selection to Mask")
@@ -326,18 +351,36 @@ class Document:
 
     # ---- History ------------------------------------------------------------
 
+    def _save_live_state(self) -> None:
+        """Push the current uncommitted changes to history as __Live__ so we can return to it."""
+        if not self.history.states:
+            return
+        if self.history.states[-1].name == "__Live__":
+            return
+        # We only want to push the live state if we are currently AT the end of history
+        if self.history.current_index == len(self.history.states): 
+            # Note: history.current_index has +1 offset when at end!
+            self._snapshot("__Live__")
+            self._dirty = True
+
     def undo(self) -> None:
+        if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
+            self._save_live_state()
         state = self.history.undo()
         if state:
             self._restore(state)
 
     def redo(self) -> None:
+        # Redo doesn't need to save live, because if we can redo, we are NOT at the end
         state = self.history.redo()
         if state:
             self._restore(state)
 
     def navigate_history(self, target_index: int) -> None:
         """Jump to a specific history state by index."""
+        if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
+            self._save_live_state()
+            
         while self.history.current_index > target_index and self.history.can_undo:
             self.history.undo()
         while self.history.current_index < target_index and self.history.can_redo:

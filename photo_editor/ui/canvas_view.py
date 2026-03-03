@@ -138,6 +138,13 @@ class CanvasView(_BASE_CLASS):
         self._doc_ref = None          # Document | None
         self._tool_manager_ref = None  # ToolManager | None
 
+        # Boolean preview overlay state (set by VectorController)
+        self._bool_preview_path = None   # VectorPath | None
+        self._bool_source_ids: set = set()
+
+        # Pick-segments mode overlay state (set by VectorController)
+        self._pick_segments_state = None  # PickSegmentsState | None
+
         self._overlays = CanvasOverlays(self)
         self._input_handler = CanvasInputHandler(self)
 
@@ -419,7 +426,9 @@ class CanvasView(_BASE_CLASS):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.fillRect(self.rect(), QColor(50, 50, 50))
+        from .theme import ThemeManager
+        palette = ThemeManager.instance().active_palette
+        p.fillRect(self.rect(), QColor(palette['bg1']))
 
         if self._pixmap is None:
             p.end()
@@ -475,6 +484,23 @@ class CanvasView(_BASE_CLASS):
         if self._transform_box is not None:
             self._overlays.draw_transform_box(p, dr)
 
+        # Move tool marquee selection box
+        if self._current_tool_type == ToolType.MOVE and self._tool_manager_ref is not None:
+            tool = self._tool_manager_ref.active_tool
+            mrect = getattr(tool, 'marquee_rect', None)
+            if callable(getattr(type(tool), 'marquee_rect', None)):
+                # It's a property, access the value
+                mrect = tool.marquee_rect
+            if mrect is not None:
+                s, e = mrect
+                ss = self._doc_to_widget(dr, float(s[0]), float(s[1]))
+                se = self._doc_to_widget(dr, float(e[0]), float(e[1]))
+                marquee_pen = QPen(QColor(100, 180, 255), 1.0, Qt.PenStyle.DashLine)
+                marquee_pen.setCosmetic(True)
+                p.setPen(marquee_pen)
+                p.setBrush(QColor(100, 180, 255, 30))
+                p.drawRect(QRectF(ss, se).normalized())
+
         # Text editing overlays
         if self._text_draw_rect is not None:
             self._overlays.draw_text_draw_rect(p, dr)
@@ -507,8 +533,18 @@ class CanvasView(_BASE_CLASS):
             self._overlays.draw_guides(p, dr)
 
         # Vector object overlay (node handles, path outlines)
-        if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE):
+        if self._current_tool_type in (ToolType.PEN, ToolType.NODE, ToolType.VECTOR_SHAPE, ToolType.MOVE):
             self._overlays.draw_vector_overlay(p, dr)
+
+        # Boolean preview overlay (hover over toolbar buttons)
+        if getattr(self, "_bool_preview_path", None) is not None:
+            self._overlays.draw_boolean_preview(p, dr)
+
+        # Pick-segments overlay
+        if getattr(self, "_pick_segments_state", None) is not None:
+            ps = self._pick_segments_state
+            if ps.active:
+                self._overlays.draw_pick_segments(p, dr)
 
         p.end()
 
@@ -538,7 +574,7 @@ class CanvasView(_BASE_CLASS):
             self.setCursor(QCursor(build_rotate_cursor()))
             return
 
-        # Hit-test against centered handle positions
+        # Hit-test against centered handle positions (expanded hit area)
         local_handles = [
             ("TL", -hw, -hh), ("T", 0, -hh), ("TR", hw, -hh),
             ("L", -hw, 0), ("R", hw, 0),
@@ -551,9 +587,22 @@ class CanvasView(_BASE_CLASS):
 
         if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
-        else:
-            # Outside the box = rotation zone
-            self.setCursor(build_rotate_cursor())
+            return
+
+        # Rotate cursor only near corners (within ROTATE_PROX pixels)
+        ROTATE_PROX = 50.0
+        corners = [
+            (-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh),
+            (rh_x, rh_y),
+        ]
+        for (ccx, ccy) in corners:
+            dist_sq = (px - ccx) ** 2 + (py - ccy) ** 2
+            if dist_sq <= ROTATE_PROX * ROTATE_PROX:
+                self.setCursor(build_rotate_cursor())
+                return
+
+        # Outside all zones — revert to default cursor
+        self.set_tool_cursor(self._current_tool_type)
 
     def _hit_test_guide(self, pos: QPointF):
         """Return the Guide object near *pos* (widget coords), or None."""

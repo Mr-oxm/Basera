@@ -18,11 +18,6 @@ from PySide6.QtWidgets import QWidget
 # ---------------------------------------------------------------------------
 
 _RULER_SIZE = 22          # pixels width/height of the ruler bar
-_BG = QColor(51, 51, 51)          # #333333 — matches app header
-_BG_CORNER = QColor(43, 43, 43)   # #2b2b2b — corner square
-_TICK_COLOR = QColor(170, 170, 170)  # #aaa — main label ticks
-_SUBTICK_COLOR = QColor(100, 100, 100)
-_TEXT_COLOR = QColor(180, 180, 180)
 _GUIDE_COLOR = QColor(74, 179, 255)  # cyan / blue guide line
 _GUIDE_DRAG_COLOR = QColor(74, 179, 255, 140)
 _CURSOR_COLOR = QColor(74, 111, 165, 200)  # #4a6fa5 — position indicator
@@ -153,9 +148,17 @@ class _RulerBase(QWidget):
     # ---- Paint (horizontal) ------------------------------------------------
 
     def paintEvent(self, _event) -> None:
+        from ..theme import ThemeManager
+        palette = ThemeManager.instance().active_palette
+        bg = QColor(palette["bg3"])
+        tick_color = QColor(palette["fg_dim"])
+        text_color = QColor(palette["fg"])
+        subtick_color = QColor(palette["border_light"])
+        border_color = QColor(palette["border"])
+
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        p.fillRect(self.rect(), _BG)
+        p.fillRect(self.rect(), bg)
 
         if self._doc_size <= 0 or self._zoom <= 0:
             p.end()
@@ -183,7 +186,7 @@ class _RulerBase(QWidget):
         p.setFont(_FONT)
 
         # Draw sub-ticks
-        p.setPen(QPen(_SUBTICK_COLOR, 1))
+        p.setPen(QPen(subtick_color, 1))
         st = first_tick
         while st <= last_tick:
             for i in range(1, sub_divs):
@@ -197,25 +200,25 @@ class _RulerBase(QWidget):
             st += step
 
         # Draw major ticks + labels
-        p.setPen(QPen(_TICK_COLOR, 1))
+        p.setPen(QPen(tick_color, 1))
         tick = first_tick
         while tick <= last_tick:
             wp = self._doc_to_widget(tick)
             if 0 <= wp <= length:
                 if horiz:
                     p.drawLine(int(wp), _RULER_SIZE - 8, int(wp), _RULER_SIZE)
-                    p.setPen(QPen(_TEXT_COLOR, 1))
+                    p.setPen(QPen(text_color, 1))
                     p.drawText(int(wp) + 2, _RULER_SIZE - 9, str(int(tick)))
-                    p.setPen(QPen(_TICK_COLOR, 1))
+                    p.setPen(QPen(tick_color, 1))
                 else:
                     p.drawLine(_RULER_SIZE - 8, int(wp), _RULER_SIZE, int(wp))
                     p.save()
-                    p.setPen(QPen(_TEXT_COLOR, 1))
+                    p.setPen(QPen(text_color, 1))
                     p.translate(int(_RULER_SIZE - 10), int(wp) + 2)
                     p.rotate(-90)
                     p.drawText(0, 0, str(int(tick)))
                     p.restore()
-                    p.setPen(QPen(_TICK_COLOR, 1))
+                    p.setPen(QPen(tick_color, 1))
             tick += step
 
         # Draw layer bounds indicators
@@ -261,7 +264,7 @@ class _RulerBase(QWidget):
                 ])
 
         # Bottom / right edge line
-        p.setPen(QPen(QColor(68, 68, 68), 1))
+        p.setPen(QPen(border_color, 1))
         if horiz:
             p.drawLine(0, _RULER_SIZE - 1, self.width(), _RULER_SIZE - 1)
         else:
@@ -365,9 +368,11 @@ class RulerCorner(QWidget):
         self.setFixedSize(_RULER_SIZE, _RULER_SIZE)
 
     def paintEvent(self, _event) -> None:
+        from ..theme import ThemeManager
+        palette = ThemeManager.instance().active_palette
         p = QPainter(self)
-        p.fillRect(self.rect(), _BG_CORNER)
-        p.setPen(QPen(QColor(68, 68, 68), 1))
+        p.fillRect(self.rect(), QColor(palette["bg2"]))
+        p.setPen(QPen(QColor(palette["border"]), 1))
         p.drawLine(0, _RULER_SIZE - 1, _RULER_SIZE, _RULER_SIZE - 1)
         p.drawLine(_RULER_SIZE - 1, 0, _RULER_SIZE - 1, _RULER_SIZE)
         p.end()

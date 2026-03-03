@@ -14,6 +14,7 @@ class LayerStack:
     def __init__(self) -> None:
         self._layers: list[Layer] = []
         self._active_index: int = -1
+        self._selected_indices: set[int] = set()
 
     # ---- Properties ---------------------------------------------------------
 
@@ -35,6 +36,58 @@ class LayerStack:
     def active_index(self, value: int) -> None:
         if -1 <= value < len(self._layers):
             self._active_index = value
+            # Single-select resets multi-selection to just this layer
+            if value >= 0:
+                self._selected_indices = {value}
+            else:
+                self._selected_indices = set()
+
+    # ---- Multi-selection ----------------------------------------------------
+
+    @property
+    def selected_indices(self) -> set[int]:
+        """Return the set of currently selected layer indices."""
+        return set(self._selected_indices)
+
+    @property
+    def selected_layers(self) -> list[Layer]:
+        """Return layers at the selected indices, ordered bottom-to-top."""
+        return [self._layers[i] for i in sorted(self._selected_indices)
+                if 0 <= i < len(self._layers)]
+
+    def select_add(self, index: int) -> None:
+        """Add *index* to the multi-selection and make it active."""
+        if 0 <= index < len(self._layers):
+            self._selected_indices.add(index)
+            self._active_index = index
+
+    def select_toggle(self, index: int) -> None:
+        """Toggle *index* in the multi-selection."""
+        if 0 <= index < len(self._layers):
+            if index in self._selected_indices:
+                self._selected_indices.discard(index)
+                # If we removed the active, pick another
+                if self._active_index == index:
+                    if self._selected_indices:
+                        self._active_index = max(self._selected_indices)
+                    else:
+                        self._active_index = -1
+            else:
+                self._selected_indices.add(index)
+                self._active_index = index
+
+    def select_clear(self) -> None:
+        """Clear all selection — no layer is active."""
+        self._selected_indices.clear()
+        self._active_index = -1
+
+    def select_only(self, index: int) -> None:
+        """Select only *index* (single-select)."""
+        if 0 <= index < len(self._layers):
+            self._selected_indices = {index}
+            self._active_index = index
+        else:
+            self.select_clear()
 
     # ---- Mutations ----------------------------------------------------------
 
@@ -332,6 +385,8 @@ class LayerStack:
 
         if target:
             mask_layer.parent_id = target_id
+            # Inherit the target's position so brush and compositing align
+            mask_layer.position = target.position
             target.mask_layers.append(mask_layer.id)
             # Insert just before the target so that compositing order works
             target_idx = 0

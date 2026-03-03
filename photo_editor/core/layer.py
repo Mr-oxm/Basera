@@ -134,6 +134,7 @@ class Layer:
         scale_x: float | None = None,
         scale_y: float | None = None,
         angle: float | None = None,
+        fast: bool = False,
     ) -> None:
         """Eagerly recompute display pixels from source + transform params.
 
@@ -155,11 +156,12 @@ class Layer:
         mask_result = self._source_mask
 
         if sx != 1.0 or sy != 1.0:
-            result = TransformEngine.scale(result, sx, sy)
+            result = TransformEngine.scale(result, sx, sy, fast=fast)
             if mask_result is not None:
                 sh, sw = result.shape[:2]
+                mask_interp = cv2.INTER_NEAREST if fast else cv2.INTER_LINEAR
                 mask_result = cv2.resize(
-                    mask_result, (sw, sh), interpolation=cv2.INTER_LINEAR
+                    mask_result, (sw, sh), interpolation=mask_interp
                 )
 
         # Update unrotated display dimensions
@@ -167,10 +169,10 @@ class Layer:
         self.transform_base_h = result.shape[0]
 
         if ang != 0.0:
-            result = TransformEngine.rotate(result, ang, expand=True)
+            result = TransformEngine.rotate(result, ang, expand=True, fast=fast)
             if mask_result is not None:
                 mask_3d = np.stack([mask_result] * 4, axis=-1)
-                mask_3d = TransformEngine.rotate(mask_3d, ang, expand=True)
+                mask_3d = TransformEngine.rotate(mask_3d, ang, expand=True, fast=fast)
                 mask_result = mask_3d[..., 0]
 
         self._pixels = np.clip(result, 0.0, 1.0).astype(np.float32) if result.dtype != np.float32 else np.clip(result, 0.0, 1.0)

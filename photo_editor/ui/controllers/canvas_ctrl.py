@@ -47,6 +47,15 @@ class CanvasController:
                 mw._v_ruler.set_cursor_position(wy)
         if mw._tools.active_type == ToolType.TEXT:
             mw._text_ctrl.update_hover_cursor(x, y)
+        elif mw._tools.active_type == ToolType.NODE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, "pick_segments") and tool.pick_segments.active:
+                tool.pick_segments_hover(x, y)
+                mw._canvas.update()
+            elif tool is not None and hasattr(tool, "update_hover"):
+                doc = mw._doc
+                if doc is not None and tool.update_hover(doc, x, y):
+                    mw._canvas.update()
         elif mw._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
             tool = mw._tools.active_tool
             if tool is not None and tool.source_set:
@@ -107,6 +116,12 @@ class CanvasController:
                         self._dragging = True
                         return
 
+        # Pass shift state to Move tool for multi-select
+        if tool_type == ToolType.MOVE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, "shift_held"):
+                tool.shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
         mw._tools.on_press(mw._doc, x, y, pressure)
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
             self._drag_start = (x, y)
@@ -146,6 +161,11 @@ class CanvasController:
 
         tool_type = mw._tools.active_type
         mw._tools.on_move(mw._doc, x, y, pressure)
+
+        if tool_type == ToolType.MOVE:
+            # Repaint canvas for marquee overlay and transform box updates
+            mw._canvas.update()
+            mw._transform_ctrl.update_transform_box()
 
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT) and self._drag_start is not None:
             sx, sy = self._drag_start
@@ -195,6 +215,9 @@ class CanvasController:
         mw._refresh_canvas_only()
         mw._schedule_panel_refresh()
 
+        if tool_type == ToolType.MOVE:
+            mw._transform_ctrl.update_transform_box()
+
         if tool_type == ToolType.TEXT:
             mw._text_ctrl.update_overlay()
 
@@ -216,7 +239,17 @@ class CanvasController:
                 mw._refresh()
                 return
         if tool_type == ToolType.NODE and tool is not None:
+            if hasattr(tool, 'pick_segments') and tool.pick_segments.active:
+                return  # suppress node insertion while picking segments
             if hasattr(tool, 'insert_node_on_segment'):
                 tool.insert_node_on_segment(mw._doc, x, y)
                 mw._refresh()
                 return
+        # Double-click a selected vector layer with the Move tool → switch to Node tool
+        if tool_type == ToolType.MOVE and mw._doc is not None:
+            layer = mw._doc.layers.active_layer
+            if layer is not None and layer.layer_type.name == "SHAPE":
+                vl = getattr(layer, "_vector_data", None)
+                if vl is not None:
+                    mw._toolbar.select_tool(ToolType.NODE)
+                    return

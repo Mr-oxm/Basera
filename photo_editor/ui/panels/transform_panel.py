@@ -314,9 +314,6 @@ class TransformPanel(QWidget):
         # Apply transformation
         if field in ('x', 'y'):
             # Translation
-            # If we change X, we want the ANCHOR POINT to move to X.
-            # layer_pos = new_anchor_pos - relative_anchor_offset
-            
             target_x = self.spin_x.value()
             target_y = self.spin_y.value()
             
@@ -335,7 +332,7 @@ class TransformPanel(QWidget):
                 layer.position = (int(new_lx), int(new_ly))
 
         elif field in ('w', 'h'):
-            # Scaling
+            # Scaling — dispatch through the command system
             target_w = self.spin_w.value()
             target_h = self.spin_h.value()
             
@@ -354,67 +351,40 @@ class TransformPanel(QWidget):
                     self.spin_w.setValue(target_w)
                     self._block_signals = False
 
-            if layer.layer_type == LayerType.RASTER:
-                # Update transforms
-                sx = target_w / max(layer.source_width, 1)
-                sy = target_h / max(layer.source_height, 1)
-                layer.transform_scale_x = sx
-                layer.transform_scale_y = sy
-                
-                # We need to adjust position so that pivot stays fixed
-                # New unrotated dims will be target_w, target_h approx
-                # But rasterizer/computer logic puts top-left at 'position'.
-                # We need a math for "Scale around Point".
-                # P' = C + (P - C) * S
-                # Here P is TopLeft. C is Pivot.
-                # new_lx = pivot_x + (lx - pivot_x) * (new_w / old_w)
-                
-                scale_factor_x = target_w / lw if lw > 0 else 1
-                scale_factor_y = target_h / lh if lh > 0 else 1
-                
-                new_lx = pivot_x + (lx - pivot_x) * scale_factor_x
-                new_ly = pivot_y + (ly - pivot_y) * scale_factor_y
-                
-                layer.position = (int(new_lx), int(new_ly))
-                layer.compute_display()
-                
-            elif layer.layer_type == LayerType.SHAPE:
-                scale_x = target_w / lw if lw > 0 else 1
-                scale_y = target_h / lh if lh > 0 else 1
-                self._scale_vector_layer(layer, scale_x, scale_y, pivot_x, pivot_y)
+            from ...commands.layer.resize_layer import ResizeLayerCommand
+            cmd = ResizeLayerCommand(
+                layer_id=layer.id,
+                new_w=target_w,
+                new_h=target_h,
+                pivot=(pivot_x, pivot_y),
+            )
+            cmd.execute(self._doc)
 
         elif field == 'r':
-            # Rotation
-            delta_angle = new_val - old_val
-            
-            if layer.layer_type == LayerType.RASTER:
-                layer.transform_angle = new_val
-                # Rotate around pivot?
-                # Raster layer rotation usually happens around Center.
-                # If we want to rotate around generic pivot, we must adjust position.
-                # P' = Pivot + Rotate(P - Pivot)
-                # But Layer.transform_angle is rotation around Center.
-                # So we must move the layer such that its new Center is correct relative to Pivot?
-                # Complex. Standard behavior: Rotate around center.
-                # Users expect Rotate around Anchor.
-                # If Anchor is Center -> No Translation.
-                # If Anchor is TL -> Translation needed.
-                
-                # Current Center
-                cx = lx + lw / 2
-                cy = ly + lh / 2
-                
-                # New Angle
-                # Rotate logic is hard purely with layer props.
-                # Simpler: just set angle.
-                layer.compute_display()
-                
-            elif layer.layer_type == LayerType.SHAPE:
-                self._rotate_vector_layer(layer, delta_angle, pivot_x, pivot_y)
-                # Reset display angle just in case
+            # Rotation — dispatch through the command system
+            from ...commands.layer.rotate_layer import RotateLayerCommand
+
+            if layer.layer_type == LayerType.SHAPE:
+                delta_angle = new_val - old_val
+                cmd = RotateLayerCommand(
+                    layer_id=layer.id,
+                    angle=delta_angle,
+                    pivot=(pivot_x, pivot_y),
+                    absolute=False,
+                )
+                cmd.execute(self._doc)
+                # Vector layers absorb rotation — reset the display angle
                 self.spin_r.blockSignals(True)
-                self.spin_r.setValue(0) # Vector layers absorb rotation
+                self.spin_r.setValue(0)
                 self.spin_r.blockSignals(False)
+            else:
+                cmd = RotateLayerCommand(
+                    layer_id=layer.id,
+                    angle=new_val,
+                    pivot=(pivot_x, pivot_y),
+                    absolute=True,
+                )
+                cmd.execute(self._doc)
 
         elif field == 's':
             # Shear

@@ -37,6 +37,15 @@ class HistoryManager:
 
     @property
     def current_index(self) -> int:
+        if not self._states:
+            return 0
+        
+        # If we are at the end, and the last state is NOT __Live__, 
+        # it means the live doc is active. The UI has an extra row for it.
+        # So we return _index + 1.
+        if self._index == len(self._states) - 1 and self._states[-1].name != "__Live__":
+            return self._index + 1
+            
         return self._index
 
     @property
@@ -46,12 +55,11 @@ class HistoryManager:
     # ---- Mutation -----------------------------------------------------------
 
     def push(self, state: HistoryState) -> None:
-        self._states = self._states[: self._index + 1]
+        self._states = self._states[: self.current_index]
         self._states.append(state)
         if len(self._states) > self._max:
             self._states.pop(0)
-        else:
-            self._index += 1
+        self._index = len(self._states) - 1
 
     def undo(self) -> HistoryState | None:
         if self.can_undo:
@@ -75,4 +83,11 @@ class HistoryManager:
         self._index = -1
 
     def names(self) -> list[str]:
-        return [s.name for s in self._states]
+        if not self._states:
+            return []
+        res = ["Open Document"]
+        for s in self._states:
+            res.append(s.name)
+        if res[-1] == "__Live__":
+            res.pop()
+        return res

@@ -6,7 +6,8 @@ Features:
  • Double-click a stop to change its colour
  • Right-click a stop to remove it
  • Gradient direction selector (linear / radial / conical / diamond)
- • Preset gallery
+ • Preset gallery with accurate multi-stop previews
+ • Selected-stop info row with color swatch, position, and pick button
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -255,7 +257,7 @@ class GradientBar(QWidget):
 
 
 # ============================================================================
-# Preset strip
+# Preset strip — renders accurate multi-stop previews
 # ============================================================================
 
 class _PresetStrip(QWidget):
@@ -270,12 +272,18 @@ class _PresetStrip(QWidget):
             btn = QPushButton()
             btn.setFixedSize(36, 20)
             if len(stops) >= 2:
-                r0, g0, b0, _ = stops[0].color.to_rgb8()
-                r1, g1, b1, _ = stops[-1].color.to_rgb8()
+                # Build accurate multi-stop QSS gradient
+                stop_parts = []
+                for s in stops:
+                    r8, g8, b8, a8 = s.color.to_rgb8()
+                    stop_parts.append(
+                        f"stop:{s.position:.3f} rgba({r8},{g8},{b8},{a8})"
+                    )
+                gradient_css = ", ".join(stop_parts)
                 btn.setStyleSheet(
                     f"QPushButton {{"
                     f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                    f"  stop:0 rgb({r0},{g0},{b0}), stop:1 rgb({r1},{g1},{b1}));"
+                    f"  {gradient_css});"
                     f"  border: 1px solid #444; border-radius: 4px;"
                     f"}}"
                     f"QPushButton:hover {{ border: 1px solid #7aacdf; }}"
@@ -285,6 +293,108 @@ class _PresetStrip(QWidget):
             btn.clicked.connect(lambda checked, n=name: self.preset_selected.emit(n))
             layout.addWidget(btn)
         layout.addStretch()
+
+
+# ============================================================================
+# Stop info row — shows selected stop details
+# ============================================================================
+
+_SWATCH_STYLE = """
+QPushButton {{
+    background: {bg};
+    border: 1px solid #555;
+    border-radius: 3px;
+    min-width: 22px; min-height: 18px;
+    max-width: 22px; max-height: 18px;
+}}
+QPushButton:hover {{ border: 1px solid #7aacdf; }}
+"""
+
+_SPIN_STYLE = """
+QDoubleSpinBox {
+    background: #363636; border: 1px solid #484848; border-radius: 4px;
+    color: #ccc; font-size: 11px; padding: 1px 4px;
+    max-width: 50px; max-height: 20px;
+}
+QDoubleSpinBox:hover { border: 1px solid #5a8abf; }
+"""
+
+_SMALL_LABEL = "color: #888; font-size: 10px; font-family: 'Segoe UI', 'Inter', sans-serif;"
+
+_TOOL_BTN = """
+QPushButton {
+    background: #363636; border: 1px solid #484848; border-radius: 4px;
+    color: #aaa; font-size: 11px; padding: 2px 6px;
+    max-height: 20px;
+}
+QPushButton:hover { border: 1px solid #5a8abf; color: #ddd; }
+QPushButton:pressed { background: #404040; }
+"""
+
+
+class _StopInfoRow(QWidget):
+    """Shows the selected stop's color, position, and a pick button."""
+
+    color_changed = Signal(object)       # Color
+    position_changed = Signal(float)
+    pick_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(4)
+
+        lbl = QLabel("Stop")
+        lbl.setStyleSheet(_SMALL_LABEL)
+        layout.addWidget(lbl)
+
+        self._swatch_btn = QPushButton()
+        self._swatch_btn.setFixedSize(22, 18)
+        self._swatch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._swatch_btn.setToolTip("Click to pick stop color")
+        self._swatch_btn.clicked.connect(self.pick_requested.emit)
+        layout.addWidget(self._swatch_btn)
+
+        lbl2 = QLabel("Pos")
+        lbl2.setStyleSheet(_SMALL_LABEL)
+        layout.addWidget(lbl2)
+
+        self._pos_spin = QDoubleSpinBox()
+        self._pos_spin.setRange(0.0, 100.0)
+        self._pos_spin.setSingleStep(1.0)
+        self._pos_spin.setDecimals(1)
+        self._pos_spin.setSuffix("%")
+        self._pos_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self._pos_spin.setStyleSheet(_SPIN_STYLE)
+        self._pos_spin.setFixedWidth(56)
+        self._pos_spin.setFixedHeight(20)
+        self._pos_spin.valueChanged.connect(
+            lambda v: self.position_changed.emit(v / 100.0)
+        )
+        layout.addWidget(self._pos_spin)
+
+        self._hex_label = QLabel("#000000")
+        self._hex_label.setStyleSheet(
+            "color: #999; font-size: 10px; font-family: 'Consolas', monospace;"
+        )
+        layout.addWidget(self._hex_label)
+
+        layout.addStretch()
+
+        self._color = Color.black()
+
+    def set_stop(self, stop: GradientStop) -> None:
+        """Update the display for the given stop."""
+        self._color = stop.color
+        r, g, b, a = stop.color.to_rgb8()
+        self._swatch_btn.setStyleSheet(
+            _SWATCH_STYLE.format(bg=f"rgba({r},{g},{b},{a})")
+        )
+        self._hex_label.setText(stop.color.to_hex().upper())
+        self._pos_spin.blockSignals(True)
+        self._pos_spin.setValue(stop.position * 100.0)
+        self._pos_spin.blockSignals(False)
 
 
 # ============================================================================
@@ -356,13 +466,22 @@ class GradientEditor(QWidget):
 
         # Gradient bar
         self._bar = GradientBar()
-        self._bar.stops_changed.connect(self._emit_gradient)
+        self._bar.stops_changed.connect(self._on_bar_changed)
         layout.addWidget(self._bar)
+
+        # Stop info row
+        self._stop_info = _StopInfoRow()
+        self._stop_info.position_changed.connect(self._on_stop_position_changed)
+        self._stop_info.pick_requested.connect(self._on_stop_pick_color)
+        layout.addWidget(self._stop_info)
 
         # Presets
         self._presets = _PresetStrip()
         self._presets.preset_selected.connect(self._on_preset)
         layout.addWidget(self._presets)
+
+        # Initial info
+        self._sync_stop_info()
 
     def gradient(self) -> ColorFill:
         """Build the current ColorFill from stops + type."""
@@ -381,6 +500,7 @@ class GradientEditor(QWidget):
     def set_stops(self, stops: list[GradientStop]) -> None:
         self._bar.stops = stops
         self._bar.update()
+        self._sync_stop_info()
 
     def _emit_gradient(self) -> None:
         self.gradient_changed.emit(self.gradient())
@@ -397,10 +517,50 @@ class GradientEditor(QWidget):
             GradientStop(1.0 - s.position, s.color) for s in reversed(stops)
         ]
         self._bar.stops = reversed_stops
+        self._sync_stop_info()
         self._emit_gradient()
 
     def _on_preset(self, name: str) -> None:
         preset = GRADIENT_PRESETS.get(name)
         if preset:
             self._bar.stops = list(preset)
+            self._sync_stop_info()
             self._emit_gradient()
+
+    def _on_bar_changed(self) -> None:
+        """Bar stops changed (drag, add, remove, color)."""
+        self._sync_stop_info()
+        self._emit_gradient()
+
+    def _sync_stop_info(self) -> None:
+        """Update the stop info row from the bar's selected stop."""
+        stops = self._bar.stops
+        idx = self._bar.selected_index
+        if 0 <= idx < len(stops):
+            self._stop_info.set_stop(stops[idx])
+
+    def _on_stop_position_changed(self, new_pos: float) -> None:
+        """User typed a new position in the info row spinner."""
+        idx = self._bar.selected_index
+        stops = self._bar.stops
+        if 0 <= idx < len(stops):
+            new_pos = max(0.0, min(1.0, new_pos))
+            stops[idx] = GradientStop(new_pos, stops[idx].color)
+            self._bar.stops = stops  # re-sorts
+            self._emit_gradient()
+
+    def _on_stop_pick_color(self) -> None:
+        """User clicked the stop color swatch in the info row."""
+        idx = self._bar.selected_index
+        stops = self._bar.stops
+        if 0 <= idx < len(stops):
+            stop = stops[idx]
+            r, g, b, a = stop.color.to_rgb8()
+            qc = QColorDialog.getColor(
+                QColor(r, g, b, a), self, "Stop Color",
+                QColorDialog.ColorDialogOption.ShowAlphaChannel,
+            )
+            if qc.isValid():
+                new_c = Color.from_rgb8(qc.red(), qc.green(), qc.blue(), qc.alpha())
+                self._bar.set_selected_color(new_c)
+                self._sync_stop_info()

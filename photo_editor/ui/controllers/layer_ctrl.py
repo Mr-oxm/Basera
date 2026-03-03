@@ -7,6 +7,24 @@ import copy
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 
+from ...commands import (
+    AddGroupCommand,
+    AddLayerCommand,
+    AddMaskLayerCommand,
+    ApplyMaskLayerCommand,
+    AttachAdjustmentToLayerCommand,
+    AttachMaskToLayerCommand,
+    ConvertToMaskCommand,
+    DuplicateLayerCommand,
+    FlattenCommand,
+    InvertMaskLayerCommand,
+    MergeDownCommand,
+    MoveLayerCommand,
+    RemoveLayerCommand,
+    RemoveMaskLayerCommand,
+    RenameLayerCommand,
+    ReorderLayersCommand,
+)
 from ...core.enums import BlendMode, LayerType, ToolType
 from ..dialogs.layer_styles_dialog import LayerStylesDialog
 
@@ -81,11 +99,14 @@ class LayerController:
         lp.edit_adjustment_requested.connect(mw._filter_ctrl.on_edit_adjustment_layer)
         lp.filter_layer_requested.connect(mw._filter_ctrl.on_add_filter_layer)
         lp.edit_filter_requested.connect(mw._filter_ctrl.on_edit_filter_layer)
+        lp.multi_selection_changed.connect(self.on_panel_multi_selection)
 
         # Move tool auto-select
         move_tool = mw._tools._tools.get(ToolType.MOVE)
         if move_tool is not None:
             move_tool.on_layer_auto_selected = self.on_move_auto_select
+            move_tool.on_deselect_all = self.on_move_deselect_all
+            move_tool.on_marquee_select = self.on_move_marquee_select
 
     def on_layer_styles(self) -> None:
         """Open the Layer Styles dialog for the active layer."""
@@ -129,8 +150,7 @@ class LayerController:
 
     def on_add_layer(self) -> None:
         if self._mw._doc:
-            self._mw._doc.add_layer()
-            self._mw._refresh()
+            self._mw.execute_command(AddLayerCommand())
 
     def on_add_vector_layer(self) -> None:
         if self._mw._doc:
@@ -142,11 +162,7 @@ class LayerController:
             return
         mw = self._mw
         selected = mw._layers_panel.selected_layer_ids()
-        if len(selected) >= 1:
-            mw._doc.group_selected_layers(selected)
-        else:
-            mw._doc.add_group()
-        mw._refresh()
+        mw.execute_command(AddGroupCommand(layer_ids=selected if len(selected) >= 1 else None))
 
     def on_dup_layer(self) -> None:
         if not self._mw._doc or not self._mw._doc.layers.active_layer:
@@ -155,8 +171,7 @@ class LayerController:
         if mw._doc.selection.active and mw._doc.selection.mask is not None:
             mw._selection_ctrl.on_duplicate_selection()
         else:
-            mw._doc.duplicate_layer(mw._doc.layers.active_layer.id)
-            mw._refresh()
+            mw.execute_command(DuplicateLayerCommand(mw._doc.layers.active_layer.id))
 
     def on_del_layer(self) -> None:
         if not self._mw._doc or len(self._mw._doc.layers) <= 1:
@@ -168,76 +183,163 @@ class LayerController:
                 if len(mw._doc.layers) <= 1:
                     break
                 if mw._doc.layers.get(lid):
-                    mw._doc.remove_layer(lid)
+                    mw.execute_command(RemoveLayerCommand(lid))
         elif mw._doc.layers.active_layer:
-            mw._doc.remove_layer(mw._doc.layers.active_layer.id)
-        mw._refresh()
+            mw.execute_command(RemoveLayerCommand(mw._doc.layers.active_layer.id))
 
     def on_add_mask(self) -> None:
         mw = self._mw
         if mw._doc and mw._doc.layers.active_layer:
             if mw._doc.selection.active and mw._doc.selection.mask is not None:
                 mw._doc.selection_to_mask_layer()
+                mw._refresh()
             else:
-                mw._doc.add_mask_layer(fill_white=True)
-            mw._refresh()
+                mw.execute_command(AddMaskLayerCommand(fill_white=True))
 
     def on_add_mask_black(self) -> None:
         if self._mw._doc and self._mw._doc.layers.active_layer:
-            self._mw._doc.add_mask_layer(fill_white=False)
-            self._mw._refresh()
+            self._mw.execute_command(AddMaskLayerCommand(fill_white=False))
 
     def on_add_mask_standalone(self) -> None:
         if self._mw._doc:
-            self._mw._doc.add_mask_layer(target_id="__standalone__", fill_white=True)
-            self._mw._refresh()
+            self._mw.execute_command(AddMaskLayerCommand(standalone=True))
 
     def on_remove_mask_layer(self) -> None:
         if not self._mw._doc:
             return
         active = self._mw._doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            self._mw._doc.remove_mask_layer(active.id)
-            self._mw._refresh()
+            self._mw.execute_command(RemoveMaskLayerCommand(active.id))
 
     def on_apply_mask_layer(self) -> None:
         if not self._mw._doc:
             return
         active = self._mw._doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            self._mw._doc.apply_mask_layer(active.id)
-            self._mw._refresh()
+            self._mw.execute_command(ApplyMaskLayerCommand(active.id))
 
     def on_invert_mask_layer(self) -> None:
         if not self._mw._doc:
             return
         active = self._mw._doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            from ...masks.mask_manager import MaskManager
-            self._mw._doc.save_snapshot("Invert Mask Layer")
-            MaskManager.invert_mask_layer(active)
-            self._mw._refresh()
+            self._mw.execute_command(InvertMaskLayerCommand(active.id))
 
     def on_convert_to_mask(self) -> None:
         if not self._mw._doc:
             return
         active = self._mw._doc.layers.active_layer
         if active and active.layer_type not in (LayerType.MASK, LayerType.GROUP):
-            self._mw._doc.convert_layer_to_mask(active.id)
-            self._mw._refresh()
+            self._mw.execute_command(ConvertToMaskCommand(active.id))
 
     def on_layer_selected(self, stack_index: int) -> None:
         if self._mw._doc:
             self._mw._doc.layers.active_index = stack_index
+
+            if self._mw._tools.active_type == ToolType.NODE:
+                al = self._mw._doc.layers.active_layer
+                if al:
+                    vl = getattr(al, "_vector_data", None)
+                    if vl and not vl.selected_objects() and vl.objects:
+                        vl.objects[-1].selected = True
+                        if hasattr(self._mw, "_canvas"):
+                            self._mw._canvas.update()
+
             self._mw._transform_ctrl.update_transform_box()
             self._mw._transform_panel.refresh(self._mw._doc)
+            self._mw._tool_ctrl.update_properties_panel()
+
+            # Refresh boolean toolbar when a single layer is selected
+            if self._mw._tools.active_type == ToolType.NODE:
+                tool = self._mw._tools.active_tool
+                if tool is not None and hasattr(tool, '_sync_bool_selection'):
+                    tool._sync_bool_selection(self._mw._doc)
+                self._mw._vector_ctrl.refresh_bool_state()
 
     def on_move_auto_select(self, stack_index: int) -> None:
         if not self._mw._doc:
             return
-        self._mw._layers_panel.refresh(self._mw._doc)
+        # Sync the layers panel selection with the model's multi-selection
+        self._sync_panel_selection()
         self._mw._transform_panel.refresh(self._mw._doc)
         self._mw._transform_ctrl.update_transform_box()
+
+    def _sync_panel_selection(self) -> None:
+        """Synchronise the layers panel's visual selection with LayerStack."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        sel_indices = mw._doc.layers.selected_indices
+        panel = mw._layers_panel
+        # Refresh first so rows are up to date
+        panel.refresh(mw._doc)
+        # Now select the correct rows
+        lst = panel._list
+        lst.blockSignals(True)
+        lst.clearSelection()
+        row_ids = panel.row_layer_ids()
+
+        # Set current row to the active layer FIRST, 
+        # because in ExtendedSelection mode it clears other selections.
+        active = mw._doc.layers.active_layer
+        if active and active.id in row_ids:
+            lst.setCurrentRow(row_ids.index(active.id))
+
+        for si in sel_indices:
+            if 0 <= si < len(mw._doc.layers.layers):
+                lid = mw._doc.layers.layers[si].id
+                if lid in row_ids:
+                    row = row_ids.index(lid)
+                    item = lst.item(row)
+                    if item:
+                        item.setSelected(True)
+        lst.blockSignals(False)
+
+    def on_move_deselect_all(self) -> None:
+        """Called when the Move tool clicks on empty canvas — deselect all."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        mw._layers_panel.refresh(mw._doc)
+        mw._transform_ctrl.update_transform_box()
+        mw._canvas.update()
+
+    def on_move_marquee_select(self, indices: list[int]) -> None:
+        """Called after a marquee drag-select completes in the Move tool."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        self._sync_panel_selection()
+        mw._transform_ctrl.update_transform_box()
+        mw._canvas.update()
+
+    def on_panel_multi_selection(self, layer_ids: list) -> None:
+        """Sync panel multi-selection back to LayerStack and update bbox."""
+        mw = self._mw
+        if not mw._doc:
+            return
+        stack = mw._doc.layers
+        # Build a set of selected indices from the panel's selected IDs
+        new_sel: set[int] = set()
+        for lid in layer_ids:
+            for i, layer in enumerate(stack.layers):
+                if layer.id == lid:
+                    new_sel.add(i)
+                    break
+        stack._selected_indices = new_sel
+        # Keep active_index pointing at something sensible
+        if new_sel and stack.active_index not in new_sel:
+            stack._active_index = max(new_sel)
+        elif not new_sel:
+            stack._active_index = -1
+        mw._transform_ctrl.update_transform_box()
+
+        # Refresh boolean toolbar state when selection changes from the panel
+        if mw._tools.active_type == ToolType.NODE:
+            tool = mw._tools.active_tool
+            if tool is not None and hasattr(tool, '_sync_bool_selection'):
+                tool._sync_bool_selection(mw._doc)
+            mw._vector_ctrl.refresh_bool_state()
 
     def on_opacity(self, val: float) -> None:
         if self._mw._doc and self._mw._doc.layers.active_layer:
@@ -291,11 +393,7 @@ class LayerController:
 
     def on_rename_layer(self, layer_id: str, new_name: str) -> None:
         if self._mw._doc:
-            layer = self._mw._doc.layers.get(layer_id)
-            if layer:
-                layer.name = new_name
-                self._mw._doc.save_snapshot(f"Rename to {new_name}")
-                self._mw._refresh(invalidate=False)
+            self._mw.execute_command(RenameLayerCommand(layer_id, new_name))
 
     def on_layers_reordered(self, layer_ids: list[str], target_visual_row: int) -> None:
         if not self._mw._doc:
@@ -314,78 +412,39 @@ class LayerController:
         for i, lid in enumerate(layer_ids):
             remaining.insert(adjusted_row + i, lid)
         new_stack_order = list(reversed(remaining))
-        mw._doc.layers.reorder_by_ids(new_stack_order)
-        mw._doc.save_snapshot("Reorder Layers")
-        mw._refresh()
+        mw.execute_command(ReorderLayersCommand(new_stack_order))
 
     def on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
         if not self._mw._doc:
             return
-        self._mw._doc.layers.reparent(layer_ids, group_id)
-        self._mw._doc.save_snapshot("Move to Group")
-        self._mw._refresh()
+        self._mw.execute_command(MoveLayerCommand(layer_ids, target_parent_id=group_id))
 
     def on_layers_unparented(self, layer_ids: list[str]) -> None:
         if not self._mw._doc:
             return
-        self._mw._doc.layers.reparent(layer_ids, None)
-        self._mw._doc.save_snapshot("Remove from Group")
-        self._mw._refresh()
+        self._mw.execute_command(MoveLayerCommand(layer_ids, target_parent_id=None))
 
     def on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
         if not self._mw._doc:
             return
-        mw = self._mw
-        mask = mw._doc.layers.get(mask_id)
-        target = mw._doc.layers.get(target_id)
-        if mask is None or target is None:
-            return
-        if mask.layer_type != LayerType.MASK:
-            return
-        if mask.parent_id:
-            old_parent = mw._doc.layers.get(mask.parent_id)
-            if old_parent and mask_id in old_parent.mask_layers:
-                old_parent.mask_layers.remove(mask_id)
-        mask.parent_id = target_id
-        mask.ex_parent_id = None
-        if mask_id not in target.mask_layers:
-            target.mask_layers.append(mask_id)
-        mw._doc.layers.reposition_before(mask_id, target_id)
-        mw._doc.save_snapshot("Attach Mask to Layer")
-        mw._refresh()
+        self._mw.execute_command(AttachMaskToLayerCommand(mask_id, target_id))
 
     def on_adj_filter_dropped_on_layer(self, adj_id: str, target_id: str) -> None:
         if not self._mw._doc:
             return
-        mw = self._mw
-        adj_layer = mw._doc.layers.get(adj_id)
-        target = mw._doc.layers.get(target_id)
-        if adj_layer is None or target is None:
-            return
-        if adj_layer.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER):
-            return
-        if adj_layer.parent_id:
-            old_parent = mw._doc.layers.get(adj_layer.parent_id)
-            if old_parent and adj_id in old_parent.children:
-                old_parent.children.remove(adj_id)
-        adj_layer.parent_id = target_id
-        mw._doc.layers.reposition_before(adj_id, target_id)
-        mw._doc.save_snapshot("Attach Adjustment to Layer")
-        mw._refresh()
+        self._mw.execute_command(AttachAdjustmentToLayerCommand(adj_id, target_id))
 
     def on_flatten(self) -> None:
         if self._mw._doc:
-            self._mw._doc.flatten()
-            self._mw._refresh()
+            self._mw.execute_command(FlattenCommand())
 
     def on_merge_down(self) -> None:
         if self._mw._doc:
-            if not self._mw._doc.merge_down():
+            success = self._mw.execute_command(MergeDownCommand())
+            if success is False:
                 self._mw.statusBar().showMessage(
                     "Cannot merge down — no suitable layer below", 3000
                 )
-            else:
-                self._mw._refresh()
 
     def on_resize_canvas(self) -> None:
         if not self._mw._doc:

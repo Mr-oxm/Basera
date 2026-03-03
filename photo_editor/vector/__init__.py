@@ -19,6 +19,8 @@ Module layout
 - **spatial**   — R-tree spatial index for O(log n) hit-testing and culling
 - **boolean**   — Path boolean operations (union, subtract, intersect, divide,
                   exclude) using Greiner–Hormann + Weiler–Atherton
+- **boolean_ops** — Higher-level document-layer boolean operations returning new layers
+- **pick_segments** — Interactive path fragment selection and contour stitching
 - **style**     — `VectorStyle`: multi-fill / multi-stroke paint stacks,
                   gradient meshes, dash patterns, variable-width strokes
 - **scene**     — `VectorObject` scene-graph node wrapping path + style +

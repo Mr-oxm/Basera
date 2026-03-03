@@ -116,7 +116,7 @@ HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
     "R": Qt.CursorShape.SizeHorCursor,
 }
 
-HANDLE_HIT = 8  # pixels radius on screen for handle hit-testing
+HANDLE_HIT = 12  # pixels radius on screen for handle hit-testing
 
 
 def build_rotate_cursor() -> QCursor:

@@ -41,20 +41,22 @@ from .color_sliders import ColorSliders
 from .color_wheel import ColorWheel
 from .gradient_editor import GradientEditor
 from .swatch_grid import SwatchGrid
+from ..theme import ThemeManager
 
 
 # ============================================================================
 # Tab bar styled for the popup
 # ============================================================================
 
-_TAB_STYLE = """
-QTabBar {
+def _tab_style(palette: dict) -> str:
+    return f"""
+QTabBar {{
     background: transparent;
     border: none;
-}
-QTabBar::tab {
-    background: #333;
-    color: #999;
+}}
+QTabBar::tab {{
+    background: {palette['bg2']};
+    color: {palette['fg_dim']};
     border: none;
     padding: 6px 14px;
     font-size: 11px;
@@ -62,16 +64,16 @@ QTabBar::tab {
     font-family: 'Segoe UI', 'Inter', sans-serif;
     border-bottom: 2px solid transparent;
     margin-right: 1px;
-}
-QTabBar::tab:hover {
-    color: #ccc;
-    background: #3a3a3a;
-}
-QTabBar::tab:selected {
-    color: #e0e0e0;
-    background: #3a3a3a;
-    border-bottom: 2px solid #5a8abf;
-}
+}}
+QTabBar::tab:hover {{
+    color: {palette['fg']};
+    background: {palette['hover']};
+}}
+QTabBar::tab:selected {{
+    color: {palette.get('fg_accent', '#ffffff')};
+    background: {palette['bg1']};
+    border-bottom: 2px solid {palette['accent']};
+}}
 """
 
 
@@ -119,13 +121,6 @@ class _ColorPopup(QWidget):
         self._container = QWidget(self)
         self._container.setObjectName("popupContainer")
         self._container.setGraphicsEffect(shadow)
-        self._container.setStyleSheet(
-            "#popupContainer {"
-            "  background: #2e2e2e;"
-            "  border: 1px solid #444;"
-            "  border-radius: 8px;"
-            "}"
-        )
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)  # room for shadow
@@ -137,7 +132,6 @@ class _ColorPopup(QWidget):
 
         # Tab bar
         self._tabs = QTabBar()
-        self._tabs.setStyleSheet(_TAB_STYLE)
         self._tabs.setExpanding(False)
         self._tabs.setDocumentMode(True)
         self._tabs.addTab("Swatches")
@@ -191,7 +185,20 @@ class _ColorPopup(QWidget):
         self._mgr = ColorManager.instance()
         self._mgr.history_changed.connect(self._swatches.refresh_recent)
 
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
         self._updating = False
+
+    def _apply_theme(self, palette: dict) -> None:
+        self._container.setStyleSheet(
+            "#popupContainer {"
+            f"  background: {palette['bg2']};"
+            f"  border: 1px solid {palette['border']};"
+            "  border-radius: 8px;"
+            "}"
+        )
+        self._tabs.setStyleSheet(_tab_style(palette))
 
     def set_color(self, c: Color) -> None:
         self._updating = True
@@ -284,7 +291,11 @@ class _ColorPopup(QWidget):
 # ============================================================================
 
 class _ColorButton(QWidget):
-    """Small rounded-rect button showing the current color or gradient."""
+    """Small rounded-rect button showing the current color or gradient.
+
+    When *none_mode* is True the swatch shows a red ⊘ (no-entry) symbol
+    indicating that fill or stroke is disabled.
+    """
 
     clicked = Signal()
 
@@ -293,10 +304,15 @@ class _ColorButton(QWidget):
         self._color = Color.black()
         self._gradient: GradientPaint | None = None
         self._hovered = False
+        self._none_mode = False
         self.setFixedSize(32, 24)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setToolTip("Click to open color picker")
+
+    def set_none_mode(self, none: bool) -> None:
+        self._none_mode = none
+        self.update()
 
     def set_color(self, c: Color) -> None:
         self._color = c
@@ -313,20 +329,37 @@ class _ColorButton(QWidget):
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         radius = 5.0
 
-        # Checkerboard
+        # Checkerboard background (always drawn)
         clip = QPainterPath()
         clip.addRoundedRect(rect, radius, radius)
         p.setClipPath(clip)
         cs = 4
+        palette = ThemeManager.instance().active_palette
+        c1 = QColor(palette['bg1']).darker(110)
+        c2 = QColor(palette['bg1']).lighter(110)
         for y in range(int(rect.top()), int(rect.bottom()) + 1, cs):
             for x in range(int(rect.left()), int(rect.right()) + 1, cs):
                 ix = (x - int(rect.left())) // cs
                 iy = (y - int(rect.top())) // cs
-                c = QColor(68, 68, 68) if (ix + iy) % 2 == 0 else QColor(88, 88, 88)
+                c = c1 if (ix + iy) % 2 == 0 else c2
                 p.fillRect(x, y, cs, cs, c)
         p.setClipping(False)
 
-        if self._gradient is not None and self._gradient.stops:
+        if self._none_mode:
+            # Draw ⊘ stop-sign: thin circle + diagonal line in vivid red
+            cx = rect.center().x()
+            cy = rect.center().y()
+            r_val = min(rect.width(), rect.height()) / 2.0 - 2.0
+            red = QColor(220, 50, 50)
+            p.setPen(QPen(red, 2.0, Qt.PenStyle.SolidLine))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(QRectF(cx - r_val, cy - r_val, r_val * 2, r_val * 2))
+            diag = r_val * 0.70
+            p.drawLine(
+                QRectF(cx - diag, cy - diag, diag * 2, diag * 2).bottomLeft(),
+                QRectF(cx - diag, cy - diag, diag * 2, diag * 2).topRight(),
+            )
+        elif self._gradient is not None and self._gradient.stops:
             # Render gradient preview
             from PySide6.QtGui import QLinearGradient
             grad = QLinearGradient(rect.left(), rect.center().y(),
@@ -336,22 +369,29 @@ class _ColorButton(QWidget):
                                    int(stop.color[1] * 255),
                                    int(stop.color[2] * 255),
                                    int(stop.color[3] * 255) if len(stop.color) > 3 else 255)
-                grad.setColorAt(stop.position, QColor(r8, g8, b8, a8))
+                pos = getattr(stop, 'offset', None) or getattr(stop, 'position', 0.0)
+                grad.setColorAt(pos, QColor(r8, g8, b8, a8))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(rect, radius, radius)
         else:
-            # Color fill
+            # Solid color fill
             r, g, b, a = self._color.to_rgb8()
             p.setBrush(QColor(r, g, b, a))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(rect, radius, radius)
 
         # Border
-        border = QColor(140, 180, 220) if self._hovered else QColor(70, 70, 70)
-        p.setPen(QPen(border, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(rect, radius, radius)
+        if self._hovered:
+            p.setPen(QPen(QColor(palette['border_light']), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect, radius, radius)
+            p.setPen(QPen(QColor(palette['accent']), 1.0))
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), radius - 1, radius - 1)
+        else:
+            p.setPen(QPen(QColor(palette['border']), 1.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect, radius, radius)
         p.end()
 
     def enterEvent(self, ev) -> None:
@@ -397,6 +437,7 @@ class ColorDropdown(QWidget):
     color_changed = Signal(object)
     color_committed = Signal(object)
     gradient_changed = Signal(object)
+    none_toggled = Signal(bool)   # True = none/disabled, False = has paint
 
     def __init__(
         self,
@@ -405,31 +446,77 @@ class ColorDropdown(QWidget):
         show_gradient: bool = True,
         show_wheel: bool = False,
         default_tab: int = 0,
+        show_none_btn: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._show_gradient = show_gradient
         self._show_wheel = show_wheel
         self._default_tab = default_tab
+        self._is_none = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
 
         if label:
-            lbl = QLabel(label)
-            lbl.setStyleSheet(
-                "color: #999; font-size: 11px; font-weight: 600;"
-                "font-family: 'Segoe UI', 'Inter', sans-serif;"
-            )
-            layout.addWidget(lbl)
+            self._lbl = QLabel(label)
+            layout.addWidget(self._lbl)
 
         self._btn = _ColorButton()
         self._btn.clicked.connect(self._toggle_popup)
         layout.addWidget(self._btn)
 
+        # Optional ⊘ toggle button to disable fill/stroke
+        self._none_btn: QPushButton | None = None
+        if show_none_btn:
+            self._none_btn = QPushButton("⊘")
+            self._none_btn.setFixedSize(18, 18)
+            self._none_btn.setCheckable(True)
+            self._none_btn.setToolTip("Toggle none (disable fill/stroke)")
+            self._none_btn.setStyleSheet(
+                "QPushButton { font-size: 11px; padding: 0; border: 1px solid rgba(255,255,255,0.1);"
+                " border-radius: 3px; background: rgba(0,0,0,0.2); color: #888; }"
+                "QPushButton:checked { color: #e05555; border-color: #c04040;"
+                " background: rgba(200,40,40,0.2); }"
+                "QPushButton:hover { background: rgba(255,255,255,0.1); }"
+            )
+            self._none_btn.toggled.connect(self._on_none_toggled)
+            layout.addWidget(self._none_btn)
+
         self._popup: _ColorPopup | None = None
         self._color = Color.black()
+        self._paint: FillPaint | None = None  # track active paint (Solid or Gradient)
+
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
+
+    def _apply_theme(self, palette: dict) -> None:
+        if hasattr(self, '_lbl') and self._lbl:
+            self._lbl.setStyleSheet(
+                f"color: {palette['fg_dim']}; font-size: 11px; font-weight: 600;"
+                "font-family: 'Segoe UI', 'Inter', sans-serif;"
+            )
+        self._btn.update()
+
+    # ---- None toggle --------------------------------------------------------
+
+    def _on_none_toggled(self, checked: bool) -> None:
+        self._is_none = checked
+        self._btn.set_none_mode(checked)
+        self.none_toggled.emit(checked)
+
+    def set_none(self, none: bool) -> None:
+        """Programmatically set the none state (disables/re-enables the paint)."""
+        self._is_none = none
+        self._btn.set_none_mode(none)
+        if self._none_btn is not None:
+            self._none_btn.blockSignals(True)
+            self._none_btn.setChecked(none)
+            self._none_btn.blockSignals(False)
+
+    def is_none(self) -> bool:
+        return self._is_none
 
     # ---- Public API ---------------------------------------------------------
 
@@ -438,13 +525,16 @@ class ColorDropdown(QWidget):
 
     def set_color(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         if self._popup and self._popup.isVisible():
             self._popup.set_color(c)
 
     def set_paint(self, paint: FillPaint) -> None:
+        self._paint = paint
         if isinstance(paint, SolidPaint):
-            self.set_color(Color(*paint.color))
+            self._color = Color(*paint.color)
+            self._btn.set_color(self._color)
         elif isinstance(paint, GradientPaint):
             # Show gradient preview in button
             eff = paint.color_at(0.5)
@@ -464,14 +554,18 @@ class ColorDropdown(QWidget):
             )
             self._popup.color_changed.connect(self._on_live)
             self._popup.color_committed.connect(self._on_commit)
-            self._popup.gradient_changed.connect(self.gradient_changed.emit)
+            self._popup.gradient_changed.connect(self._on_gradient_from_popup)
 
     def _toggle_popup(self) -> None:
         self._ensure_popup()
         if self._popup.isVisible():
             self._popup.hide()
         else:
-            self._popup.set_color(self._color)
+            # Restore the full paint state (gradient or solid)
+            if isinstance(self._paint, GradientPaint):
+                self._popup.set_paint(self._paint)
+            else:
+                self._popup.set_color(self._color)
             # Position below the button
             pos = self._btn.mapToGlobal(QPoint(0, self._btn.height() + 4))
             self._popup.move(pos)
@@ -480,12 +574,37 @@ class ColorDropdown(QWidget):
             if self._default_tab:
                 self._popup.set_active_tab(self._default_tab)
 
+    def _on_gradient_from_popup(self, fill) -> None:
+        """Update button preview when gradient changes in the popup."""
+        # Convert core ColorFill to a GradientPaint for button preview
+        from ...core.color import LinearGradient, RadialGradient
+        from ...core.color_engine import ConicalGradient, DiamondGradient
+        if isinstance(fill, (LinearGradient, RadialGradient, ConicalGradient, DiamondGradient)):
+            from ...vector.style import GradientType as GT, GradientStop as VGS
+            gtype = GT.LINEAR
+            if isinstance(fill, RadialGradient):
+                gtype = GT.RADIAL
+            elif isinstance(fill, ConicalGradient):
+                gtype = GT.CONICAL
+            elif isinstance(fill, DiamondGradient):
+                gtype = GT.DIAMOND
+            stops = [
+                VGS(s.position, (s.color.r, s.color.g, s.color.b, s.color.a))
+                for s in fill.stops
+            ]
+            gpaint = GradientPaint(gradient_type=gtype, stops=stops)
+            self._paint = gpaint
+            self._btn.set_gradient(gpaint)
+        self.gradient_changed.emit(fill)
+
     def _on_live(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         self.color_changed.emit(c)
 
     def _on_commit(self, c: Color) -> None:
         self._color = c
+        self._paint = SolidPaint((c.r, c.g, c.b, c.a))
         self._btn.set_color(c)
         self.color_committed.emit(c)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from .base import CompactPropertyWidget
+from .brush_bar import BrushPropertiesBar
 from .crop_bar import CropPropertiesBar
 from .gradient_bar import GradientPropertiesBar
 from .move_bar import MovePropertiesBar
@@ -30,17 +31,18 @@ class PropertiesPanel(QWidget):
     crop_cancel = Signal()
     vector_property_changed = Signal(str, object)
     vector_action = Signal(str)
+    vector_boolean_hover = Signal(str)
+    vector_boolean_hover_end = Signal()
+    brush_property_changed = Signal(str, object)
 
     _PANEL_BG = "#2e2e2e"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            PropertiesPanel, PropertiesPanel > QWidget {{
-                background-color: {self._PANEL_BG};
-            }}
-            QLabel {{ background: transparent; }}
-        """)
+        
+        from ...theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        self._apply_theme(ThemeManager.instance().active_palette)
 
         self._main_layout = QHBoxLayout(self)
         self._main_layout.setContentsMargins(8, 0, 8, 0)
@@ -97,8 +99,18 @@ class PropertiesPanel(QWidget):
             lambda k, v: self.vector_property_changed.emit(k, v))
         self._vector_bar.action_requested.connect(
             lambda a: self.vector_action.emit(a))
+        self._vector_bar.boolean_hover.connect(
+            lambda op: self.vector_boolean_hover.emit(op))
+        self._vector_bar.boolean_hover_end.connect(
+            self.vector_boolean_hover_end.emit)
         self._vector_bar.hide()
         self._main_layout.addWidget(self._vector_bar)
+
+        self._brush_bar = BrushPropertiesBar()
+        self._brush_bar.property_changed.connect(
+            lambda k, v: self.brush_property_changed.emit(k, v))
+        self._brush_bar.hide()
+        self._main_layout.addWidget(self._brush_bar)
 
         self._main_layout.addStretch()
 
@@ -110,6 +122,7 @@ class PropertiesPanel(QWidget):
         self._sel_mode = False
         self._crop_mode = False
         self._vector_mode = False
+        self._brush_mode = False
 
         self.setFixedHeight(34)
 
@@ -121,6 +134,7 @@ class PropertiesPanel(QWidget):
         self._sel_bar.setVisible(False)
         self._crop_bar.setVisible(False)
         self._vector_bar.setVisible(False)
+        self._brush_bar.setVisible(False)
 
     def _clear_modes(self) -> None:
         self._text_mode = False
@@ -130,6 +144,7 @@ class PropertiesPanel(QWidget):
         self._sel_mode = False
         self._crop_mode = False
         self._vector_mode = False
+        self._brush_mode = False
 
     def set_text_mode(self, enabled: bool, tool=None) -> None:
         self._clear_modes()
@@ -182,14 +197,14 @@ class PropertiesPanel(QWidget):
         if enabled and tool is not None:
             self._crop_bar.sync_from_tool(tool)
 
-    def set_vector_mode(self, enabled: bool, tool=None, mode: str = "pen") -> None:
+    def set_vector_mode(self, enabled: bool, tool=None, mode: str = "pen", active_object=None) -> None:
         self._clear_modes()
         self._vector_mode = enabled
         self._props_container.setVisible(not enabled)
         self._hide_all_bars()
         self._vector_bar.setVisible(enabled)
         if enabled and tool is not None:
-            self._vector_bar.sync_from_tool(tool, mode)
+            self._vector_bar.sync_from_tool(tool, mode, active_object=active_object)
 
     @property
     def text_bar(self) -> TextPropertiesBar:
@@ -218,6 +233,19 @@ class PropertiesPanel(QWidget):
     @property
     def vector_bar(self) -> VectorPropertiesBar:
         return self._vector_bar
+
+    @property
+    def brush_bar(self) -> BrushPropertiesBar:
+        return self._brush_bar
+
+    def set_brush_mode(self, enabled: bool, tool=None) -> None:
+        self._clear_modes()
+        self._brush_mode = enabled
+        self._props_container.setVisible(not enabled)
+        self._hide_all_bars()
+        self._brush_bar.setVisible(enabled)
+        if enabled and tool is not None:
+            self._brush_bar.sync_from_tool(tool)
 
     def clear(self) -> None:
         while self._props_layout.count() > 0:
@@ -257,3 +285,11 @@ class PropertiesPanel(QWidget):
         w = self._widgets.get(key)
         if w:
             w.set_value(float(value))
+
+    def _apply_theme(self, palette: dict) -> None:
+        self.setStyleSheet(f"""
+            PropertiesPanel, PropertiesPanel > QWidget {{
+                background-color: {palette['bg3']};
+            }}
+            QLabel {{ background: transparent; }}
+        """)

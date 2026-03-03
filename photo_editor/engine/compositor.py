@@ -6,6 +6,8 @@ compositing — same optimisation strategy as RenderEngine.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from ..blending.blending_engine import BlendingEngine
@@ -15,12 +17,16 @@ from ..core.layer_stack import LayerStack
 from ..masks.mask_manager import MaskManager
 from ..styles.style_engine import StyleEngine
 
+if TYPE_CHECKING:
+    from .cache.image_pool import ImagePool
+
 
 class Compositor:
     """Composites a LayerStack into a flat RGBA image."""
 
-    def __init__(self) -> None:
+    def __init__(self, image_pool: ImagePool | None = None) -> None:
         self._blending = BlendingEngine()
+        self._pool = image_pool
 
     @staticmethod
     def _calc_filter_padding(adj_layers: list[Layer]) -> int:
@@ -126,7 +132,11 @@ class Compositor:
             # --- Standalone mask: attenuate canvas built so far --------
             if layer.layer_type == LayerType.MASK and layer.id in standalone_mask_ids:
                 gray = layer.get_mask_grayscale()
-                placed_gray = np.zeros((height, width), dtype=np.float32)
+                placed_gray = (
+                    self._pool.acquire((height, width), dtype=np.float32)
+                    if self._pool else np.zeros((height, width), dtype=np.float32)
+                )
+                placed_gray.fill(0)
                 lx, ly = layer.position
                 mh, mw = gray.shape[:2]
                 sx, sy = max(0, -lx), max(0, -ly)
@@ -141,6 +151,8 @@ class Compositor:
                 else:
                     # Global standalone mask — attenuate all channels
                     canvas *= placed_gray[..., np.newaxis]
+                if self._pool:
+                    self._pool.release(placed_gray)
                 continue
 
             if layer.layer_type == LayerType.GROUP:
@@ -160,7 +172,11 @@ class Compositor:
                 if group_mask is not None:
                     # group_img is canvas-sized; place the mask at the group's
                     # logical position (which is (0,0) for groups).
-                    placed_mask = np.zeros((height, width), dtype=np.float32)
+                    placed_mask = (
+                        self._pool.acquire((height, width), dtype=np.float32)
+                        if self._pool else np.zeros((height, width), dtype=np.float32)
+                    )
+                    placed_mask.fill(0)
                     gx, gy = layer.position
                     mh_, mw_ = group_mask.shape[:2]
                     sx_, sy_ = max(0, -gx), max(0, -gy)
@@ -170,6 +186,8 @@ class Compositor:
                     if rw_ > 0 and rh_ > 0:
                         placed_mask[dy_:dy_ + rh_, dx_:dx_ + rw_] = group_mask[sy_:sy_ + rh_, sx_:sx_ + rw_]
                     group_img[..., 3] *= placed_mask
+                    if self._pool:
+                        self._pool.release(placed_mask)
                 self._blending.blend_region_inplace(
                     canvas, group_img, (0, 0),
                     layer.blend_mode, layer.opacity,

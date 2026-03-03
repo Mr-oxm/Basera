@@ -12,6 +12,7 @@ tiles will be re-composited.
 import numpy as np
 
 from ..core.document import Document
+from .cache.image_pool import ImagePool
 from .compositor import Compositor
 from .tile_cache import TileCache
 
@@ -20,7 +21,8 @@ class RenderPipeline:
     """Full pipeline: layer compositing -> adjustment layers -> output."""
 
     def __init__(self) -> None:
-        self._compositor = Compositor()
+        self._pool = ImagePool(max_buffers_per_shape=4)
+        self._compositor = Compositor(image_pool=self._pool)
         self._tile_cache = TileCache(tile_size=256)
         self._last_width = 0
         self._last_height = 0

@@ -25,6 +25,12 @@ class ViewController:
         a["toggle_grid"].triggered.connect(self.on_toggle_grid)
         a["toggle_rulers"].triggered.connect(self.on_toggle_rulers)
         a["toggle_guides"].triggered.connect(self.on_toggle_guides)
+        
+        from ..theme import THEMES
+        for key in THEMES.keys():
+            action_key = f"theme_{key.lower().replace(' ', '_')}"
+            if action_key in a:
+                a[action_key].triggered.connect(lambda _, k=key: self.on_set_theme(k))
 
         # Props panel zoom bar
         mw._props_panel.zoom_action.connect(self.on_zoom_action)
@@ -111,6 +117,13 @@ class ViewController:
         mw._canvas.set_guides(mw._guides if mw._show_guides else [])
         state = "on" if mw._show_guides else "off"
         mw.statusBar().showMessage(f"Guides {state}", 2000)
+
+    def on_set_theme(self, theme_name: str) -> None:
+        mw = self._mw
+        from ..theme import ThemeManager, THEMES
+        if theme_name in THEMES:
+            ThemeManager.instance().set_theme(theme_name)
+            mw.statusBar().showMessage(f"Theme set to {theme_name}", 2000)
 
     def on_guide_created(self, guide) -> None:
         mw = self._mw

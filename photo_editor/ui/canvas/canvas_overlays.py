@@ -371,12 +371,7 @@ class CanvasOverlays:
         doc = c._doc_ref
         if doc is None or c._doc_w == 0 or c._doc_h == 0:
             return
-        layer = doc.layers.active_layer
-        if layer is None:
-            return
-        vl = getattr(layer, "_vector_data", None)
-        if vl is None:
-            return
+            
         try:
             from ...vector.path import SegmentType, HandleMode
         except ImportError:
@@ -387,10 +382,7 @@ class CanvasOverlays:
 
         sx = dr.width() / c._doc_w
         sy = dr.height() / c._doc_h
-
-        def _to_screen(dx: float, dy: float) -> QPointF:
-            return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
-
+        
         accent = QColor(100, 180, 255)
         accent_dim = QColor(100, 180, 255, 100)
         white = QColor(255, 255, 255)
@@ -408,78 +400,220 @@ class CanvasOverlays:
         is_node_tool = c._current_tool_type == ToolType.NODE
         show_nodes = c._current_tool_type in (ToolType.PEN, ToolType.NODE)
 
-        for obj in vl.objects:
-            if not obj.visible:
+        selected_indices = doc.layers.selected_indices
+        num_layers = len(doc.layers.layers)
+        shape_layers = []
+        for idx in selected_indices:
+            if 0 <= idx < num_layers:
+                l = doc.layers.layers[idx]
+                if getattr(l, "_vector_data", None) is not None:
+                    shape_layers.append(l)
+
+        active_layer = doc.layers.active_layer
+        if not shape_layers and active_layer and getattr(active_layer, "_vector_data", None) is not None:
+            shape_layers.append(active_layer)
+
+        if not shape_layers:
+            p.restore()
+            return
+            
+        def _get_to_screen_func(layer, dr, sx, sy):
+            nd_angle = layer.transform_angle
+            has_nd_rotation = (
+                nd_angle != 0.0
+                and getattr(layer, "_source_pixels", None) is not None
+            )
+
+            _live_dx: float = 0.0
+            _live_dy: float = 0.0
+            _live_sx: float = 1.0
+            _live_sy: float = 1.0
+            _live_old_cx: float = 0.0
+            _live_old_cy: float = 0.0
+            _live_new_cx: float = 0.0
+            _live_new_cy: float = 0.0
+            _apply_live_scale: bool = False
+
+            if c._current_tool_type is not None:
+                from ...core.enums import ToolType as _TT
+                if c._current_tool_type == _TT.MOVE and c._tool_manager_ref is not None:
+                    from ...tools.move.move_tool import MoveTool as _MT
+                    from ...tools.move._enums import _Mode as _MMode
+                    _mt = c._tool_manager_ref.active_tool
+                    if (
+                        isinstance(_mt, _MT)
+                        and _mt._dragging
+                        and layer.layer_type.name == "SHAPE"
+                        and (layer is getattr(_mt, "_active_layer", None) or layer in getattr(_mt, "_multi_layers", []))
+                    ):
+                        is_multi = layer in getattr(_mt, "_multi_layers", [])
+                        if is_multi:
+                            # Direct affine mapping handling multi-selection
+                            from ...vector.geometry import AffineTransform
+                            import math as _math
+                            
+                            _multi_positions = getattr(_mt, "_multi_positions", {})
+                            _multi_dims = getattr(_mt, "_multi_dims", {})
+                            _base_sx = getattr(_mt, "_multi_base_sx", {}).get(layer.id, 1.0)
+                            _base_sy = getattr(_mt, "_multi_base_sy", {}).get(layer.id, 1.0)
+                            _base_angle = getattr(_mt, "_multi_base_angle", {}).get(layer.id, 0.0)
+                            
+                            _ox, _oy = _multi_positions.get(layer.id, layer.position)
+                            _ow, _oh = _multi_dims.get(layer.id, (layer.width, layer.height))
+                            
+                            _orig_cx = _ox + _ow / 2.0
+                            _orig_cy = _oy + _oh / 2.0
+                            _new_cx = layer.position[0] + layer.width / 2.0
+                            _new_cy = layer.position[1] + layer.height / 2.0
+                            
+                            xf = AffineTransform.translation(_new_cx, _new_cy)
+                            angle_deg = layer.transform_angle - _base_angle
+                            if angle_deg != 0.0:
+                                xf = xf.rotate(-_math.radians(angle_deg))
+                                
+                            scale_x = layer.transform_scale_x / max(abs(_base_sx), 1e-6)
+                            scale_y = layer.transform_scale_y / max(abs(_base_sy), 1e-6)
+                            if _base_sx < 0: scale_x = -scale_x
+                            if _base_sy < 0: scale_y = -scale_y
+                            if scale_x != 1.0 or scale_y != 1.0:
+                                xf = xf.scale(scale_x, scale_y)
+                                
+                            xf = xf.translate(-_orig_cx, -_orig_cy)
+                            
+                            def f_multi(dx: float, dy: float) -> QPointF:
+                                rx = xf.a * dx + xf.b * dy + xf.tx
+                                ry = xf.c * dx + xf.d * dy + xf.ty
+                                return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                            return f_multi
+
+                        # Single layer handling
+                        if _mt._mode == _MMode.MOVE:
+                            _ox, _oy = getattr(_mt, "_orig_position", layer.position)
+                            _live_dx = layer.position[0] - _ox
+                            _live_dy = layer.position[1] - _oy
+                        elif _mt._mode == _MMode.RESIZE:
+                            _live_old_cx, _live_old_cy = getattr(_mt, "_orig_center", (0, 0))
+                            _ow = getattr(_mt, "_orig_width", layer.width)
+                            _oh = getattr(_mt, "_orig_height", layer.height)
+                            _live_sx = layer.width / max(_ow, 1.0)
+                            _live_sy = layer.height / max(_oh, 1.0)
+                            _live_new_cx = layer.position[0] + layer.width / 2.0
+                            _live_new_cy = layer.position[1] + layer.height / 2.0
+                            _apply_live_scale = True
+
+            if has_nd_rotation:
+                import math as _math
+                _rad = _math.radians(nd_angle)
+                _cos_a = _math.cos(_rad)
+                _sin_a = _math.sin(_rad)
+                _rcx = layer.position[0] + layer.width / 2.0
+                _rcy = layer.position[1] + layer.height / 2.0
+
+                def f(dx: float, dy: float) -> QPointF:
+                    rx = _rcx + _cos_a * (dx - _rcx) + _sin_a * (dy - _rcy)
+                    ry = _rcy - _sin_a * (dx - _rcx) + _cos_a * (dy - _rcy)
+                    return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                return f
+            elif _apply_live_scale:
+                def f(dx: float, dy: float) -> QPointF:
+                    lx = dx - _live_old_cx
+                    ly = dy - _live_old_cy
+                    lx *= _live_sx
+                    ly *= _live_sy
+                    rx = lx + _live_new_cx
+                    ry = ly + _live_new_cy
+                    return QPointF(dr.left() + rx * sx, dr.top() + ry * sy)
+                return f
+            elif _live_dx != 0.0 or _live_dy != 0.0:
+                def f(dx: float, dy: float) -> QPointF:
+                    return QPointF(dr.left() + (dx + _live_dx) * sx,
+                                   dr.top() + (dy + _live_dy) * sy)
+                return f
+            else:
+                def f(dx: float, dy: float) -> QPointF:
+                    return QPointF(dr.left() + dx * sx, dr.top() + dy * sy)
+                return f
+
+        for layer in shape_layers:
+            vl = getattr(layer, "_vector_data", None)
+            if not vl:
                 continue
-            is_obj_selected = obj.selected
-            path = obj.transformed_path()
+                
+            _to_screen = _get_to_screen_func(layer, dr, sx, sy)
 
-            for sp in path.sub_paths:
-                if not sp.nodes:
+            for obj in vl.objects:
+                if not obj.visible:
                     continue
+                is_obj_selected = obj.selected
+                path = obj.transformed_path()
 
-                pp = QPainterPath()
-                origin = sp.nodes[0].position
-                pp.moveTo(_to_screen(origin.x, origin.y))
-                for seg in sp.segments:
-                    if seg.seg_type == SegmentType.LINE:
-                        pp.lineTo(_to_screen(seg.end.x, seg.end.y))
-                    elif seg.seg_type == SegmentType.CUBIC:
-                        pp.cubicTo(
-                            _to_screen(seg.cp1.x, seg.cp1.y),
-                            _to_screen(seg.cp2.x, seg.cp2.y),
-                            _to_screen(seg.end.x, seg.end.y),
-                        )
-                    elif seg.seg_type == SegmentType.CLOSE:
-                        pp.closeSubpath()
-                p.setPen(path_pen_sel if is_obj_selected else path_pen)
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawPath(pp)
+                for sp in path.sub_paths:
+                    if not sp.nodes:
+                        continue
 
-                if show_nodes and (is_obj_selected or is_pen_tool):
-                    for node in sp.nodes:
-                        np_ = _to_screen(node.position.x, node.position.y)
-                        node_sel = getattr(node, "selected", False)
+                    pp = QPainterPath()
+                    origin = sp.nodes[0].position
+                    pp.moveTo(_to_screen(origin.x, origin.y))
+                    for seg in sp.segments:
+                        if seg.seg_type == SegmentType.LINE:
+                            pp.lineTo(_to_screen(seg.end.x, seg.end.y))
+                        elif seg.seg_type == SegmentType.CUBIC:
+                            pp.cubicTo(
+                                _to_screen(seg.cp1.x, seg.cp1.y),
+                                _to_screen(seg.cp2.x, seg.cp2.y),
+                                _to_screen(seg.end.x, seg.end.y),
+                            )
+                        elif seg.seg_type == SegmentType.CLOSE:
+                            pp.closeSubpath()
+                    p.setPen(path_pen_sel if is_obj_selected else path_pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawPath(pp)
 
-                        if node_sel:
-                            if node.in_handle and not node.in_handle.approx_eq(node.position):
-                                hp = _to_screen(node.in_handle.x, node.in_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
-                            if node.out_handle and not node.out_handle.approx_eq(node.position):
-                                hp = _to_screen(node.out_handle.x, node.out_handle.y)
-                                p.setPen(handle_pen)
-                                p.drawLine(np_, hp)
-                                p.setPen(QPen(accent, 0.8))
-                                p.setBrush(QColor(100, 180, 255, 150))
-                                p.drawEllipse(hp, 3, 3)
+                    if show_nodes and (is_obj_selected or is_pen_tool):
+                        for node in sp.nodes:
+                            np_ = _to_screen(node.position.x, node.position.y)
+                            node_sel = getattr(node, "selected", False)
 
-                        p.setPen(QPen(accent, 1.2))
-                        mode = getattr(node, "mode", None)
-                        if node_sel:
-                            p.setBrush(accent)
-                        else:
-                            p.setBrush(white)
+                            if node_sel:
+                                if node.in_handle and not node.in_handle.approx_eq(node.position):
+                                    hp = _to_screen(node.in_handle.x, node.in_handle.y)
+                                    p.setPen(handle_pen)
+                                    p.drawLine(np_, hp)
+                                    p.setPen(QPen(accent, 0.8))
+                                    p.setBrush(QColor(100, 180, 255, 150))
+                                    p.drawEllipse(hp, 3, 3)
+                                if node.out_handle and not node.out_handle.approx_eq(node.position):
+                                    hp = _to_screen(node.out_handle.x, node.out_handle.y)
+                                    p.setPen(handle_pen)
+                                    p.drawLine(np_, hp)
+                                    p.setPen(QPen(accent, 0.8))
+                                    p.setBrush(QColor(100, 180, 255, 150))
+                                    p.drawEllipse(hp, 3, 3)
 
-                        if mode == HandleMode.SHARP:
-                            p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
-                        elif mode == HandleMode.SMOOTH:
-                            p.drawEllipse(np_, 3.5, 3.5)
-                        elif mode == HandleMode.SYMMETRIC:
-                            diamond = QPainterPath()
-                            diamond.moveTo(np_.x(), np_.y() - 4)
-                            diamond.lineTo(np_.x() + 4, np_.y())
-                            diamond.lineTo(np_.x(), np_.y() + 4)
-                            diamond.lineTo(np_.x() - 4, np_.y())
-                            diamond.closeSubpath()
-                            p.drawPath(diamond)
-                        else:
-                            p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
+                            p.setPen(QPen(accent, 1.2))
+                            mode = getattr(node, "mode", None)
+                            if node_sel:
+                                p.setBrush(accent)
+                            else:
+                                p.setBrush(white)
 
-        if is_pen_tool and c._tool_manager_ref is not None:
+                            if mode == HandleMode.SHARP:
+                                p.drawRect(QRectF(np_.x() - 3.5, np_.y() - 3.5, 7, 7))
+                            elif mode == HandleMode.SMOOTH:
+                                p.drawEllipse(np_, 3.5, 3.5)
+                            elif mode == HandleMode.SYMMETRIC:
+                                diamond = QPainterPath()
+                                diamond.moveTo(np_.x(), np_.y() - 4)
+                                diamond.lineTo(np_.x() + 4, np_.y())
+                                diamond.lineTo(np_.x(), np_.y() + 4)
+                                diamond.lineTo(np_.x() - 4, np_.y())
+                                diamond.closeSubpath()
+                                p.drawPath(diamond)
+                            else:
+                                p.drawRect(QRectF(np_.x() - 3, np_.y() - 3, 6, 6))
+
+        if is_pen_tool and c._tool_manager_ref is not None and active_layer:
+            _to_screen = _get_to_screen_func(active_layer, dr, sx, sy)
             from ...vector.pen_tool import PenTool
             tool = c._tool_manager_ref.active_tool
             if isinstance(tool, PenTool) and tool.is_drawing and tool.preview_point:
@@ -508,7 +642,8 @@ class CanvasOverlays:
                             p.setBrush(Qt.BrushStyle.NoBrush)
                             p.drawEllipse(first_screen, 6, 6)
 
-        if is_node_tool and c._tool_manager_ref is not None:
+        if is_node_tool and c._tool_manager_ref is not None and active_layer:
+            _to_screen = _get_to_screen_func(active_layer, dr, sx, sy)
             from ...vector.node_tool import NodeTool
             tool = c._tool_manager_ref.active_tool
             if isinstance(tool, NodeTool):
@@ -522,6 +657,23 @@ class CanvasOverlays:
                     p.setPen(marquee_pen)
                     p.setBrush(QColor(100, 180, 255, 30))
                     p.drawRect(QRectF(ss, se).normalized())
+
+                # Node-add hover indicator (plus sign on the segment)
+                hover_pt = getattr(tool, "_hover_seg_pos", None)
+                if hover_pt is not None:
+                    hp = _to_screen(hover_pt.x, hover_pt.y)
+                    # Outer ring
+                    p.setPen(QPen(accent, 1.5))
+                    p.setPen(QPen(accent, 1.5))
+                    p.setBrush(white)
+                    p.drawEllipse(hp, 5, 5)
+                    # Small plus sign inside the circle
+                    p.setPen(QPen(accent, 1.4))
+                    cross = 2.8
+                    p.drawLine(QPointF(hp.x() - cross, hp.y()),
+                               QPointF(hp.x() + cross, hp.y()))
+                    p.drawLine(QPointF(hp.x(), hp.y() - cross),
+                               QPointF(hp.x(), hp.y() + cross))
 
         p.restore()
 
@@ -642,4 +794,174 @@ class CanvasOverlays:
         p.setBrush(QColor(60, 130, 220, 80))
         for rx, ry, rw, rh in c._text_selection_rects:
             p.drawRect(QRectF(offset_x + rx * sx, offset_y + ry * sy, rw * sx, rh * sy))
+        p.restore()
+
+    # ---- Boolean preview overlay ------------------------------------------
+
+    def draw_boolean_preview(self, p: QPainter, dr: QRectF) -> None:
+        """Draw semi-transparent preview of a hovered boolean operation.
+
+        The canvas stores the preview state in:
+        * ``_bool_preview_path``  — ``VectorPath`` result of the operation
+        * ``_bool_source_ids``    — set of layer IDs to outline in red dashes
+        """
+        c = self._canvas
+        preview_path = getattr(c, "_bool_preview_path", None)
+        source_ids = getattr(c, "_bool_source_ids", None)
+        if preview_path is None or c._doc_w == 0 or c._doc_h == 0:
+            return
+
+        sx = dr.width() / c._doc_w
+        sy = dr.height() / c._doc_h
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Draw the result shape as blue semi-transparent fill
+        from ...vector.path import SegmentType
+        for sp in preview_path.sub_paths:
+            if not sp.nodes:
+                continue
+            pp = QPainterPath()
+            origin = sp.nodes[0].position
+            pp.moveTo(QPointF(dr.left() + origin.x * sx, dr.top() + origin.y * sy))
+            for seg in sp.segments:
+                ex = dr.left() + seg.end.x * sx
+                ey = dr.top() + seg.end.y * sy
+                if seg.seg_type == SegmentType.LINE:
+                    pp.lineTo(QPointF(ex, ey))
+                elif seg.seg_type == SegmentType.CUBIC:
+                    c1x = dr.left() + seg.cp1.x * sx
+                    c1y = dr.top() + seg.cp1.y * sy
+                    c2x = dr.left() + seg.cp2.x * sx
+                    c2y = dr.top() + seg.cp2.y * sy
+                    pp.cubicTo(QPointF(c1x, c1y), QPointF(c2x, c2y), QPointF(ex, ey))
+                elif seg.seg_type == SegmentType.CLOSE:
+                    pp.closeSubpath()
+            p.setPen(QPen(QColor(60, 130, 220, 140), 1.5))
+            p.setBrush(QColor(60, 130, 220, 50))
+            p.drawPath(pp)
+
+        # Draw red dashed outlines for source layers that will be removed
+        if source_ids:
+            doc = c._doc_ref
+            if doc:
+                dash_pen = QPen(QColor(220, 60, 60, 180), 1.5, Qt.PenStyle.DashLine)
+                dash_pen.setCosmetic(True)
+                p.setPen(dash_pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                for layer in doc.layers.layers:
+                    if layer.id not in source_ids:
+                        continue
+                    vl = getattr(layer, "_vector_data", None)
+                    if vl is None:
+                        continue
+                    for obj in vl.objects:
+                        path = obj.transformed_path()
+                        for sp2 in path.sub_paths:
+                            if not sp2.nodes:
+                                continue
+                            pp2 = QPainterPath()
+                            o2 = sp2.nodes[0].position
+                            pp2.moveTo(QPointF(dr.left() + o2.x * sx,
+                                               dr.top() + o2.y * sy))
+                            for seg2 in sp2.segments:
+                                ex2 = dr.left() + seg2.end.x * sx
+                                ey2 = dr.top() + seg2.end.y * sy
+                                if seg2.seg_type == SegmentType.LINE:
+                                    pp2.lineTo(QPointF(ex2, ey2))
+                                elif seg2.seg_type == SegmentType.CUBIC:
+                                    c1 = QPointF(dr.left() + seg2.cp1.x * sx,
+                                                 dr.top() + seg2.cp1.y * sy)
+                                    c2 = QPointF(dr.left() + seg2.cp2.x * sx,
+                                                 dr.top() + seg2.cp2.y * sy)
+                                    pp2.cubicTo(c1, c2, QPointF(ex2, ey2))
+                                elif seg2.seg_type == SegmentType.CLOSE:
+                                    pp2.closeSubpath()
+                            p.drawPath(pp2)
+        p.restore()
+
+    # ---- Pick-segments overlay --------------------------------------------
+
+    def draw_pick_segments(self, p: QPainter, dr: QRectF) -> None:
+        """Draw pick-segments mode overlay: segments, hover glow, chip."""
+        c = self._canvas
+        pick_state = getattr(c, "_pick_segments_state", None)
+        if pick_state is None or not pick_state.active:
+            return
+        if c._doc_w == 0 or c._doc_h == 0:
+            return
+
+        sx = dr.width() / c._doc_w
+        sy = dr.height() / c._doc_h
+
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        for seg in pick_state.segments:
+            if len(seg.points) < 2:
+                continue
+
+            is_hovered = seg.id == pick_state.hovered_id
+
+            if seg.included:
+                r, g, b, a = seg.color
+                pen_w = 3.5 if is_hovered else 2.0
+                pen = QPen(QColor(r, g, b, a), pen_w)
+            else:
+                pen = QPen(QColor(120, 120, 120, 150), 1.5, Qt.PenStyle.DashLine)
+                if is_hovered:
+                    pen.setWidthF(2.5)
+
+            pen.setCosmetic(True)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
+            pp = QPainterPath()
+            p0 = seg.points[0]
+            pp.moveTo(QPointF(dr.left() + p0.x * sx, dr.top() + p0.y * sy))
+            for pt in seg.points[1:]:
+                pp.lineTo(QPointF(dr.left() + pt.x * sx, dr.top() + pt.y * sy))
+            p.drawPath(pp)
+
+        # Live result preview: build included segments into a filled shape
+        included = [s for s in pick_state.segments if s.included]
+        if included:
+            preview_pen = QPen(QColor(60, 180, 120, 100), 1.0)
+            preview_pen.setCosmetic(True)
+            p.setPen(preview_pen)
+            p.setBrush(QColor(60, 180, 120, 30))
+            for seg in included:
+                if len(seg.points) < 2:
+                    continue
+                pp = QPainterPath()
+                p0 = seg.points[0]
+                pp.moveTo(QPointF(dr.left() + p0.x * sx, dr.top() + p0.y * sy))
+                for pt in seg.points[1:]:
+                    pp.lineTo(QPointF(dr.left() + pt.x * sx, dr.top() + pt.y * sy))
+                p.drawPath(pp)
+
+        # Status chip
+        closed_n = pick_state.closed_count()
+        has_open = pick_state.has_open()
+        if closed_n > 0 and not has_open:
+            chip_text = f"Ready \u2014 {closed_n} shape(s) found"
+            chip_color = QColor(40, 160, 80, 200)
+        else:
+            chip_text = "Open path \u2014 keep selecting"
+            chip_color = QColor(200, 140, 40, 200)
+
+        font = p.font()
+        font.setPixelSize(11)
+        p.setFont(font)
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(chip_text) + 16
+        th = fm.height() + 8
+        chip_rect = QRectF(dr.left() + 10, dr.top() + 10, tw, th)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(chip_color)
+        p.drawRoundedRect(chip_rect, 4, 4)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, chip_text)
+
         p.restore()

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox
 
+from ..commands.base import Command
+from ..core.brush_engine import BrushManager
 from ..core.document import Document
 from ..core.enums import BlendMode, ToolType
 from ..engine.render_pipeline import RenderPipeline
+from ..engine.renderer import RenderScheduler
 from .canvas_view import CanvasView
 from .file_tab_bar import FileTabBar
 from .menus import EditorMenuBar
+from .panels.brushes_panel import BrushesPanel
 from .panels.color_panel import ColorPanel
 from .panels.history_panel import HistoryPanel
 from .panels.layers_panel import LayersPanel
@@ -19,7 +25,7 @@ from .panels.transform_panel import TransformPanel
 from .controllers import DocumentController
 from .shortcut_manager import ShortcutManager
 from .status_bar import EditorStatusBar
-from .theme import DARK_STYLESHEET
+from .theme import ThemeManager, THEMES
 from .tool_manager import ToolManager
 from .toolbar import EditorToolbar
 
@@ -33,12 +39,30 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Photo Editor")
         self.resize(1440, 900)
-        self.setStyleSheet(DARK_STYLESHEET)
+        
+        ThemeManager.instance().theme_changed.connect(
+            lambda _: self.setStyleSheet(THEMES[ThemeManager.instance().active_theme_name])
+        )
+        self.setStyleSheet(THEMES["Dark"])
         self.setAcceptDrops(True)
 
         self._doc: Document | None = None
         self._pipeline = RenderPipeline()
+        self._render_scheduler = RenderScheduler(
+            self._pipeline,
+            interval_ms=33,
+            preview_max_size=0,  # Full res for now; set to 2048 when coord scaling is ready
+        )
         self._tools = ToolManager()
+
+        # Brush manager — load ABR files from assets
+        self._brush_mgr = BrushManager.instance()
+        import os
+        _assets_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assets", "brushes"
+        )
+        self._brush_mgr.load_brushes_dir(_assets_dir)
 
         # Multi-document tracking: list of (Document, str|None) pairs
         self._open_docs: list[tuple[Document, str | None]] = []
@@ -46,12 +70,7 @@ class MainWindow(QMainWindow):
         # Blend-mode hover preview state
         self._blend_preview_original: BlendMode | None = None
 
-        # Render throttle — max ~30 fps during drag
-        self._render_timer = QTimer(self)
-        self._render_timer.setInterval(33)
-        self._render_timer.setSingleShot(True)
-        self._render_timer.timeout.connect(self._do_deferred_render)
-        self._render_pending = False
+        # Render throttle — handled by RenderScheduler (~30 fps, off UI thread)
         # Deferred panel refresh — coalesced to avoid rebuilding panels
         # dozens of times per second during interactive operations.
         self._panel_refresh_timer = QTimer(self)
@@ -114,7 +133,15 @@ class MainWindow(QMainWindow):
         self._wire_panels()
         self._wire_canvas()
         self._wire_file_tabs()
+        self._render_scheduler.render_ready.connect(self._on_render_ready)
+        self._render_scheduler.render_error.connect(self._on_render_error)
         # Shortcuts wired by ShortcutController
+
+        # Wire brush system
+        self._brushes_panel.set_brush_manager(self._brush_mgr)
+        self._props_panel.brush_bar.set_brush_manager(self._brush_mgr)
+        self._brush_mgr.brush_changed.connect(self._on_brush_preset_changed)
+
         self._document_ctrl.new_document(1920, 1080)
 
     # ---- UI assembly --------------------------------------------------------
@@ -132,10 +159,10 @@ class MainWindow(QMainWindow):
         self._props_toolbar.setMovable(False)
         self._props_toolbar.setFloatable(False)
         self._props_toolbar.addWidget(self._props_panel)
-        self._props_toolbar.setStyleSheet(
-            "QToolBar { background: #333333; border: none; border-bottom: 1px solid #444; spacing: 0; padding: 0; }"
-            "QToolBar > QWidget { background: #333333; }"
-        )
+        from .theme import ThemeManager
+        ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
+        self._on_theme_changed(ThemeManager.instance().active_palette)
+        
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._props_toolbar)
 
         self._toolbar = EditorToolbar(self)
@@ -179,18 +206,39 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         
         # Dock panels on the sides
+        # Ensure all dock tabs are at the top, not bottom
+        from PySide6.QtWidgets import QTabWidget
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
+        
+        # Force single tabs to be visible and allow grouped dragging by their tabs
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks |
+            QMainWindow.DockOption.AllowNestedDocks |
+            QMainWindow.DockOption.AllowTabbedDocks |
+            QMainWindow.DockOption.GroupedDragging |
+            QMainWindow.DockOption.ForceTabbedDocks
+        )
+
         self._layers_panel = LayersPanel()
         self._layers_dock = self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
         self._history_panel = HistoryPanel()
-        self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
+        self._history_dock = self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
+        
         self._color_panel = ColorPanel()
         self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._color_dock)
-        self._layers_dock.raise_()
         
         self._transform_panel = TransformPanel()
         self._transform_dock = self._dock(self._transform_panel, "Transform", Qt.DockWidgetArea.RightDockWidgetArea)
         self.tabifyDockWidget(self._layers_dock, self._transform_dock)
+
+        self._layers_dock.raise_()
+
+        # Brushes panel (docked right, tabbed with history)
+        self._brushes_panel = BrushesPanel()
+        self._brushes_dock = self._dock(self._brushes_panel, "Brushes", Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self._history_dock, self._brushes_dock)
+        self._history_dock.raise_()
 
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
@@ -198,6 +246,9 @@ class MainWindow(QMainWindow):
     def _dock(self, widget, title: str, area) -> QDockWidget:
         d = QDockWidget(title, self)
         d.setWidget(widget)
+        # Remove the panel header (title bar) since it's already in the tab
+        from PySide6.QtWidgets import QWidget
+        d.setTitleBarWidget(QWidget())
         self.addDockWidget(area, d)
         return d
 
@@ -255,49 +306,105 @@ class MainWindow(QMainWindow):
         self._canvas.set_document_ref(self._doc)
         if invalidate:
             self._pipeline.invalidate(layer_id)
-        result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result, force=invalidate)
-        self._layers_panel.refresh(self._doc)
-        self._history_panel.refresh(self._doc.history)
-        self._transform_panel.refresh(self._doc)
-        self._selection_ctrl.update_selection_overlay()
-        self._transform_ctrl.update_transform_box()
-        self._view_ctrl.update_rulers()
+            self._render_scheduler.enqueue_render(self._doc, full_refresh=True)
+        else:
+            # Cache hit — sync path is fast
+            result = self._pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(result, force=False)
+            self._layers_panel.refresh(self._doc)
+            self._history_panel.refresh(self._doc.history)
+            self._transform_panel.refresh(self._doc)
+            self._selection_ctrl.update_selection_overlay()
+            self._transform_ctrl.update_transform_box()
+            self._view_ctrl.update_rulers()
 
     def _refresh_canvas_only(self) -> None:
-        """Re-render and update canvas only (skip panel updates)."""
+        """Re-render and update canvas only (skip panel updates). Async."""
         if not self._doc:
             return
         active = self._doc.layers.active_layer
         self._pipeline.invalidate(active.id if active else None)
-        result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result, force=True)
+        self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+
+    def _refresh_lightweight(self) -> None:
+        """Re-render canvas + lightweight panel sync (no thumbnails). Async."""
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        self._pipeline.invalidate(active.id if active else None)
+        self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+
+    def _schedule_render(self) -> None:
+        """Request a deferred render (throttled ~30fps, off UI thread)."""
+        if not self._doc:
+            return
+        active = self._doc.layers.active_layer
+        self._pipeline.invalidate(active.id if active else None)
+        self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+
+    def _on_render_ready(self, rgba, _gen_id: int, full_refresh: bool) -> None:
+        """Render worker completed — update canvas and optionally panels."""
+        if not self._doc:
+            return
+        self._canvas.set_image(rgba, force=True)
         self._selection_ctrl.update_selection_overlay()
         self._transform_ctrl.update_transform_box()
         self._transform_panel.refresh(self._doc)
         self._view_ctrl.update_rulers()
+        if full_refresh:
+            self._layers_panel.refresh(self._doc)
+            self._history_panel.refresh(self._doc.history)
 
-    def _refresh_lightweight(self) -> None:
-        """Re-render canvas + lightweight panel sync (no thumbnails)."""
+    def _on_render_error(self, message: str) -> None:
+        """Render worker failed — fallback to sync render."""
+        if self._doc:
+            result = self._pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(result, force=True)
+        self._status.showMessage(f"Render error: {message}", 3000)
+
+    def execute_command(self, command: Command):
+        """Execute a command and refresh. Decouples UI from engine.
+
+        Returns the result of command.execute() (e.g. bool for MergeDownCommand).
+        """
+        if not self._doc:
+            return None
+        result = command.execute(self._doc)
+        self._pipeline.invalidate()
+        self._refresh()
+        return result
+
+    def execute_command_async(
+        self,
+        command: Command,
+        on_success: Callable[[object], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+    ) -> None:
+        """Run a heavy command off the UI thread. Callbacks run on main thread."""
         if not self._doc:
             return
-        active = self._doc.layers.active_layer
-        self._pipeline.invalidate(active.id if active else None)
-        result = self._pipeline.execute_to_uint8(self._doc)
-        self._canvas.set_image(result, force=True)
-        self._layers_panel.refresh_controls_only(self._doc)
-        self._transform_ctrl.update_transform_box()
+        from PySide6.QtCore import QThreadPool
+        from ..utils.worker import Worker
 
-    def _schedule_render(self) -> None:
-        """Request a deferred render (throttled to ~30fps)."""
-        if not self._render_pending:
-            self._render_pending = True
-            self._render_timer.start()
+        doc = self._doc
+        pipeline = self._pipeline
 
-    def _do_deferred_render(self) -> None:
-        """Timer callback — perform the actual canvas render."""
-        self._render_pending = False
-        self._refresh_canvas_only()
+        def run() -> object:
+            return command.execute(doc)
+
+        def on_result(result: object) -> None:
+            if on_success:
+                on_success(result)
+            else:
+                self._pipeline.invalidate()
+                self._refresh()
+
+        def on_err(msg: str) -> None:
+            self._status.showMessage(f"Error: {msg}", 5000)
+            if on_error:
+                on_error(msg)
+
+        Worker.run_async(run, on_result=on_result, on_error=on_err)
 
     def _schedule_panel_refresh(self) -> None:
         """Request a deferred panel refresh (throttled to ~5fps)."""
@@ -346,3 +453,14 @@ class MainWindow(QMainWindow):
             "<p>Features include layers, masks, blending modes, "
             "filters, adjustments, and more.</p>",
         )
+
+    def _on_theme_changed(self, palette: dict) -> None:
+        self._props_toolbar.setStyleSheet(
+            f"QToolBar {{ background: {palette['bg3']}; border: none; border-bottom: 1px solid {palette['border']}; spacing: 0; padding: 0; }}"
+            f"QToolBar > QWidget {{ background: {palette['bg3']}; }}"
+        )
+
+    def _on_brush_preset_changed(self, preset) -> None:
+        """Apply the selected brush preset to the active brush-type tool."""
+        if preset is not None and hasattr(self, "_tool_ctrl"):
+            self._tool_ctrl.apply_brush_preset(preset)

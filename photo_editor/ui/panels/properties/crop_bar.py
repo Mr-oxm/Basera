@@ -93,8 +93,12 @@ class CropPropertiesBar(QWidget):
         self._apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply_btn.setStyleSheet(
             FLAT_BTN.format() + """
-            QPushButton { color: #88cc88; font-weight: bold; }
-            QPushButton:hover { color: #aaffaa; }
+            QPushButton { color: #a3d9a5; }
+            QPushButton:hover { 
+                background: rgba(136, 204, 136, 0.1); 
+                color: #c4f0c6; 
+                border: 1px solid rgba(136, 204, 136, 0.2); 
+            }
         """)
         self._apply_btn.clicked.connect(self.apply_requested.emit)
         layout.addWidget(self._apply_btn)
@@ -104,8 +108,12 @@ class CropPropertiesBar(QWidget):
         self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._cancel_btn.setStyleSheet(
             FLAT_BTN.format() + """
-            QPushButton { color: #cc8888; }
-            QPushButton:hover { color: #ffaaaa; }
+            QPushButton { color: #e59a9a; }
+            QPushButton:hover { 
+                background: rgba(204, 136, 136, 0.1); 
+                color: #ffbaba; 
+                border: 1px solid rgba(204, 136, 136, 0.2); 
+            }
         """)
         self._cancel_btn.clicked.connect(self.cancel_requested.emit)
         layout.addWidget(self._cancel_btn)

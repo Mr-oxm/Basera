@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from ...core.document import Document
 from ...core.enums import LayerType
 from ..dialogs.new_document import NewDocumentDialog
-from ...utils.image_io import load_image, save_image
+from ...utils.image_io import load_image
 
 _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
 
@@ -90,8 +90,8 @@ class DocumentController:
         )
         if path:
             img = load_image(path)
-            self._mw._doc.place_image(img, name=Path(path).stem)
-            self._mw._refresh()
+            from ...commands import PlaceImageCommand
+            self._mw.execute_command(PlaceImageCommand(img, name=Path(path).stem))
 
     def on_save(self) -> None:
         if self._mw._doc and self._mw._doc.file_path:
@@ -109,14 +109,28 @@ class DocumentController:
 
     def _save_to(self, path: str) -> None:
         mw = self._mw
-        if mw._doc:
-            save_image(mw._pipeline.execute(mw._doc), path)
+        if not mw._doc:
+            return
+        from ...commands import SaveDocumentCommand
+
+        def on_success(_result: object) -> None:
             mw._doc.mark_clean()
             mw.setWindowTitle(f"Photo Editor — {Path(path).name}")
             idx = mw._file_tabs.current_index()
             if 0 <= idx < len(mw._open_docs):
                 mw._open_docs[idx] = (mw._doc, path)
                 mw._file_tabs.set_tab_text(idx, Path(path).name)
+            mw._status.showMessage(f"Saved {Path(path).name}", 2000)
+
+        def on_error(msg: str) -> None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(mw, "Save Error", msg)
+
+        mw.execute_command_async(
+            SaveDocumentCommand(path, mw._pipeline),
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def on_import_svg(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

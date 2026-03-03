@@ -6,7 +6,8 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
-from .base import BORDER, ROW_HEIGHT, TEXT, THUMB_SIZE
+from .base import ROW_HEIGHT, THUMB_SIZE
+from photo_editor.ui.theme import ThemeManager
 from .icons import icon_eye, icon_lock, icon_mask, ico_adjustment, ico_filter, ico_mask_layer, ico_text
 
 
@@ -42,6 +43,7 @@ class LayerItemWidget(QWidget):
         self._orig_name = name
         self._edit: QLineEdit | None = None
         self._rename_done = False
+        palette = ThemeManager.instance().active_palette
 
         self.setStyleSheet("background: transparent;")
 
@@ -56,7 +58,7 @@ class LayerItemWidget(QWidget):
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
             self._arrow_btn.setStyleSheet(
-                f"font-size: 9px; padding: 0; color: {TEXT}; background: transparent;")
+                f"font-size: 9px; padding: 0; color: {palette['fg']}; background: transparent;")
             self._arrow_btn.setToolTip("Collapse" if not is_collapsed else "Expand")
             self._arrow_btn.clicked.connect(
                 lambda: self.collapse_clicked.emit(layer_id),
@@ -68,7 +70,7 @@ class LayerItemWidget(QWidget):
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
             self._arrow_btn.setStyleSheet(
-                f"font-size: 9px; padding: 0; color: {TEXT}; background: transparent;")
+                f"font-size: 9px; padding: 0; color: {palette['fg']}; background: transparent;")
             self._arrow_btn.setToolTip("Show masks" if masks_collapsed else "Hide masks")
             self._arrow_btn.clicked.connect(
                 lambda: self.collapse_clicked.emit(layer_id),
@@ -78,7 +80,7 @@ class LayerItemWidget(QWidget):
         self._thumb_label = QLabel()
         self._thumb_label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
         self._thumb_label.setStyleSheet(
-            f"border: 1px solid {BORDER}; background: transparent;")
+            f"border: 1px solid {palette['border']}; background: transparent;")
         if is_mask_layer:
             if thumbnail:
                 self._thumb_label.setPixmap(thumbnail)
@@ -100,7 +102,7 @@ class LayerItemWidget(QWidget):
 
         self._name_label = QLabel(name)
         self._name_label.setStyleSheet(
-            f"color: {TEXT}; background: transparent; padding: 0 2px;"
+            f"color: {palette['fg']}; background: transparent; padding: 0 2px;"
             + (" font-weight: bold;" if is_group else ""))
         layout.addWidget(self._name_label, 1)
 
