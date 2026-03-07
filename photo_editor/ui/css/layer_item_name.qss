@@ -1,3 +1,5 @@
 color: [[fg]];
 background: transparent;
-padding: 0 2px;[[weight]]
+padding: 0 4px;
+font-size: 11px;
+letter-spacing: 0.1px;[[weight]]

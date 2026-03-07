@@ -1,17 +1,17 @@
 QDialog {
-    background: [[bg1]];
+    background: [[surface_panel_alt]];
     color: [[fg]];
-    font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+    font-family: "Segoe UI Variable Text", "Aptos", "Inter", sans-serif;
     font-size: 12px;
 }
 QLabel {
     color: [[fg]];
 }
 QComboBox {
-    background: [[btn]];
+    background: [[input_bg]];
     color: [[fg]];
-    border: 1px solid [[border_light]];
-    border-radius: 3px;
+    border: 1px solid [[input_border]];
+    border-radius: 10px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -19,55 +19,56 @@ QComboBox::drop-down {
     border: none;
 }
 QComboBox QAbstractItemView {
-    background: [[bg2]];
+    background: [[popup_bg]];
     color: [[fg]];
-    selection-background-color: [[accent]];
-    border: 1px solid [[border_light]];
+    selection-background-color: [[accent_soft]];
+    border: 1px solid [[popup_border]];
+    border-radius: 10px;
 }
 QLineEdit {
     background: [[input_bg]];
     color: [[fg]];
-    border: 1px solid [[border_light]];
-    border-radius: 3px;
-    padding: 5px 10px;
+    border: 1px solid [[input_border]];
+    border-radius: 10px;
+    padding: 5px 8px;
     font-size: 12px;
 }
 QLineEdit:focus {
-    border-color: [[accent]];
+    border-color: [[outline_focus]];
 }
 QTreeWidget {
-    background: [[bg1_alt]];
+    background: [[surface_panel]];
     color: [[fg]];
-    border: 1px solid [[border]];
-    border-radius: 3px;
+    border: 1px solid [[outline_soft]];
+    border-radius: 12px;
     font-size: 12px;
     outline: none;
-    alternate-background-color: [[bg3]];
+    alternate-background-color: [[surface_card]];
 }
 QTreeWidget::item {
     padding: 4px 0px;
     border: none;
 }
 QHeaderView::section {
-    background: [[bg3]];
+    background: [[surface_card]];
     color: [[fg_dim]];
     border: none;
-    border-bottom: 1px solid [[border]];
+    border-bottom: 1px solid [[outline_soft]];
     padding: 6px 8px;
     font-weight: 600;
 }
 QPushButton {
-    background: [[btn]];
+    background: [[button_bg]];
     color: [[fg]];
-    border: 1px solid [[border_light]];
-    border-radius: 3px;
-    padding: 5px 12px;
+    border: 1px solid [[button_border]];
+    border-radius: 10px;
+    padding: 5px 10px;
     font-size: 12px;
 }
 QPushButton:hover {
-    background: [[hover]];
+    background: [[button_hover]];
 }
 QPushButton:pressed {
-    background: [[accent]];
-    color: [[fg_accent]];
+    background: [[button_pressed]];
+    color: [[fg]];
 }

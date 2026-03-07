@@ -1,13 +1,46 @@
 QMenuBar {
-    background-color: [[bg3]];
+    background: [[menu_bar_bg]];
     color: [[fg]];
-    border-bottom: 1px solid [[border]];
+    border: none;
+    border-bottom: 1px solid [[menu_bar_border]];
+    padding: 4px 7px 6px 7px;
 }
-QMenuBar::item:selected { background-color: [[hover]]; }
+
+QMenuBar::item {
+    padding: 5px 10px;
+    margin: 0 2px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+}
+
+QMenuBar::item:selected {
+    background: [[surface_hover]];
+    border-color: [[outline_soft]];
+}
+
 QMenu {
-    background-color: [[bg2]];
+    background: [[popup_bg]];
     color: [[fg]];
-    border: 1px solid [[border_light]];
+    border: 1px solid [[popup_border]];
+    border-radius: 12px;
+    padding: 6px;
 }
-QMenu::item:selected { background-color: [[accent]]; color: [[fg_accent]]; }
-QMenu::separator { height: 1px; background: [[border_light]]; margin: 4px 8px; }
+
+QMenu::item {
+    padding: 6px 12px;
+    margin: 2px 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+}
+
+QMenu::item:selected {
+    background: [[accent_soft]];
+    color: [[fg]];
+    border-color: [[accent_border]];
+}
+
+QMenu::separator {
+    height: 1px;
+    background: [[outline_soft]];
+    margin: 6px 10px;
+}

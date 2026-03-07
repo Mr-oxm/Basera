@@ -9,11 +9,34 @@ from pathlib import Path
 _CSS_DIR = Path(__file__).with_name("css")
 
 
+class QssTemplate(str):
+    """String template that can inject the active theme palette before formatting."""
+
+    def _with_active_palette(self) -> str:
+        try:
+            from .theme import ThemeManager
+
+            palette = ThemeManager.instance().active_palette
+        except Exception:
+            palette = None
+
+        qss = str(self)
+        if not palette:
+            return qss
+
+        for key, value in palette.items():
+            qss = qss.replace(f"[[{key}]]", str(value))
+        return qss
+
+    def format(self, /, *args: object, **kwargs: object) -> str:
+        return self._with_active_palette().format(*args, **kwargs)
+
+
 @lru_cache(maxsize=None)
 def load_qss_template(name: str) -> str:
     """Return the raw QSS template contents for *name*."""
     path = _CSS_DIR / name
-    return path.read_text(encoding="utf-8")
+    return QssTemplate(path.read_text(encoding="utf-8"))
 
 
 def render_qss(name: str, palette: dict | None = None, **tokens: object) -> str:

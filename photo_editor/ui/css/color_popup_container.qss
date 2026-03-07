@@ -1,5 +1,5 @@
 #popupContainer {
-  background: [[bg2]];
-  border: 1px solid [[border]];
-  border-radius: 8px;
+  background: [[popup_bg]];
+  border: 1px solid [[popup_border]];
+  border-radius: 16px;
 }

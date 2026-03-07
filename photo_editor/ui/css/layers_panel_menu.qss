@@ -1,8 +1,15 @@
 QMenu {
-    background: [[bg2]];
+    background: [[popup_bg]];
     color: [[fg]];
-    border: 1px solid [[border]];
-    padding: 4px 0;
+    border: 1px solid [[popup_border]];
+    border-radius: 14px;
+    padding: 8px;
 }
-QMenu::item { padding: 4px 20px; }
-QMenu::item:selected { background: [[accent]]; }
+QMenu::item {
+    padding: 8px 16px;
+    border-radius: 10px;
+}
+QMenu::item:selected {
+    background: [[accent_soft]];
+    color: [[fg]];
+}

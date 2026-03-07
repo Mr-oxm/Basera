@@ -1,3 +1,16 @@
-QToolBar { background: [[bg3]]; border: none; spacing: 0px; padding: 4px 0px; }
-QToolBar QWidget { background: transparent; }
-QToolBar::separator { background: [[border]]; height: 1px; margin: 4px 6px; }
+QToolBar {
+    background: [[toolbar_bg]];
+    border: none;
+    spacing: 2px;
+    padding: 5px 3px;
+}
+
+QToolBar QWidget {
+    background: transparent;
+}
+
+QToolBar::separator {
+    background: [[toolbar_separator]];
+    width: 1px;
+    margin: 4px 6px;
+}

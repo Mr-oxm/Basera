@@ -1,8 +1,10 @@
 QSpinBox {
-    background: [[bg1]];
+    background: [[input_bg]];
     color: [[fg]];
-    border: 1px solid [[border]];
-    border-radius: 3px;
-    padding: 2px 4px;
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 2px 5px;
     font-size: 11px;
+    min-height: 22px;
+    max-height: 22px;
 }

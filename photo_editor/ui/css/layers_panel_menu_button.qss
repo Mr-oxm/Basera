@@ -1,8 +1,9 @@
 QPushButton {
     background: transparent;
     border: none;
-    border-radius: 3px;
+    border-radius: 10px;
+    padding: 4px;
 }
 QPushButton:hover {
-    background: [[hover]];
+    background: [[surface_hover]];
 }

@@ -1,8 +1,9 @@
 [[selector]] {
     background-color: [[bg]];
     color: [[fg]];
-    font-family: 'Segoe UI', sans-serif;
+    font-family: "Segoe UI Variable Text", "Aptos", "Inter", sans-serif;
     font-size: [[font_size]]px;
+    border-radius: 14px;
 }
 [[selector]] QLabel {
     color: [[label_fg]];

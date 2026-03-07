@@ -2,23 +2,26 @@ QTabBar {
     background: transparent;
     border: none;
 }
+
 QTabBar::tab {
-    background: [[bg2]];
+    background: [[tab_idle_bg]];
     color: [[fg_dim]];
-    border: none;
-    padding: 6px 14px;
+    border: 1px solid [[tab_border]];
+    border-radius: 9px;
+    padding: 5px 11px;
     font-size: 11px;
     font-weight: 600;
-    font-family: 'Segoe UI', 'Inter', sans-serif;
-    border-bottom: 2px solid transparent;
-    margin-right: 1px;
+    font-family: "Segoe UI Variable Text", "Aptos", "Inter", sans-serif;
+    margin-right: 4px;
 }
+
 QTabBar::tab:hover {
     color: [[fg]];
-    background: [[hover]];
+    background: [[tab_hover_bg]];
 }
+
 QTabBar::tab:selected {
-    color: [[fg_accent]];
-    background: [[bg1]];
-    border-bottom: 2px solid [[accent]];
+    color: [[fg]];
+    background: [[tab_active_bg]];
+    border-color: [[accent_border]];
 }

@@ -1,2 +1,4 @@
-border: 1px solid [[border]];
-background: transparent;
+border: 1px solid [[outline_soft]];
+border-radius: 8px;
+background: [[surface_card]];
+padding: 1px;

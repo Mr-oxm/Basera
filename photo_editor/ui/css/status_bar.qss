@@ -1,2 +1,6 @@
-QStatusBar { border-top: 1px solid [[input_bg]]; background: [[bg1_alt]]; }
+QStatusBar {
+    border-top: 1px solid [[status_border]];
+    background: [[status_bg]];
+    padding: 4px 8px;
+}
 QStatusBar::item { border: none; }

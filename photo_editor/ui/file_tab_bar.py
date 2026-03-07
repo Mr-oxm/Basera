@@ -14,8 +14,9 @@ class _CloseButton(QToolButton):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedSize(16, 16)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setFixedSize(14, 14)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAutoRaise(True)
         from .theme import ThemeManager
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
         self._apply_theme(ThemeManager.instance().active_palette)
@@ -38,6 +39,22 @@ class _CloseButton(QToolButton):
         p.drawLine(m, m, w - m, h - m)
         p.drawLine(w - m, m, m, h - m)
         p.end()
+
+
+class _CloseButtonContainer(QWidget):
+    """Inset container that keeps the close button inside the tab bounds."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setFixedSize(20, 18)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 2, 4, 2)
+        layout.setSpacing(0)
+
+        self.button = _CloseButton(self)
+        layout.addWidget(self.button, 0, Qt.AlignmentFlag.AlignCenter)
 
 
 class FileTabBar(QWidget):
@@ -64,7 +81,7 @@ class FileTabBar(QWidget):
         layout.addWidget(self._tab_bar)
         layout.addStretch()
 
-        self.setFixedHeight(30)
+        self.setFixedHeight(32)
         
         from .theme import ThemeManager
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
@@ -81,10 +98,11 @@ class FileTabBar(QWidget):
         idx = self._tab_bar.addTab(title)
         if tooltip:
             self._tab_bar.setTabToolTip(idx, tooltip)
-        # Add a custom close button (manually drawn × so it's always visible)
-        btn = _CloseButton(self._tab_bar)
+        # Inset the close button inside a small container so it doesn't spill past the tab edge.
+        container = _CloseButtonContainer(self._tab_bar)
+        btn = container.button
         btn.clicked.connect(lambda _=False, b=btn: self._on_close_clicked(b))
-        self._tab_bar.setTabButton(idx, QTabBar.ButtonPosition.RightSide, btn)
+        self._tab_bar.setTabButton(idx, QTabBar.ButtonPosition.RightSide, container)
         self._tab_bar.setCurrentIndex(idx)
         return idx
 
@@ -92,7 +110,11 @@ class FileTabBar(QWidget):
         """Resolve the actual current index of the tab (may shift after removals)."""
         # Find via the button reference
         for i in range(self._tab_bar.count()):
-            if self._tab_bar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
+            tab_button = self._tab_bar.tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if tab_button is btn:
+                self.tab_close_requested.emit(i)
+                return
+            if hasattr(tab_button, "button") and tab_button.button is btn:
                 self.tab_close_requested.emit(i)
                 return
 

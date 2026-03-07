@@ -1,36 +1,39 @@
 BrushesPanel {
-    background-color: [[bg1]];
+    background-color: [[surface_panel_alt]];
 }
 QLineEdit {
     background-color: [[input_bg]];
-    border: 1px solid [[border]];
-    border-radius: 6px;
-    padding: 6px 12px;
+    border: 1px solid [[input_border]];
+    border-radius: 10px;
+    padding: 5px 9px;
     color: [[fg]];
-    font-size: 13px;
-    margin-top: 4px;
+    font-size: 12px;
+    margin-top: 2px;
     margin-bottom: 2px;
 }
 QLineEdit:focus {
-    border: 1px solid [[accent]];
-    background-color: [[bg2]];
+    border: 1px solid [[outline_focus]];
+    background-color: [[input_focus]];
 }
 QComboBox {
-    background-color: [[bg2]];
-    border: 1px solid [[border]];
-    border-radius: 6px;
-    padding: 6px 12px;
+    background-color: [[input_bg]];
+    border: 1px solid [[input_border]];
+    border-radius: 10px;
+    padding: 5px 9px;
     color: [[fg]];
-    font-size: 13px;
-    margin-bottom: 4px;
+    font-size: 12px;
+    margin-bottom: 2px;
 }
 QComboBox:hover {
-    border: 1px solid [[border_light]];
-    background-color: [[hover]];
+    border: 1px solid [[outline_strong]];
+    background-color: [[input_hover]];
 }
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
     border: none;
-    width: 24px;
+    width: 18px;
+    background: transparent;
 }
 QComboBox::down-arrow {
     image: none;
@@ -41,33 +44,33 @@ QComboBox::down-arrow {
     border-top: 5px solid [[fg_dim]];
 }
 QComboBox QAbstractItemView {
-    background-color: [[bg2]];
+    background-color: [[popup_bg]];
     color: [[fg]];
-    selection-background-color: [[accent]];
-    selection-color: #ffffff;
-    border: 1px solid [[border_light]];
-    border-radius: 4px;
+    selection-background-color: [[accent_soft]];
+    selection-color: [[fg]];
+    border: 1px solid [[popup_border]];
+    border-radius: 10px;
     outline: none;
     padding: 4px;
 }
 QListWidget {
-    background-color: [[bg1]];
+    background-color: [[surface_panel_alt]];
     border: none;
     outline: none;
     padding-top: 4px;
 }
 QListWidget::item {
-    background-color: [[bg2]];
-    border-radius: 6px;
-    margin-bottom: 4px;
+    background-color: [[list_item_bg]];
+    border-radius: 10px;
+    margin-bottom: 3px;
     color: [[fg]];
     font-size: 12px;
-    padding: 4px;
+    padding: 5px 7px;
 }
 QListWidget::item:selected {
-    background-color: [[accent]];
-    color: #ffffff;
+    background-color: [[accent_soft]];
+    color: [[fg]];
 }
 QListWidget::item:hover:!selected {
-    background-color: [[hover]];
+    background-color: [[list_item_hover]];
 }

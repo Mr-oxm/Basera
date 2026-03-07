@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 from .base import ROW_HEIGHT, THUMB_SIZE
@@ -46,6 +46,7 @@ class LayerItemWidget(QWidget):
         self._rename_done = False
         palette = ThemeManager.instance().active_palette
 
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(render_qss("layer_item_root.qss"))
 
         layout = QHBoxLayout(self)
@@ -58,6 +59,10 @@ class LayerItemWidget(QWidget):
             self._arrow_btn = QPushButton(arrow_text)
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
+            arrow_font = QFont("Segoe UI Symbol")
+            arrow_font.setPointSize(10)
+            arrow_font.setWeight(QFont.Weight.DemiBold)
+            self._arrow_btn.setFont(arrow_font)
             self._arrow_btn.setStyleSheet(render_qss("layer_item_arrow.qss", palette))
             self._arrow_btn.setToolTip("Collapse" if not is_collapsed else "Expand")
             self._arrow_btn.clicked.connect(
@@ -69,6 +74,10 @@ class LayerItemWidget(QWidget):
             self._arrow_btn = QPushButton(arrow_text)
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
+            arrow_font = QFont("Segoe UI Symbol")
+            arrow_font.setPointSize(10)
+            arrow_font.setWeight(QFont.Weight.DemiBold)
+            self._arrow_btn.setFont(arrow_font)
             self._arrow_btn.setStyleSheet(render_qss("layer_item_arrow.qss", palette))
             self._arrow_btn.setToolTip("Show masks" if masks_collapsed else "Hide masks")
             self._arrow_btn.clicked.connect(

@@ -1,1 +1,3 @@
 background: transparent;
+background-color: transparent;
+border-radius: 10px;

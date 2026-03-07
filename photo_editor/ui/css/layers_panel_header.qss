@@ -1,1 +1,2 @@
-background-color: [[bg2]];
+background-color: [[surface_panel]];
+border-radius: 14px;

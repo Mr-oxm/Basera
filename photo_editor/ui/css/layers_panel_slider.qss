@@ -1,12 +1,20 @@
 QSlider::groove:horizontal {
-    background: [[border]];
-    height: 3px;
-    border-radius: 1px;
+    background: [[slider_track]];
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: [[accent]];
+    border-radius: 2px;
+}
+QSlider::add-page:horizontal {
+    background: [[slider_track]];
+    border-radius: 2px;
 }
 QSlider::handle:horizontal {
     background: [[slider_handle]];
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
     margin: -4px 0;
     border-radius: 5px;
 }

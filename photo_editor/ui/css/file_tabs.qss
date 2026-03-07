@@ -1,21 +1,28 @@
 QTabBar {
-    background: [[bg2]];
+    background: transparent;
     border: none;
+    padding: 2px 0 4px 0;
 }
+
 QTabBar::tab {
-    background: [[bg1]];
+    background: [[tab_idle_bg]];
     color: [[fg_dim]];
-    padding: 5px 28px 5px 10px;
-    border: none;
-    border-right: 1px solid [[bg3]];
+    padding: 5px 28px 5px 6px;
+    border: 1px solid [[tab_border]];
+    border-radius: 9px;
     min-width: 80px;
+    min-height: 16px;
     max-width: 220px;
+    margin-right: 4px;
 }
+
 QTabBar::tab:selected {
-    background: [[bg2]];
+    background: [[tab_active_bg]];
     color: [[fg]];
+    border-color: [[accent_border]];
 }
+
 QTabBar::tab:hover:!selected {
-    background: [[hover]];
+    background: [[tab_hover_bg]];
     color: [[fg]];
 }

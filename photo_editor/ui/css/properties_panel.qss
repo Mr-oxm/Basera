@@ -1,4 +1,8 @@
 PropertiesPanel, PropertiesPanel > QWidget {
-    background-color: [[bg3]];
+    background-color: [[surface_panel]];
+    border-radius: 16px;
 }
-QLabel { background: transparent; }
+
+QLabel {
+    background: transparent;
+}
