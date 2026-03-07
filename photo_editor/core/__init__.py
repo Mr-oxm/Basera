@@ -1,4 +1,4 @@
-"""Core data models and abstractions."""
+"""Core data models, abstractions, and extracted domain services."""
 
 from .enums import BlendMode, LayerType, ToolType
 from .color import (

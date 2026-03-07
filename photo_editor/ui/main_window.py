@@ -15,6 +15,8 @@ from ..core.enums import BlendMode, ToolType
 from ..engine.render_pipeline import RenderPipeline
 from ..engine.renderer import RenderScheduler
 from .canvas_view import CanvasView
+from .app_signals import AppSignals
+from .document_session import DocumentSession
 from .file_tab_bar import FileTabBar
 from .menus import EditorMenuBar
 from .panels.brushes_panel import BrushesPanel
@@ -57,6 +59,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._doc: Document | None = None
+        self._app_signals = AppSignals()
         self._pipeline = RenderPipeline()
         self._render_scheduler = RenderScheduler(
             self._pipeline,
@@ -74,11 +77,8 @@ class MainWindow(QMainWindow):
         )
         self._brush_mgr.load_brushes_dir(_assets_dir)
 
-        # Multi-document tracking: list of (Document, str|None) pairs
-        self._open_docs: list[tuple[Document, str | None]] = []
-
-        # Blend-mode hover preview state
-        self._blend_preview_original: BlendMode | None = None
+        # Multi-document tracking
+        self._document_session: DocumentSession | None = None
 
         # Render throttle — handled by RenderScheduler (~30 fps, off UI thread)
         # Deferred panel refresh — coalesced to avoid rebuilding panels
@@ -145,6 +145,7 @@ class MainWindow(QMainWindow):
         self._wire_file_tabs()
         self._render_scheduler.render_ready.connect(self._on_render_ready)
         self._render_scheduler.render_error.connect(self._on_render_error)
+        self._wire_app_signals()
         # Shortcuts wired by ShortcutController
 
         # Wire brush system
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         
         # File tab bar at the top of the central area
         self._file_tabs = FileTabBar()
+        self._document_session = DocumentSession(self._file_tabs)
         central_layout.addWidget(self._file_tabs)
         
         # Grid: rulers + canvas
@@ -293,6 +295,64 @@ class MainWindow(QMainWindow):
     def _wire_file_tabs(self) -> None:
         pass  # Tab signals wired by DocumentController
 
+    def _wire_app_signals(self) -> None:
+        self._app_signals.selection_overlay_requested.connect(
+            self._selection_ctrl.update_selection_overlay
+        )
+        self._app_signals.transform_box_requested.connect(
+            self._transform_ctrl.update_transform_box
+        )
+        self._app_signals.properties_panel_requested.connect(
+            self._tool_ctrl.update_properties_panel
+        )
+        self._app_signals.vector_bool_state_requested.connect(
+            self._vector_ctrl.refresh_bool_state
+        )
+        self._app_signals.rulers_update_requested.connect(
+            self._view_ctrl.update_rulers
+        )
+        self._app_signals.history_refresh_requested.connect(self._refresh_history_panel)
+        self._app_signals.canvas_update_requested.connect(self._canvas.update)
+        self._app_signals.brush_cursor_requested.connect(
+            self._tool_ctrl.update_brush_cursor
+        )
+        self._app_signals.transform_panel_refresh_requested.connect(
+            self._refresh_transform_panel
+        )
+        self._app_signals.channels_panel_refresh_requested.connect(
+            self._refresh_channels_panel
+        )
+        self._app_signals.duplicate_selection_requested.connect(
+            self._selection_ctrl.on_duplicate_selection
+        )
+        self._app_signals.clone_preview_requested.connect(
+            self._tool_ctrl.update_clone_preview
+        )
+        self._app_signals.adjustment_layer_requested.connect(
+            self._filter_ctrl.on_add_adjustment_layer
+        )
+        self._app_signals.edit_adjustment_requested.connect(
+            self._filter_ctrl.on_edit_adjustment_layer
+        )
+        self._app_signals.filter_layer_requested.connect(
+            self._filter_ctrl.on_add_filter_layer
+        )
+        self._app_signals.edit_filter_requested.connect(
+            self._filter_ctrl.on_edit_filter_layer
+        )
+        self._app_signals.text_overlay_requested.connect(
+            self._text_ctrl.update_overlay
+        )
+        self._app_signals.text_hover_cursor_requested.connect(
+            self._text_ctrl.update_hover_cursor
+        )
+        self._app_signals.tool_selection_requested.connect(
+            self._toolbar.select_tool
+        )
+        self._app_signals.text_editing_shortcuts_requested.connect(
+            self._shortcut_ctrl.update_text_editing_shortcuts
+        )
+
     # ---- Wiring: canvas -----------------------------------------------------
 
     def _wire_canvas(self) -> None:
@@ -300,6 +360,18 @@ class MainWindow(QMainWindow):
         # Canvas input wired by CanvasController
         self._canvas.view_changed.connect(self._view_ctrl.update_rulers)
         # Guide drag wired by ViewController
+
+    def _refresh_history_panel(self) -> None:
+        if self._doc:
+            self._history_panel.refresh(self._doc.history)
+
+    def _refresh_transform_panel(self) -> None:
+        if self._doc:
+            self._transform_panel.refresh(self._doc)
+
+    def _refresh_channels_panel(self) -> None:
+        if self._doc:
+            self._channels_panel.refresh(self._doc)
 
     # ---- Document lifecycle -------------------------------------------------
 

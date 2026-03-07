@@ -8,21 +8,22 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from ...core.document import Document
 from ...core.enums import LayerType
+from .base import ControllerBase
 from ..dialogs.new_document import NewDocumentDialog
 from ...utils.image_io import load_image
 
 _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
 
 
-class DocumentController:
+class DocumentController(ControllerBase):
     """Handles new/open/save/close, tabs, and undo/redo."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu/tab signals."""
-        self._mw = main_window
+        super().wire(main_window)
         mw = main_window
 
         # File menu
@@ -50,92 +51,97 @@ class DocumentController:
         mw._history_panel.state_selected.connect(self.on_history_jump)
 
     def on_new(self) -> None:
-        dlg = NewDocumentDialog(self._mw)
+        dlg = NewDocumentDialog(self.mw)
         if dlg.exec():
             self.new_document(*dlg.get_values())
 
+    @property
+    def _session(self):
+        return self.mw._document_session
+
+    def _set_active_document(self, document: Document, path: str | None = None) -> None:
+        self.mw._doc = document
+        name = Path(path).name if path else document.name
+        self.ctx.refresh()
+        self.ctx.zoom_to_fit()
+        self.mw._status.set_document_info(name, document.width, document.height)
+        self.ctx.set_window_title(f"Basera — {name}")
+
+    def _add_document_to_session(self, document: Document, path: str | None = None, *, title: str | None = None) -> int:
+        return self._session.add(document, path, title=title)
+
     def new_document(self, w: int, h: int, dpi: int = 72) -> None:
         """Create a new blank document and switch to it."""
-        mw = self._mw
-        mw._doc = Document(w, h)
-        mw._doc.dpi = dpi
-        mw._open_docs.append((mw._doc, None))
-        mw._file_tabs.add_tab(mw._doc.name)
-        mw._refresh()
-        mw._canvas.zoom_to_fit()
-        mw._status.set_document_info(mw._doc.name, w, h)
+        document = Document(w, h)
+        document.dpi = dpi
+        self._add_document_to_session(document, None, title=document.name)
+        self._set_active_document(document)
 
     def on_open(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self._mw, "Open Image", "", _IMG_FLT)
+        path, _ = QFileDialog.getOpenFileName(self.mw, "Open Image", "", _IMG_FLT)
         if not path:
             return
         img = load_image(path)
         h, w = img.shape[:2]
-        mw = self._mw
-        mw._doc = Document(w, h, name=Path(path).stem)
-        mw._doc.file_path = path
-        mw._doc.layers[0].pixels = img
-        mw._doc.save_snapshot("Open Image")
-        mw._open_docs.append((mw._doc, path))
-        mw._file_tabs.add_tab(Path(path).name, tooltip=path)
-        mw._refresh()
-        mw._canvas.zoom_to_fit()
-        mw._status.set_document_info(mw._doc.name, w, h)
+        document = Document(w, h, name=Path(path).stem)
+        document.file_path = path
+        document.layers[0].pixels = img
+        document.save_snapshot("Open Image")
+        self._add_document_to_session(document, path, title=Path(path).name)
+        self._set_active_document(document, path)
 
     def on_place_image(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self._mw, "Place Image as Layer", "", _IMG_FLT
+            self.mw, "Place Image as Layer", "", _IMG_FLT
         )
         if path:
             img = load_image(path)
             from ...commands import PlaceImageCommand
-            self._mw.execute_command(PlaceImageCommand(img, name=Path(path).stem))
+            self.ctx.execute_command(PlaceImageCommand(img, name=Path(path).stem))
 
     def on_save(self) -> None:
-        if self._mw._doc and self._mw._doc.file_path:
-            self._save_to(self._mw._doc.file_path)
+        if self.doc and self.doc.file_path:
+            self._save_to(self.doc.file_path)
         else:
             self.on_save_as()
 
     def on_save_as(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
-        path, _ = QFileDialog.getSaveFileName(self._mw, "Save As", "", _IMG_FLT)
+        path, _ = QFileDialog.getSaveFileName(self.mw, "Save As", "", _IMG_FLT)
         if path:
-            self._mw._doc.file_path = path
+            self.doc.file_path = path
             self._save_to(path)
 
     def _save_to(self, path: str) -> None:
-        mw = self._mw
-        if not mw._doc:
+        if not self.doc:
             return
         from ...commands import SaveDocumentCommand
+        mw = self.mw
 
         def on_success(_result: object) -> None:
-            mw._doc.mark_clean()
-            mw.setWindowTitle(f"Basera — {Path(path).name}")
-            idx = mw._file_tabs.current_index()
-            if 0 <= idx < len(mw._open_docs):
-                mw._open_docs[idx] = (mw._doc, path)
-                mw._file_tabs.set_tab_text(idx, Path(path).name)
-            mw._status.showMessage(f"Saved {Path(path).name}", 2000)
+            self.doc.mark_clean()
+            self.ctx.set_window_title(f"Basera — {Path(path).name}")
+            idx = self._session.current_index()
+            if idx >= 0:
+                self._session.update_path(idx, path)
+                self._session.update_tab_metadata(idx, title=Path(path).name, tooltip=path)
+            self.ctx.show_status_message(f"Saved {Path(path).name}", 2000)
 
         def on_error(msg: str) -> None:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(mw, "Save Error", msg)
 
-        mw.execute_command_async(
+        self.ctx.execute_command_async(
             SaveDocumentCommand(path, mw._pipeline),
             on_success=on_success,
             on_error=on_error,
         )
 
     def on_import_svg(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self._mw, "Import SVG", "", "SVG Files (*.svg)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self.mw, "Import SVG", "", "SVG Files (*.svg)")
         if not path:
             return
         try:
@@ -146,7 +152,7 @@ class DocumentController:
             root_node = import_svg(path)
             if isinstance(root_node, SVGGroup) and not root_node.children:
                 QMessageBox.information(
-                    self._mw, "Import SVG", "No vector objects found in SVG."
+                    self.mw, "Import SVG", "No vector objects found in SVG."
                 )
                 return
 
@@ -160,14 +166,15 @@ class DocumentController:
                 return bb
 
             all_bb = _compute_bbox(root_node)
-            mw = self._mw
+            mw = self.mw
 
+            created_document = False
             if mw._doc is None:
                 w = max(int(all_bb.max_pt.x + 20), 200)
                 h = max(int(all_bb.max_pt.y + 20), 200)
                 mw._doc = Document(w, h, name=Path(path).stem)
-                mw._open_docs.append((mw._doc, path))
-                mw._file_tabs.add_tab(Path(path).name, tooltip=path)
+                self._add_document_to_session(mw._doc, path, title=Path(path).name)
+                created_document = True
 
             doc_w, doc_h = mw._doc.width, mw._doc.height
             content_w, content_h = all_bb.width, all_bb.height
@@ -214,8 +221,8 @@ class DocumentController:
                     rasterize_vector_layer_tight(mw._doc, layer=layer, force=True)
                     svg_filt = getattr(obj, "svg_filter", None)
                     if svg_filt and svg_filt.get("type") == "gaussian_blur":
-                        from ..filter_runner import _filter_name_map
-                        filt_cls = _filter_name_map().get("Gaussian Blur")
+                        from ...registries import get_filter_name_map
+                        filt_cls = get_filter_name_map().get("Gaussian Blur")
                         if filt_cls is not None:
                             filt = filt_cls()
                             std_dev = svg_filt.get("std_deviation", 0.0)
@@ -234,113 +241,110 @@ class DocumentController:
 
             _create_layers(root_node, parent_id=None)
 
-            mw._refresh()
-            mw._canvas.zoom_to_fit()
-            mw._status.showMessage("Imported SVG successfully", 3000)
+            if created_document:
+                self._set_active_document(mw._doc, path)
+            else:
+                self.ctx.refresh()
+                self.ctx.zoom_to_fit()
+            self.ctx.show_status_message("Imported SVG successfully", 3000)
 
         except Exception as exc:
             import traceback
             traceback.print_exc()
-            QMessageBox.warning(self._mw, "Import SVG Error", str(exc))
+            QMessageBox.warning(self.mw, "Import SVG Error", str(exc))
 
     def on_export_svg(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self._mw, "Export SVG", "", "SVG Files (*.svg)"
+            self.mw, "Export SVG", "", "SVG Files (*.svg)"
         )
         if not path:
             return
         try:
             objects = []
-            for layer in self._mw._doc.layers:
+            for layer in self.doc.layers:
                 vl = getattr(layer, "_vector_data", None)
                 if vl is not None:
                     objects.extend(vl.objects)
             if not objects:
                 QMessageBox.information(
-                    self._mw, "Export SVG", "No vector objects to export."
+                    self.mw, "Export SVG", "No vector objects to export."
                 )
                 return
             from ...vector.svg import export_svg
             svg_str = export_svg(
-                objects, self._mw._doc.width, self._mw._doc.height
+                objects, self.doc.width, self.doc.height
             )
             with open(path, "w", encoding="utf-8") as f:
                 f.write(svg_str)
-            self._mw._status.showMessage(
+            self.ctx.show_status_message(
                 f"Exported {len(objects)} objects to SVG", 3000
             )
         except Exception as exc:
-            QMessageBox.warning(self._mw, "Export SVG Error", str(exc))
+            QMessageBox.warning(self.mw, "Export SVG Error", str(exc))
 
     def on_export_pdf(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self._mw, "Export PDF", "", "PDF Files (*.pdf)"
+            self.mw, "Export PDF", "", "PDF Files (*.pdf)"
         )
         if not path:
             return
         try:
             objects = []
-            for layer in self._mw._doc.layers:
+            for layer in self.doc.layers:
                 vl = getattr(layer, "_vector_data", None)
                 if vl is not None:
                     objects.extend(vl.objects)
             if not objects:
                 QMessageBox.information(
-                    self._mw, "Export PDF", "No vector objects to export."
+                    self.mw, "Export PDF", "No vector objects to export."
                 )
                 return
             from ...vector.pdf import export_pdf_bytes
             pdf_data = export_pdf_bytes(
-                objects, self._mw._doc.width, self._mw._doc.height
+                objects, self.doc.width, self.doc.height
             )
             with open(path, "wb") as f:
                 f.write(pdf_data)
-            self._mw._status.showMessage(
+            self.ctx.show_status_message(
                 f"Exported {len(objects)} objects to PDF", 3000
             )
         except Exception as exc:
-            QMessageBox.warning(self._mw, "Export PDF Error", str(exc))
+            QMessageBox.warning(self.mw, "Export PDF Error", str(exc))
 
     def on_tab_selected(self, index: int) -> None:
-        if index < 0 or index >= len(self._mw._open_docs):
+        entry = self._session.activate(index)
+        if entry is None:
             return
-        doc, path = self._mw._open_docs[index]
-        self._mw._doc = doc
-        self._mw._refresh()
-        self._mw._canvas.zoom_to_fit()
-        name = Path(path).name if path else doc.name
-        self._mw._status.set_document_info(name, doc.width, doc.height)
-        self._mw.setWindowTitle(f"Basera — {name}")
+        self._set_active_document(entry.document, entry.path)
 
     def on_tab_close(self, index: int) -> None:
-        if index < 0 or index >= len(self._mw._open_docs):
+        if self._session.entry_at(index) is None:
             return
-        if self._mw._file_tabs.count() <= 1:
+        if self.mw._file_tabs.count() <= 1:
             return
-        self._mw._open_docs.pop(index)
-        self._mw._file_tabs.remove_tab(index)
-        new_idx = self._mw._file_tabs.current_index()
-        if 0 <= new_idx < len(self._mw._open_docs):
+        self._session.close(index)
+        new_idx = self._session.current_index()
+        if self._session.entry_at(new_idx) is not None:
             self.on_tab_selected(new_idx)
 
     def on_undo(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.undo()
-            self._mw._pipeline.invalidate()
-            self._mw._refresh()
+        if self.doc:
+            self.doc.undo()
+            self.ctx.invalidate()
+            self.ctx.refresh()
 
     def on_redo(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.redo()
-            self._mw._pipeline.invalidate()
-            self._mw._refresh()
+        if self.doc:
+            self.doc.redo()
+            self.ctx.invalidate()
+            self.ctx.refresh()
 
     def on_history_jump(self, index: int) -> None:
-        if self._mw._doc:
-            self._mw._doc.navigate_history(index)
-            self._mw._pipeline.invalidate()
-            self._mw._refresh()
+        if self.doc:
+            self.doc.navigate_history(index)
+            self.ctx.invalidate()
+            self.ctx.refresh()

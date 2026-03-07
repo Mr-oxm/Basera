@@ -66,8 +66,13 @@ ShortcutController
 
 DropController
     Drag and drop: place image from file manager.
+
+ControllerBase / ControllerContext
+    Shared controller infrastructure that wraps common document, render,
+    and command operations so controllers rely less on raw MainWindow internals.
 """
 
+from .base import ControllerBase, ControllerContext
 from .canvas_ctrl import CanvasController
 from .color_ctrl import ColorController
 from .drop_ctrl import DropController
@@ -85,6 +90,8 @@ from .vector_ctrl import VectorController
 from .view_ctrl import ViewController
 
 __all__ = [
+    "ControllerBase",
+    "ControllerContext",
     "CanvasController",
     "ColorController",
     "DropController",

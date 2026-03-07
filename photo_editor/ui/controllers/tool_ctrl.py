@@ -6,9 +6,10 @@ import numpy as np
 from PySide6.QtCore import Qt
 
 from ...core.enums import ToolType
+from .base import ControllerBase
 
 
-class ToolController:
+class ToolController(ControllerBase):
     """Handles tool selection, properties panel, eyedropper, pan widget, brush cursor, clone preview."""
 
     BRUSH_CURSOR_TOOLS = {
@@ -17,11 +18,11 @@ class ToolController:
     }
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire toolbar/panel/canvas signals."""
-        self._mw = main_window
+        super().wire(main_window)
         mw = main_window
 
         mw._toolbar.tool_selected.connect(self.on_tool_selected)
@@ -33,14 +34,14 @@ class ToolController:
         mw._canvas.widget_released.connect(self.on_widget_release)
 
     def on_tool_selected(self, t: ToolType) -> None:
-        mw = self._mw
+        mw = self.mw
         if mw._tools.active_type == ToolType.TEXT and t != ToolType.TEXT:
             mw._text_ctrl.exit_editing()
         if mw._tools.active_type == ToolType.MOVE and t != ToolType.MOVE:
             tool = mw._tools.active_tool
             if tool is not None and getattr(tool, '_floating', False):
                 tool.commit_float(mw._doc)
-                mw._selection_ctrl.update_selection_overlay()
+                self.signals.selection_overlay_requested.emit()
         if (mw._tools.active_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)
                 and t not in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH)):
             mw._canvas.set_source_position(None)
@@ -54,15 +55,15 @@ class ToolController:
             vl = getattr(mw._doc.layers.active_layer, "_vector_data", None)
             if vl and not vl.selected_objects() and vl.objects:
                 vl.objects[-1].selected = True
-                mw._refresh()
+                self.ctx.refresh(invalidate=False)
 
         self.update_properties_panel()
-        mw._transform_ctrl.update_transform_box()
-        self.update_brush_cursor()
+        self.signals.transform_box_requested.emit()
+        self.signals.brush_cursor_requested.emit()
 
         # Ensure boolean toolbar state is correct when entering Node tool
         if t == ToolType.NODE:
-            mw._vector_ctrl.refresh_bool_state()
+            self.signals.vector_bool_state_requested.emit()
         if t in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
             tool = mw._tools.active_tool
             if tool is not None and tool.source_set:
@@ -88,35 +89,35 @@ class ToolController:
 
     def on_eyedropper_sample(self, rgba) -> None:
         from ...core.color import Color
-        mw = self._mw
+        mw = self.mw
         mw._tools.set_foreground_color(rgba)
         if hasattr(mw, "_color_panel"):
             c = Color.from_array(rgba)
             mw._color_panel._mgr.foreground = c
 
     def on_widget_press(self, wx: float, wy: float) -> None:
-        mw = self._mw
+        mw = self.mw
         if mw._tools.active_type == ToolType.PAN:
             tool = mw._tools.active_tool
             if tool is not None:
                 tool.begin_pan(wx, wy)
 
     def on_widget_move(self, wx: float, wy: float) -> None:
-        mw = self._mw
+        mw = self.mw
         if mw._tools.active_type == ToolType.PAN:
             tool = mw._tools.active_tool
             if tool is not None:
                 tool.update_pan(wx, wy)
 
     def on_widget_release(self) -> None:
-        mw = self._mw
+        mw = self.mw
         if mw._tools.active_type == ToolType.PAN:
             tool = mw._tools.active_tool
             if tool is not None:
                 tool.end_pan()
 
     def update_properties_panel(self) -> None:
-        mw = self._mw
+        mw = self.mw
         tool_type = mw._tools.active_type
         tool = mw._tools.active_tool
         if tool is None:
@@ -191,7 +192,7 @@ class ToolController:
                 mw._props_panel.add_slider(key, label, int(val), int(lo), int(hi))
 
     def on_prop_changed(self, key: str, value: object) -> None:
-        mw = self._mw
+        mw = self.mw
         props = mw._tools.get_properties()
         if key in props:
             _, lo, hi = props[key]
@@ -200,11 +201,11 @@ class ToolController:
             else:
                 mw._tools.set_property(key, float(value))
         if key in ("size", "hardness", "opacity", "flow"):
-            self.update_brush_cursor()
+            self.signals.brush_cursor_requested.emit()
 
     def on_brush_prop_changed(self, key: str, value: object) -> None:
         """Handle property changes from the brush properties bar."""
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None:
             return
@@ -220,11 +221,11 @@ class ToolController:
             else:
                 setattr(tool, key, float(value))
         if key in ("size", "hardness", "opacity", "flow"):
-            self.update_brush_cursor()
+            self.signals.brush_cursor_requested.emit()
 
     def apply_brush_preset(self, preset) -> None:
         """Apply a brush preset's settings to the current brush-type tool."""
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None:
             return
@@ -240,10 +241,10 @@ class ToolController:
             tool.flow = preset.flow
         # Re-sync the properties bar
         self.update_properties_panel()
-        self.update_brush_cursor()
+        self.signals.brush_cursor_requested.emit()
 
     def update_brush_cursor(self) -> None:
-        mw = self._mw
+        mw = self.mw
         tool_type = mw._tools.active_type
         if tool_type in self.BRUSH_CURSOR_TOOLS:
             tool = mw._tools.active_tool
@@ -261,7 +262,7 @@ class ToolController:
             mw._canvas.hide_brush_preview()
 
     def update_clone_preview(self, cursor_x: int, cursor_y: int) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or not getattr(tool, "source_set", False):
             mw._canvas.set_clone_preview(None)

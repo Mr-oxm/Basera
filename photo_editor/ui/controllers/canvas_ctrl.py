@@ -7,9 +7,11 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtWidgets import QApplication
 
 from ...core.enums import ToolType
+from .base import ControllerBase
+from ..services.rasterize_guard import ensure_active_layer_rasterized_for_tool
 
 
-class CanvasController:
+class CanvasController(ControllerBase):
     """Handles canvas mouse input: press, move, release, hover, double-click."""
 
     SEL_TOOLS = {
@@ -18,7 +20,7 @@ class CanvasController:
     }
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
         self._dragging = False
         self._sel_moving = False
         self._sel_move_start: tuple[int, int] = (0, 0)
@@ -28,7 +30,7 @@ class CanvasController:
         self._drag_start: tuple[int, int] | None = None
 
     def wire(self, main_window) -> None:
-        self._mw = main_window
+        super().wire(main_window)
         mw = main_window
         mw._canvas.cursor_moved.connect(self.on_hover)
         mw._canvas.tool_pressed.connect(self.on_press)
@@ -46,7 +48,7 @@ class CanvasController:
                 mw._h_ruler.set_cursor_position(wx)
                 mw._v_ruler.set_cursor_position(wy)
         if mw._tools.active_type == ToolType.TEXT:
-            mw._text_ctrl.update_hover_cursor(x, y)
+            self.signals.text_hover_cursor_requested.emit(x, y)
         elif mw._tools.active_type == ToolType.NODE:
             tool = mw._tools.active_tool
             if tool is not None and hasattr(tool, "pick_segments") and tool.pick_segments.active:
@@ -65,7 +67,7 @@ class CanvasController:
                     ox = tool.source_x - x
                     oy = tool.source_y - y
                 mw._canvas.set_source_offset((ox, oy))
-            mw._tool_ctrl.update_clone_preview(x, y)
+            self.signals.clone_preview_requested.emit(x, y)
 
     def on_press(self, x: int, y: int, pressure: float) -> None:
         mw = self._mw
@@ -83,10 +85,14 @@ class CanvasController:
                 self._dragging = False
                 return
 
-        if mw._doc and mw._layer_ctrl.needs_rasterize_warning():
-            if not mw._layer_ctrl.ask_rasterize():
-                self._dragging = False
-                return
+        if not ensure_active_layer_rasterized_for_tool(
+            mw,
+            mw._doc,
+            mw._tools.active_type,
+            self.ctx.refresh,
+        ):
+            self._dragging = False
+            return
 
         tool_type = mw._tools.active_type
         if tool_type in self.SEL_TOOLS:
@@ -126,7 +132,7 @@ class CanvasController:
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
             self._drag_start = (x, y)
         elif tool_type == ToolType.TEXT:
-            mw._text_ctrl.update_overlay()
+            self.signals.text_overlay_requested.emit()
         elif tool_type in (ToolType.CLONE_STAMP, ToolType.HEALING_BRUSH):
             tool = mw._tools.active_tool
             if tool is not None and tool.source_set:
@@ -155,8 +161,8 @@ class CanvasController:
             if sx1 > sx0 and sy1 > sy0:
                 new_mask[dy0:dy1, dx0:dx1] = orig[sy0:sy1, sx0:sx1]
             mw._doc.selection._mask = new_mask
-            mw._selection_ctrl.update_selection_overlay()
-            mw._canvas.update()
+            self.signals.selection_overlay_requested.emit()
+            self.signals.canvas_update_requested.emit()
             return
 
         tool_type = mw._tools.active_type
@@ -164,8 +170,8 @@ class CanvasController:
 
         if tool_type == ToolType.MOVE:
             # Repaint canvas for marquee overlay and transform box updates
-            mw._canvas.update()
-            mw._transform_ctrl.update_transform_box()
+            self.signals.canvas_update_requested.emit()
+            self.signals.transform_box_requested.emit()
 
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT) and self._drag_start is not None:
             sx, sy = self._drag_start
@@ -185,9 +191,9 @@ class CanvasController:
             if self._dragging:
                 mw._schedule_render()
         elif tool_type == ToolType.TEXT:
-            mw._text_ctrl.update_overlay()
+            self.signals.text_overlay_requested.emit()
             if not self._dragging:
-                mw._text_ctrl.update_hover_cursor(x, y)
+                self.signals.text_hover_cursor_requested.emit(x, y)
         else:
             mw._schedule_render()
 
@@ -197,10 +203,9 @@ class CanvasController:
         if self._sel_moving:
             self._sel_moving = False
             self._sel_move_orig_mask = None
-            mw._selection_ctrl.update_selection_overlay()
-            mw._canvas.update()
-            if mw._doc:
-                mw._history_panel.refresh(mw._doc.history)
+            self.signals.selection_overlay_requested.emit()
+            self.signals.canvas_update_requested.emit()
+            self.signals.history_refresh_requested.emit()
             return
 
         tool_type = mw._tools.active_type
@@ -216,18 +221,15 @@ class CanvasController:
         mw._schedule_panel_refresh()
 
         if tool_type == ToolType.MOVE:
-            mw._transform_ctrl.update_transform_box()
+            self.signals.transform_box_requested.emit()
 
         if tool_type == ToolType.TEXT:
-            mw._text_ctrl.update_overlay()
+            self.signals.text_overlay_requested.emit()
 
         _VEC_TOOLS = {ToolType.PEN: "pen", ToolType.NODE: "node",
                       ToolType.VECTOR_SHAPE: "shape"}
         if tool_type in _VEC_TOOLS:
-            tool = mw._tools.active_tool
-            if tool is not None:
-                mw._props_panel.vector_bar.sync_from_tool(
-                    tool, _VEC_TOOLS[tool_type])
+            self.signals.properties_panel_requested.emit()
 
     def on_double_click(self, x: int, y: int) -> None:
         mw = self._mw
@@ -251,5 +253,5 @@ class CanvasController:
             if layer is not None and layer.layer_type.name == "SHAPE":
                 vl = getattr(layer, "_vector_data", None)
                 if vl is not None:
-                    mw._toolbar.select_tool(ToolType.NODE)
+                    self.signals.tool_selection_requested.emit(ToolType.NODE)
                     return

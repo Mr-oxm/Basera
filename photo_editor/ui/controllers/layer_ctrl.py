@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QMessageBox
 
 from ...commands import (
     AddGroupCommand,
@@ -25,13 +24,16 @@ from ...commands import (
     RenameLayerCommand,
     ReorderLayersCommand,
 )
+from ...core.services.document_resize import resize_canvas, resize_image
 from ...core.enums import BlendMode, LayerType, ToolType
+from .base import ControllerBase
 from ..dialogs.layer_styles_dialog import LayerStylesDialog
-
-PAINTING_TOOLS = {
-    ToolType.BRUSH, ToolType.ERASER, ToolType.CLONE_STAMP,
-    ToolType.HEALING_BRUSH, ToolType.GRADIENT, ToolType.PAINT_BUCKET,
-}
+from ..services.layer_panel_state import (
+    reordered_stack_order,
+    selected_indices_from_layer_ids,
+    sync_panel_selection,
+)
+from ..services.rasterize_guard import rasterize_active_text_layer
 
 NUMPAD_MAP = {
     Qt.Key.Key_0: 0, Qt.Key.Key_1: 1, Qt.Key.Key_2: 2,
@@ -41,17 +43,18 @@ NUMPAD_MAP = {
 }
 
 
-class LayerController:
+class LayerController(ControllerBase):
     """Handles layer add/delete/group/mask/reorder and property changes."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
+        self._blend_preview_original: BlendMode | None = None
         self._numpad_first: int | None = None
         self._numpad_timer: QTimer | None = None
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu/panel signals."""
-        self._mw = main_window
+        super().wire(main_window)
         mw = main_window
 
         # Menu
@@ -95,10 +98,10 @@ class LayerController:
         lp.mask_dropped_on_layer.connect(self.on_mask_dropped_on_layer)
         lp.adj_filter_dropped_on_layer.connect(self.on_adj_filter_dropped_on_layer)
         lp.rename_requested.connect(self.on_rename_layer)
-        lp.adjustment_layer_requested.connect(mw._filter_ctrl.on_add_adjustment_layer)
-        lp.edit_adjustment_requested.connect(mw._filter_ctrl.on_edit_adjustment_layer)
-        lp.filter_layer_requested.connect(mw._filter_ctrl.on_add_filter_layer)
-        lp.edit_filter_requested.connect(mw._filter_ctrl.on_edit_filter_layer)
+        lp.adjustment_layer_requested.connect(self.on_adjustment_layer_requested)
+        lp.edit_adjustment_requested.connect(self.on_edit_adjustment_requested)
+        lp.filter_layer_requested.connect(self.on_filter_layer_requested)
+        lp.edit_filter_requested.connect(self.on_edit_filter_requested)
         lp.multi_selection_changed.connect(self.on_panel_multi_selection)
 
         # Move tool auto-select
@@ -148,367 +151,277 @@ class LayerController:
         dlg.rejected.connect(_reject)
         dlg.exec()
 
+    def on_adjustment_layer_requested(self, name: str) -> None:
+        self.signals.adjustment_layer_requested.emit(name)
+
+    def on_edit_adjustment_requested(self, layer_id: str) -> None:
+        self.signals.edit_adjustment_requested.emit(layer_id)
+
+    def on_filter_layer_requested(self, name: str) -> None:
+        self.signals.filter_layer_requested.emit(name)
+
+    def on_edit_filter_requested(self, layer_id: str) -> None:
+        self.signals.edit_filter_requested.emit(layer_id)
+
     def on_add_layer(self) -> None:
-        if self._mw._doc:
-            self._mw.execute_command(AddLayerCommand())
+        if self.doc:
+            self.ctx.execute_command(AddLayerCommand())
 
     def on_add_vector_layer(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.add_vector_layer()
-            self._mw._refresh()
+        if self.doc:
+            self.doc.add_vector_layer()
+            self.ctx.refresh()
 
     def on_add_group(self) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        mw = self._mw
-        selected = mw._layers_panel.selected_layer_ids()
-        mw.execute_command(AddGroupCommand(layer_ids=selected if len(selected) >= 1 else None))
+        selected = self.ctx.selected_layer_ids()
+        self.ctx.execute_command(AddGroupCommand(layer_ids=selected if len(selected) >= 1 else None))
 
     def on_dup_layer(self) -> None:
-        if not self._mw._doc or not self._mw._doc.layers.active_layer:
+        if self.doc is None or not self.doc.layers.active_layer:
             return
-        mw = self._mw
-        if mw._doc.selection.active and mw._doc.selection.mask is not None:
-            mw._selection_ctrl.on_duplicate_selection()
+        if self.doc.selection.active and self.doc.selection.mask is not None:
+            self.signals.duplicate_selection_requested.emit()
         else:
-            mw.execute_command(DuplicateLayerCommand(mw._doc.layers.active_layer.id))
+            self.ctx.execute_command(DuplicateLayerCommand(self.doc.layers.active_layer.id))
 
     def on_del_layer(self) -> None:
-        if not self._mw._doc or len(self._mw._doc.layers) <= 1:
+        if self.doc is None or len(self.doc.layers) <= 1:
             return
-        mw = self._mw
-        selected = mw._layers_panel.selected_layer_ids()
+        selected = self.ctx.selected_layer_ids()
         if selected:
             for lid in selected:
-                if len(mw._doc.layers) <= 1:
+                if len(self.doc.layers) <= 1:
                     break
-                if mw._doc.layers.get(lid):
-                    mw.execute_command(RemoveLayerCommand(lid))
-        elif mw._doc.layers.active_layer:
-            mw.execute_command(RemoveLayerCommand(mw._doc.layers.active_layer.id))
+                if self.doc.layers.get(lid):
+                    self.ctx.execute_command(RemoveLayerCommand(lid))
+        elif self.doc.layers.active_layer:
+            self.ctx.execute_command(RemoveLayerCommand(self.doc.layers.active_layer.id))
 
     def on_add_mask(self) -> None:
-        mw = self._mw
-        if mw._doc and mw._doc.layers.active_layer:
-            if mw._doc.selection.active and mw._doc.selection.mask is not None:
-                mw._doc.selection_to_mask_layer()
-                mw._refresh()
+        if self.doc and self.doc.layers.active_layer:
+            if self.doc.selection.active and self.doc.selection.mask is not None:
+                self.doc.selection_to_mask_layer()
+                self.ctx.refresh()
             else:
-                mw.execute_command(AddMaskLayerCommand(fill_white=True))
+                self.ctx.execute_command(AddMaskLayerCommand(fill_white=True))
 
     def on_add_mask_black(self) -> None:
-        if self._mw._doc and self._mw._doc.layers.active_layer:
-            self._mw.execute_command(AddMaskLayerCommand(fill_white=False))
+        if self.doc and self.doc.layers.active_layer:
+            self.ctx.execute_command(AddMaskLayerCommand(fill_white=False))
 
     def on_add_mask_standalone(self) -> None:
-        if self._mw._doc:
-            self._mw.execute_command(AddMaskLayerCommand(standalone=True))
+        if self.doc:
+            self.ctx.execute_command(AddMaskLayerCommand(standalone=True))
 
     def on_remove_mask_layer(self) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        active = self._mw._doc.layers.active_layer
+        active = self.doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            self._mw.execute_command(RemoveMaskLayerCommand(active.id))
+            self.ctx.execute_command(RemoveMaskLayerCommand(active.id))
 
     def on_apply_mask_layer(self) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        active = self._mw._doc.layers.active_layer
+        active = self.doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            self._mw.execute_command(ApplyMaskLayerCommand(active.id))
+            self.ctx.execute_command(ApplyMaskLayerCommand(active.id))
 
     def on_invert_mask_layer(self) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        active = self._mw._doc.layers.active_layer
+        active = self.doc.layers.active_layer
         if active and active.layer_type == LayerType.MASK:
-            self._mw.execute_command(InvertMaskLayerCommand(active.id))
+            self.ctx.execute_command(InvertMaskLayerCommand(active.id))
 
     def on_convert_to_mask(self) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        active = self._mw._doc.layers.active_layer
+        active = self.doc.layers.active_layer
         if active and active.layer_type not in (LayerType.MASK, LayerType.GROUP):
-            self._mw.execute_command(ConvertToMaskCommand(active.id))
+            self.ctx.execute_command(ConvertToMaskCommand(active.id))
 
     def on_layer_selected(self, stack_index: int) -> None:
-        if self._mw._doc:
-            self._mw._doc.layers.active_index = stack_index
+        if self.doc:
+            self.doc.layers.active_index = stack_index
 
-            if self._mw._tools.active_type == ToolType.NODE:
-                al = self._mw._doc.layers.active_layer
+            if self.mw._tools.active_type == ToolType.NODE:
+                al = self.doc.layers.active_layer
                 if al:
                     vl = getattr(al, "_vector_data", None)
                     if vl and not vl.selected_objects() and vl.objects:
                         vl.objects[-1].selected = True
-                        if hasattr(self._mw, "_canvas"):
-                            self._mw._canvas.update()
+                        self.signals.canvas_update_requested.emit()
 
-            self._mw._transform_ctrl.update_transform_box()
-            self._mw._transform_panel.refresh(self._mw._doc)
-            if hasattr(self._mw, '_channels_panel'):
-                self._mw._channels_panel.refresh(self._mw._doc)
-            self._mw._tool_ctrl.update_properties_panel()
+            self.signals.transform_box_requested.emit()
+            self.signals.transform_panel_refresh_requested.emit()
+            self.signals.channels_panel_refresh_requested.emit()
+            self.signals.properties_panel_requested.emit()
 
             # Refresh boolean toolbar when a single layer is selected
-            if self._mw._tools.active_type == ToolType.NODE:
-                tool = self._mw._tools.active_tool
+            if self.mw._tools.active_type == ToolType.NODE:
+                tool = self.mw._tools.active_tool
                 if tool is not None and hasattr(tool, '_sync_bool_selection'):
-                    tool._sync_bool_selection(self._mw._doc)
-                self._mw._vector_ctrl.refresh_bool_state()
+                    tool._sync_bool_selection(self.doc)
+                self.signals.vector_bool_state_requested.emit()
 
     def on_move_auto_select(self, stack_index: int) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
         # Sync the layers panel selection with the model's multi-selection
-        self._sync_panel_selection()
-        self._mw._transform_panel.refresh(self._mw._doc)
-        if hasattr(self._mw, '_channels_panel'):
-            self._mw._channels_panel.refresh(self._mw._doc)
-        self._mw._transform_ctrl.update_transform_box()
-
-    def _sync_panel_selection(self) -> None:
-        """Synchronise the layers panel's visual selection with LayerStack."""
-        mw = self._mw
-        if not mw._doc:
-            return
-        sel_indices = mw._doc.layers.selected_indices
-        panel = mw._layers_panel
-        # Refresh first so rows are up to date
-        panel.refresh(mw._doc)
-        # Now select the correct rows
-        lst = panel._list
-        lst.blockSignals(True)
-        lst.clearSelection()
-        row_ids = panel.row_layer_ids()
-
-        # Set current row to the active layer FIRST, 
-        # because in ExtendedSelection mode it clears other selections.
-        active = mw._doc.layers.active_layer
-        if active and active.id in row_ids:
-            lst.setCurrentRow(row_ids.index(active.id))
-
-        for si in sel_indices:
-            if 0 <= si < len(mw._doc.layers.layers):
-                lid = mw._doc.layers.layers[si].id
-                if lid in row_ids:
-                    row = row_ids.index(lid)
-                    item = lst.item(row)
-                    if item:
-                        item.setSelected(True)
-        lst.blockSignals(False)
+        sync_panel_selection(self.doc, self.mw._layers_panel)
+        self.signals.transform_panel_refresh_requested.emit()
+        self.signals.channels_panel_refresh_requested.emit()
+        self.signals.transform_box_requested.emit()
 
     def on_move_deselect_all(self) -> None:
         """Called when the Move tool clicks on empty canvas — deselect all."""
-        mw = self._mw
-        if not mw._doc:
+        if not self.doc:
             return
-        mw._layers_panel.refresh(mw._doc)
-        mw._transform_ctrl.update_transform_box()
-        mw._canvas.update()
+        self.ctx.refresh_layers_panel()
+        self.signals.transform_box_requested.emit()
+        self.signals.canvas_update_requested.emit()
 
     def on_move_marquee_select(self, indices: list[int]) -> None:
         """Called after a marquee drag-select completes in the Move tool."""
-        mw = self._mw
-        if not mw._doc:
+        if not self.doc:
             return
-        self._sync_panel_selection()
-        mw._transform_ctrl.update_transform_box()
-        if hasattr(mw, '_channels_panel'):
-            mw._channels_panel.refresh(mw._doc)
-        mw._canvas.update()
+        sync_panel_selection(self.doc, self.mw._layers_panel)
+        self.signals.transform_box_requested.emit()
+        self.signals.channels_panel_refresh_requested.emit()
+        self.signals.canvas_update_requested.emit()
 
     def on_panel_multi_selection(self, layer_ids: list) -> None:
         """Sync panel multi-selection back to LayerStack and update bbox."""
-        mw = self._mw
-        if not mw._doc:
+        mw = self.mw
+        if not self.doc:
             return
-        stack = mw._doc.layers
-        # Build a set of selected indices from the panel's selected IDs
-        new_sel: set[int] = set()
-        for lid in layer_ids:
-            for i, layer in enumerate(stack.layers):
-                if layer.id == lid:
-                    new_sel.add(i)
-                    break
+        stack = self.doc.layers
+        new_sel = selected_indices_from_layer_ids(layer_ids, stack.layers)
         stack._selected_indices = new_sel
         # Keep active_index pointing at something sensible
         if new_sel and stack.active_index not in new_sel:
             stack._active_index = max(new_sel)
         elif not new_sel:
             stack._active_index = -1
-        mw._transform_ctrl.update_transform_box()
-        if hasattr(mw, '_channels_panel'):
-            mw._channels_panel.refresh(mw._doc)
+        self.signals.transform_box_requested.emit()
+        self.signals.channels_panel_refresh_requested.emit()
 
         # Refresh boolean toolbar state when selection changes from the panel
         if mw._tools.active_type == ToolType.NODE:
             tool = mw._tools.active_tool
             if tool is not None and hasattr(tool, '_sync_bool_selection'):
-                tool._sync_bool_selection(mw._doc)
-            mw._vector_ctrl.refresh_bool_state()
+                tool._sync_bool_selection(self.doc)
+            self.signals.vector_bool_state_requested.emit()
 
     def on_opacity(self, val: float) -> None:
-        if self._mw._doc and self._mw._doc.layers.active_layer:
-            self._mw._doc.layers.active_layer.opacity = val
-            self._mw._refresh_canvas_only()
+        if self.doc and self.doc.layers.active_layer:
+            self.doc.layers.active_layer.opacity = val
+            self.ctx.refresh_canvas_only()
 
     def on_blend_mode(self, mode: BlendMode) -> None:
-        self._mw._blend_preview_original = None
-        if self._mw._doc and self._mw._doc.layers.active_layer:
-            self._mw._doc.layers.active_layer.blend_mode = mode
-            self._mw._refresh_canvas_only()
+        self._blend_preview_original = None
+        if self.doc and self.doc.layers.active_layer:
+            self.doc.layers.active_layer.blend_mode = mode
+            self.ctx.refresh_canvas_only()
 
     def on_blend_hover(self, mode: BlendMode) -> None:
-        if not self._mw._doc or not self._mw._doc.layers.active_layer:
+        if not self.doc or not self.doc.layers.active_layer:
             return
-        if self._mw._blend_preview_original is None:
-            self._mw._blend_preview_original = (
-                self._mw._doc.layers.active_layer.blend_mode
-            )
-        self._mw._doc.layers.active_layer.blend_mode = mode
-        self._mw._refresh_canvas_only()
+        if self._blend_preview_original is None:
+            self._blend_preview_original = self.doc.layers.active_layer.blend_mode
+        self.doc.layers.active_layer.blend_mode = mode
+        self.ctx.refresh_canvas_only()
 
     def on_blend_hover_end(self) -> None:
-        if not self._mw._doc or not self._mw._doc.layers.active_layer:
+        if not self.doc or not self.doc.layers.active_layer:
             return
-        if self._mw._blend_preview_original is not None:
-            self._mw._doc.layers.active_layer.blend_mode = (
-                self._mw._blend_preview_original
-            )
-            self._mw._blend_preview_original = None
-            self._mw._refresh_canvas_only()
+        if self._blend_preview_original is not None:
+            self.doc.layers.active_layer.blend_mode = self._blend_preview_original
+            self._blend_preview_original = None
+            self.ctx.refresh_canvas_only()
 
     def on_toggle_vis(self, layer_id: str) -> None:
-        if self._mw._doc:
-            layer = self._mw._doc.layers.get(layer_id)
+        if self.doc:
+            layer = self.doc.layers.get(layer_id)
             if layer:
                 layer.visible = not layer.visible
-                self._mw._refresh_canvas_only()
-                self._mw._layers_panel.refresh(self._mw._doc, thumbnails=False)
+                self.ctx.refresh_canvas_only()
+                self.ctx.refresh_layers_panel(thumbnails=False)
 
     def on_toggle_lock(self, layer_id: str) -> None:
-        if self._mw._doc:
-            layer = self._mw._doc.layers.get(layer_id)
+        if self.doc:
+            layer = self.doc.layers.get(layer_id)
             if layer:
                 layer.locked = not layer.locked
-                self._mw._layers_panel.refresh_controls_only(self._mw._doc)
-                self._mw._transform_ctrl.update_transform_box()
+                self.ctx.refresh_layer_controls()
+                self.signals.transform_box_requested.emit()
 
     def on_toggle_vis_selected(self) -> None:
-        self._mw._layers_panel.toggle_visibility_for_selected()
+        self.ctx.toggle_selected_layer_visibility()
 
     def on_rename_layer(self, layer_id: str, new_name: str) -> None:
-        if self._mw._doc:
-            self._mw.execute_command(RenameLayerCommand(layer_id, new_name))
+        if self.doc:
+            self.ctx.execute_command(RenameLayerCommand(layer_id, new_name))
 
     def on_layers_reordered(self, layer_ids: list[str], target_visual_row: int) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
-        mw = self._mw
-        display_ids = mw._layers_panel.row_layer_ids()
-        drag_set = set(layer_ids)
-        above_count = 0
-        for i, lid in enumerate(display_ids):
-            if i >= target_visual_row:
-                break
-            if lid in drag_set:
-                above_count += 1
-        remaining = [lid for lid in display_ids if lid not in drag_set]
-        adjusted_row = max(0, min(target_visual_row - above_count, len(remaining)))
-        for i, lid in enumerate(layer_ids):
-            remaining.insert(adjusted_row + i, lid)
-        new_stack_order = list(reversed(remaining))
-        mw.execute_command(ReorderLayersCommand(new_stack_order))
+        display_ids = self.ctx.layer_row_ids()
+        new_stack_order = reordered_stack_order(display_ids, layer_ids, target_visual_row)
+        self.ctx.execute_command(ReorderLayersCommand(new_stack_order))
 
     def on_layers_reparented(self, layer_ids: list[str], group_id: str) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        self._mw.execute_command(MoveLayerCommand(layer_ids, target_parent_id=group_id))
+        self.ctx.execute_command(MoveLayerCommand(layer_ids, target_parent_id=group_id))
 
     def on_layers_unparented(self, layer_ids: list[str]) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        self._mw.execute_command(MoveLayerCommand(layer_ids, target_parent_id=None))
+        self.ctx.execute_command(MoveLayerCommand(layer_ids, target_parent_id=None))
 
     def on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        self._mw.execute_command(AttachMaskToLayerCommand(mask_id, target_id))
+        self.ctx.execute_command(AttachMaskToLayerCommand(mask_id, target_id))
 
     def on_adj_filter_dropped_on_layer(self, adj_id: str, target_id: str) -> None:
-        if not self._mw._doc:
+        if self.doc is None:
             return
-        self._mw.execute_command(AttachAdjustmentToLayerCommand(adj_id, target_id))
+        self.ctx.execute_command(AttachAdjustmentToLayerCommand(adj_id, target_id))
 
     def on_flatten(self) -> None:
-        if self._mw._doc:
-            self._mw.execute_command(FlattenCommand())
+        if self.doc:
+            self.ctx.execute_command(FlattenCommand())
 
     def on_merge_down(self) -> None:
-        if self._mw._doc:
-            success = self._mw.execute_command(MergeDownCommand())
+        if self.doc:
+            success = self.ctx.execute_command(MergeDownCommand())
             if success is False:
-                self._mw.statusBar().showMessage(
+                self.ctx.show_status_message(
                     "Cannot merge down — no suitable layer below", 3000
                 )
 
     def on_resize_canvas(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
         from ..dialogs.new_document import NewDocumentDialog
-        dlg = NewDocumentDialog(self._mw)
+        dlg = NewDocumentDialog(self.mw)
         dlg.setWindowTitle("Canvas Size")
-        dlg._width.setValue(self._mw._doc.width)
-        dlg._height.setValue(self._mw._doc.height)
+        dlg._width.setValue(self.doc.width)
+        dlg._height.setValue(self.doc.height)
         if dlg.exec():
             w, h, _ = dlg.get_values()
             if w > 0 and h > 0:
-                self._mw._doc._snapshot("Resize Canvas")
-                self._mw._doc.resize(w, h)
-                self._mw._refresh()
-
-    def needs_rasterize_warning(self) -> bool:
-        """Return True if the active tool would paint on a text layer."""
-        mw = self._mw
-        if mw._tools.active_type not in PAINTING_TOOLS:
-            return False
-        layer = mw._doc.layers.active_layer
-        return layer is not None and layer.layer_type == LayerType.TEXT
-
-    def ask_rasterize(self) -> bool:
-        """Show a rasterization dialog. Return True if user accepted."""
-        mw = self._mw
-        reply = QMessageBox.warning(
-            mw,
-            "Rasterize Text Layer",
-            "This type layer must be rasterized before it can be modified "
-            "with this tool.  Once rasterized, the text will no longer be "
-            "editable.\n\nRasterize the layer?",
-            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if reply == QMessageBox.StandardButton.Ok:
-            self.rasterize_active_layer()
-            return True
-        return False
+                resize_canvas(self.doc, w, h)
+                self.ctx.refresh()
 
     def rasterize_active_layer(self) -> None:
         """Convert the active text layer into a plain raster layer."""
-        mw = self._mw
-        layer = mw._doc.layers.active_layer
-        if layer is None:
-            return
-        mw._doc.save_snapshot("Rasterize Text")
-        layer.layer_type = LayerType.RASTER
-        if hasattr(layer, "_text_data"):
-            try:
-                del layer._text_data
-            except AttributeError:
-                layer._text_data = None
-        layer.rasterize_transform()
-        mw._refresh()
+        rasterize_active_text_layer(self.doc, self.ctx.refresh)
 
     def handle_numpad_opacity(self, key: int) -> bool:
         """Process a numpad digit for opacity. Returns True if consumed."""
@@ -547,34 +460,27 @@ class LayerController:
         mw = self._mw
         if mw._doc and mw._doc.layers.active_layer:
             mw._doc.layers.active_layer.opacity = pct / 100.0
-            mw._layers_panel.refresh_controls_only(mw._doc)
-            mw._refresh_canvas_only()
-            mw.statusBar().showMessage(f"Opacity: {pct}%", 1500)
+            self.ctx.refresh_layer_controls()
+            self.ctx.refresh_canvas_only()
+            self.ctx.show_status_message(f"Opacity: {pct}%", 1500)
 
     def on_resize_image(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
-        mw = self._mw
         from ..dialogs.new_document import NewDocumentDialog
-        dlg = NewDocumentDialog(mw)
+        dlg = NewDocumentDialog(self.mw)
         dlg.setWindowTitle("Image Size")
-        dlg._width.setValue(mw._doc.width)
-        dlg._height.setValue(mw._doc.height)
+        dlg._width.setValue(self.doc.width)
+        dlg._height.setValue(self.doc.height)
         if dlg.exec():
             import cv2
             new_w, new_h, _ = dlg.get_values()
             if new_w < 1 or new_h < 1:
                 return
-            sx = new_w / max(mw._doc.width, 1)
-            sy = new_h / max(mw._doc.height, 1)
-            mw._doc._snapshot("Resize Image")
-            for layer in mw._doc.layers.layers:
-                px = layer.pixels
-                lh, lw = px.shape[:2]
-                nlw, nlh = max(1, round(lw * sx)), max(1, round(lh * sy))
-                layer._pixels = cv2.resize(px, (nlw, nlh), interpolation=cv2.INTER_AREA)
-                layer.width, layer.height = nlw, nlh
-                ox, oy = layer.position
-                layer.position = (round(ox * sx), round(oy * sy))
-            mw._doc.resize(new_w, new_h)
-            mw._refresh()
+            resize_image(
+                self.doc,
+                new_w,
+                new_h,
+                lambda pixels, size: cv2.resize(pixels, size, interpolation=cv2.INTER_AREA),
+            )
+            self.ctx.refresh()

@@ -13,79 +13,27 @@ import numpy as np
 from PySide6.QtWidgets import QWidget
 
 from ..core.document import Document
+from ..processors import ImageProcessor
+from ..registries import (
+    get_adjustment_class,
+    get_adjustment_map,
+    get_filter_class,
+    get_filter_map,
+    get_filter_name_map,
+)
 from .dialogs.filter_dialog import FilterDialog
 
 
 # ---- Adjustment class registry ---------------------------------------------
 
 def _adj_map() -> dict[str, type]:
-    from ..adjustments.brightness_contrast import BrightnessContrast
-    from ..adjustments.levels import Levels
-    from ..adjustments.curves import Curves
-    from ..adjustments.exposure import Exposure
-    from ..adjustments.vibrance import Vibrance
-    from ..adjustments.hue_saturation import HueSaturation
-    from ..adjustments.color_balance import ColorBalance
-    from ..adjustments.black_white import BlackWhite
-    from ..adjustments.photo_filter import PhotoFilter
-    from ..adjustments.gradient_map import GradientMap
-    from ..adjustments.selective_color import SelectiveColor
-    from ..adjustments.channel_mixer import ChannelMixer
-    from ..adjustments.invert import Invert
-    from ..adjustments.posterize import Posterize
-    from ..adjustments.threshold import Threshold
-    return {
-        "Brightness/Contrast": BrightnessContrast,
-        "Levels": Levels, "Curves": Curves, "Exposure": Exposure,
-        "Vibrance": Vibrance, "Hue/Saturation": HueSaturation,
-        "Color Balance": ColorBalance, "Black & White": BlackWhite,
-        "Photo Filter": PhotoFilter, "Gradient Map": GradientMap,
-        "Selective Color": SelectiveColor, "Channel Mixer": ChannelMixer,
-        "Invert": Invert, "Posterize": Posterize, "Threshold": Threshold,
-    }
+    return get_adjustment_map()
 
 
 # ---- Filter class registry ------------------------------------------------
 
 def _filter_map() -> dict[str, type]:
-    from ..filters.blur.gaussian_blur import GaussianBlur
-    from ..filters.blur.motion_blur import MotionBlur
-    from ..filters.blur.radial_blur import RadialBlur
-    from ..filters.blur.surface_blur import SurfaceBlur
-    from ..filters.blur.lens_blur import LensBlur
-    from ..filters.sharpen.sharpen import Sharpen
-    from ..filters.sharpen.unsharp_mask import UnsharpMask
-    from ..filters.sharpen.smart_sharpen import SmartSharpen
-    from ..filters.noise.add_noise import AddNoise
-    from ..filters.noise.reduce_noise import ReduceNoise
-    from ..filters.noise.dust_scratches import DustScratches
-    from ..filters.noise.median import MedianFilter
-    from ..filters.distort.ripple import Ripple
-    from ..filters.distort.wave import Wave
-    from ..filters.distort.twirl import Twirl
-    from ..filters.distort.pinch import Pinch
-    from ..filters.distort.perspective import PerspectiveFilter
-    from ..filters.stylize.emboss import Emboss
-    from ..filters.stylize.find_edges import FindEdges
-    from ..filters.stylize.solarize import Solarize
-    from ..filters.stylize.oil_paint import OilPaint
-    from ..filters.render.clouds import Clouds
-    from ..filters.render.difference_clouds import DifferenceClouds
-    from ..filters.render.lighting_effects import LightingEffects
-    return {
-        "gaussian_blur": GaussianBlur, "motion_blur": MotionBlur,
-        "radial_blur": RadialBlur, "surface_blur": SurfaceBlur,
-        "lens_blur": LensBlur, "sharpen": Sharpen,
-        "unsharp_mask": UnsharpMask, "smart_sharpen": SmartSharpen,
-        "add_noise": AddNoise, "reduce_noise": ReduceNoise,
-        "dust__scratches": DustScratches, "median": MedianFilter,
-        "ripple": Ripple, "wave": Wave, "twirl": Twirl,
-        "pinch": Pinch, "perspective": PerspectiveFilter,
-        "emboss": Emboss, "find_edges": FindEdges,
-        "solarize": Solarize, "oil_paint": OilPaint,
-        "clouds": Clouds, "difference_clouds": DifferenceClouds,
-        "lighting_effects": LightingEffects,
-    }
+    return get_filter_map()
 
 
 def _filter_name_map() -> dict[str, type]:
@@ -95,8 +43,7 @@ def _filter_name_map() -> dict[str, type]:
     dict is keyed by each filter's ``.name`` attribute so that snapshot
     restore and the layers panel can look up classes by display name.
     """
-    m = _filter_map()
-    return {cls().name: cls for cls in m.values()}
+    return get_filter_name_map()
 
 
 # ---- Public API -----------------------------------------------------------
@@ -112,7 +59,7 @@ def run_adjustment(
     If *preview_fn* is provided it is called after every parameter change so
     the canvas updates in real time.
     """
-    adj_cls = _adj_map().get(name)
+    adj_cls = get_adjustment_class(name)
     if adj_cls is None:
         return False
     adj = adj_cls()
@@ -137,7 +84,7 @@ def run_filter(
     preview_fn: Callable[[], None] | None = None,
 ) -> bool:
     """Show a dialog for filter *key*, apply to active layer."""
-    filt_cls = _filter_map().get(key)
+    filt_cls = get_filter_class(key)
     if filt_cls is None:
         return False
     filt = filt_cls()
@@ -158,7 +105,7 @@ def run_filter(
 
 def _run_dialog_with_preview(
     title: str,
-    processor,
+    processor: ImageProcessor,
     doc: Document,
     parent: QWidget | None,
     preview_fn: Callable[[], None] | None,
@@ -209,7 +156,7 @@ def _run_dialog_with_preview(
         return False
 
 
-def _apply_to_layer(doc: Document, processor, params: dict) -> bool:
+def _apply_to_layer(doc: Document, processor: ImageProcessor, params: dict) -> bool:
     """Immediate apply (no dialog, no preview)."""
     layer = doc.layers.active_layer
     if layer is None or layer.locked:

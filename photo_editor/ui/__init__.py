@@ -22,6 +22,7 @@ ui/
 ├── theme.py             # DARK_STYLESHEET — dark theme stylesheet
 │
 ├── canvas/              # Canvas subcomponents
+├── services/            # Shared UI helper/policy modules
 ├── controllers/         # Domain-specific UI logic handlers
 ├── panels/              # Dockable side panels
 ├── widgets/             # Reusable UI widgets (color, gradient, rulers)
@@ -89,6 +90,11 @@ theme.py
     DARK_STYLESHEET (str)
         Professional dark theme for QMainWindow, menus, toolbars, dock
         widgets, list/tree widgets, scrollbars, etc.
+
+services/
+    Shared controller-support modules extracted out of the UI root.
+    Examples: guide propagation, layer-panel sync, selection overlays,
+    vector preview state, and rasterize guards.
 
 =============================================================================
 canvas/ — Canvas subcomponents

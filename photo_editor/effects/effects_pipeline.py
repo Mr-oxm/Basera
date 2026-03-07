@@ -1,4 +1,9 @@
-"""Chain multiple effects into an ordered pipeline."""
+"""Chain multiple runtime effects into an ordered post-process pipeline.
+
+Unlike adjustment and filter layers, this pipeline is not document-structure
+state. It is a runtime processor chain that can enable, disable, reorder, and
+apply effect processors sequentially to a rendered image.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from .effect_base import Effect
 
 
 class EffectsPipeline:
-    """Ordered list of effects applied sequentially."""
+    """Ordered list of runtime effects applied sequentially."""
 
     def __init__(self) -> None:
         self._effects: list[Effect] = []
@@ -33,6 +38,7 @@ class EffectsPipeline:
             self._effects.insert(to_idx, e)
 
     def process(self, image: np.ndarray) -> np.ndarray:
+        """Apply enabled effects in order to an already-rendered image."""
         result = image.copy()
         for effect in self._effects:
             if effect.enabled:

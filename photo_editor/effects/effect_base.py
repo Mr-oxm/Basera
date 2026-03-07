@@ -1,25 +1,28 @@
 """Abstract base for all image effects."""
 
-from abc import ABC, abstractmethod
-
 import numpy as np
 
+from ..processors import ImageProcessor
 
-class Effect(ABC):
+
+class Effect(ImageProcessor):
     """Single processing step in the effects pipeline."""
 
-    def __init__(self, name: str, enabled: bool = True) -> None:
-        self.name = name
+    def __init__(
+        self,
+        name: str,
+        default_params: dict | None = None,
+        enabled: bool = True,
+    ) -> None:
+        super().__init__(name, default_params)
         self.enabled = enabled
-        self._params: dict = {}
 
     @property
     def params(self) -> dict:
-        return self._params
+        return self.default_params
 
     def set_param(self, key: str, value: object) -> None:
-        self._params[key] = value
+        self.default_params[key] = value
 
-    @abstractmethod
     def apply(self, image: np.ndarray, params: dict | None = None) -> np.ndarray:
-        ...
+        raise NotImplementedError()

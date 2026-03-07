@@ -5,9 +5,17 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 
 from ...core.enums import ToolType
+from .base import ControllerBase
+from ..services.vector_ui_state import (
+    clear_boolean_preview,
+    enter_pick_segments_mode,
+    exit_pick_segments_mode,
+    show_boolean_preview,
+    update_boolean_toolbar,
+)
 
 
-class VectorController:
+class VectorController(ControllerBase):
     """Handles vector properties bar and vector tool actions (pen, node, shape)."""
 
     # Map action string → BooleanOp enum member name
@@ -20,12 +28,12 @@ class VectorController:
     }
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire panel signals."""
-        self._mw = main_window
-        mw = main_window
+        super().wire(main_window)
+        mw = self.mw
 
         mw._props_panel.vector_property_changed.connect(self.on_vector_prop_changed)
         mw._props_panel.vector_action.connect(self.on_vector_action)
@@ -41,7 +49,7 @@ class VectorController:
         self._install_bool_callback()
 
     def on_vector_prop_changed(self, key: str, value: object) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None:
             return
@@ -79,10 +87,8 @@ class VectorController:
             self._apply_style_to_selected_objects(key, value)
 
     def _apply_style_to_selected_objects(self, key: str, value: object) -> None:
-        mw = self._mw
-        if mw is None:
-            return
-        doc = mw._doc
+        mw = self.mw
+        doc = self.doc
         if doc is None:
             return
 
@@ -192,7 +198,7 @@ class VectorController:
                 rasterize_vector_layer_tight(doc, layer=layer)
 
         if any_changed:
-            mw._schedule_render()
+            self.ctx.schedule_render()
 
     def _gradient_to_object_space(self, paint, obj):
         """Set gradient start/end to cover the object's bounding box."""
@@ -255,82 +261,73 @@ class VectorController:
             setattr(tool, attr, val)
 
     def on_vector_action(self, action: str) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
-        if tool is None or mw._doc is None:
+        if tool is None or self.doc is None:
             return
         tt = mw._tools.active_type
 
         # ---- Boolean operations ----
         if action in self._BOOL_OP_MAP:
             if tt == ToolType.NODE:
-                result = tool.do_boolean(mw._doc, action)
+                result = tool.do_boolean(self.doc, action)
                 if result is not None:
-                    mw._refresh()
+                    self.ctx.refresh()
                 self._clear_bool_preview()
             return
 
         # ---- Pick-segments mode ----
         if action == "pick_segments_enter":
             if tt == ToolType.NODE:
-                ok = tool.enter_pick_segments(mw._doc)
+                ok = tool.enter_pick_segments(self.doc)
                 if ok:
-                    mw._props_panel.vector_bar.enter_pick_segments()
-                    # Expose pick_segments state to canvas for overlay
-                    mw._canvas._pick_segments_state = tool.pick_segments
-                    mw._canvas.update()
+                    enter_pick_segments_mode(mw._props_panel, mw._canvas, tool.pick_segments)
                 else:
-                    # Uncheck the button — enter failed
-                    mw._props_panel.vector_bar.exit_pick_segments()
+                    exit_pick_segments_mode(mw._props_panel, mw._canvas)
             return
 
         if action == "pick_segments_apply":
             if tt == ToolType.NODE:
-                new_ids = tool.apply_pick_segments(mw._doc)
-                mw._props_panel.vector_bar.exit_pick_segments()
-                mw._canvas._pick_segments_state = None
+                new_ids = tool.apply_pick_segments(self.doc)
+                exit_pick_segments_mode(mw._props_panel, mw._canvas)
                 if new_ids:
-                    mw._refresh()
-                else:
-                    mw._canvas.update()
+                    self.ctx.refresh()
             return
 
         if action == "pick_segments_cancel":
             if tt == ToolType.NODE:
                 tool.cancel_pick_segments()
-                mw._props_panel.vector_bar.exit_pick_segments()
-                mw._canvas._pick_segments_state = None
-                mw._canvas.update()
+                exit_pick_segments_mode(mw._props_panel, mw._canvas)
             return
 
         # ---- Node actions (existing) ----
         if tt == ToolType.NODE:
             if action == "delete_nodes":
-                tool.delete_selected_nodes(mw._doc)
+                tool.delete_selected_nodes(self.doc)
             elif action == "break_path":
-                tool.break_path_at_node(mw._doc)
+                tool.break_path_at_node(self.doc)
             elif action == "toggle_mode":
-                tool.toggle_node_mode(mw._doc)
+                tool.toggle_node_mode(self.doc)
             elif action == "set_sharp":
                 from ...vector.path import HandleMode
-                tool.set_node_mode(mw._doc, HandleMode.SHARP)
+                tool.set_node_mode(self.doc, HandleMode.SHARP)
             elif action == "set_smooth":
                 from ...vector.path import HandleMode
-                tool.set_node_mode(mw._doc, HandleMode.SMOOTH)
+                tool.set_node_mode(self.doc, HandleMode.SMOOTH)
             elif action == "set_symmetric":
                 from ...vector.path import HandleMode
-                tool.set_node_mode(mw._doc, HandleMode.SYMMETRIC)
+                tool.set_node_mode(self.doc, HandleMode.SYMMETRIC)
             elif action == "select_all":
-                tool.select_all_nodes(mw._doc)
-            mw._schedule_render()
+                tool.select_all_nodes(self.doc)
+            self.ctx.schedule_render()
             mw._canvas.update()
 
     # ---- Boolean hover preview -------------------------------------------
 
     def _on_bool_hover(self, action: str) -> None:
         """Compute and show a boolean result preview on the canvas."""
-        mw = self._mw
-        if mw is None or mw._doc is None:
+        mw = self.mw
+        if self.doc is None:
             return
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.NODE:
@@ -345,29 +342,20 @@ class VectorController:
 
         op = BooleanOp[op_name]
         ids = list(tool._bool_selected_layer_ids)
-        preview = compute_preview_path(mw._doc, ids, op)
-        mw._canvas._bool_preview_path = preview
-        mw._canvas._bool_source_ids = set(ids)
-        mw._canvas.update()
+        preview = compute_preview_path(self.doc, ids, op)
+        show_boolean_preview(mw._canvas, preview, ids)
 
     def _on_bool_hover_end(self) -> None:
         self._clear_bool_preview()
 
     def _clear_bool_preview(self) -> None:
-        mw = self._mw
-        if mw is None:
-            return
-        mw._canvas._bool_preview_path = None
-        mw._canvas._bool_source_ids = set()
-        mw._canvas.update()
+        clear_boolean_preview(self.mw._canvas)
 
     # ---- Boolean selection callback --------------------------------------
 
     def _install_bool_callback(self) -> None:
         """Install the selection-changed callback on the node tool if present."""
-        mw = self._mw
-        if mw is None:
-            return
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.NODE:
             return
@@ -384,8 +372,8 @@ class VectorController:
 
     def _refresh_bool_toolbar(self) -> None:
         """Push current multi-layer selection count into the vector bar."""
-        mw = self._mw
-        if mw is None or mw._doc is None:
+        mw = self.mw
+        if self.doc is None:
             return
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.NODE:
@@ -393,12 +381,12 @@ class VectorController:
         count = tool.bool_selected_count()
         first, second = "", ""
         if count >= 2:
-            first, second = tool.bool_layer_names(mw._doc)
-        mw._props_panel.vector_bar.update_boolean_state(count, first, second)
+            first, second = tool.bool_layer_names(self.doc)
+        update_boolean_toolbar(mw._props_panel, count, first, second)
 
     def handle_key_press(self, key: int, event) -> bool:
         """Handle Pen/Node tool keys. Returns True if the key was consumed."""
-        mw = self._mw
+        mw = self.mw
         tool_type = mw._tools.active_type
         tool = mw._tools.active_tool
         if tool is None:
@@ -407,8 +395,8 @@ class VectorController:
         if tool_type == ToolType.PEN:
             if key in (Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 if hasattr(tool, "finish_open_path"):
-                    tool.finish_open_path(mw._doc)
-                    mw._refresh()
+                    tool.finish_open_path(self.doc)
+                    self.ctx.refresh()
                     event.accept()
                     return True
 
@@ -422,14 +410,14 @@ class VectorController:
 
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if hasattr(tool, "delete_selected_nodes"):
-                    tool.delete_selected_nodes(mw._doc)
-                    mw._refresh()
+                    tool.delete_selected_nodes(self.doc)
+                    self.ctx.refresh()
                     event.accept()
                     return True
             if key == Qt.Key.Key_Tab:
                 if hasattr(tool, "toggle_node_mode"):
-                    tool.toggle_node_mode(mw._doc)
-                    mw._refresh()
+                    tool.toggle_node_mode(self.doc)
+                    self.ctx.refresh()
                     event.accept()
                     return True
 

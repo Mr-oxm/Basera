@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QInputDialog
 
+from .base import ControllerBase
+from ..services.selection_ui_state import apply_selection_overlay
 
-class SelectionController:
+
+class SelectionController(ControllerBase):
     """Handles selection modify, fill, cut/copy/paste, and selection-to-mask."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu/panel signals."""
-        self._mw = main_window
+        super().wire(main_window)
         mw = main_window
 
         # Menu
@@ -38,12 +41,8 @@ class SelectionController:
         mw._props_panel.selection_action.connect(self.on_sel_action)
 
     def update_selection_overlay(self) -> None:
-        mw = self._mw
-        if mw._doc and mw._doc.selection._mask is not None:
-            if mw._doc.selection._mask.max() > 0:
-                mw._canvas.set_selection_mask(mw._doc.selection._mask)
-                return
-        mw._canvas.set_selection_mask(None)
+        mask = self.doc.selection._mask if self.doc else None
+        apply_selection_overlay(self.mw._canvas, mask)
 
     def extract_layer_mask(self, doc_mask, lx: int, ly: int, w: int, h: int):
         """Extract the portion of the doc-level selection mask that overlaps the layer."""
@@ -64,73 +63,73 @@ class SelectionController:
         return layer_mask
 
     def on_select_all(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.selection.select_all()
-            self.update_selection_overlay()
+        if self.doc:
+            self.doc.selection.select_all()
+            self.signals.selection_overlay_requested.emit()
 
     def on_deselect(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.selection.deselect()
-            self.update_selection_overlay()
+        if self.doc:
+            self.doc.selection.deselect()
+            self.signals.selection_overlay_requested.emit()
 
     def on_invert_sel(self) -> None:
-        if self._mw._doc:
-            self._mw._doc.selection.invert()
-            self.update_selection_overlay()
+        if self.doc:
+            self.doc.selection.invert()
+            self.signals.selection_overlay_requested.emit()
 
     def on_feather_sel(self) -> None:
-        if not self._mw._doc or not self._mw._doc.selection.active:
+        if not self.doc or not self.doc.selection.active:
             return
         radius, ok = QInputDialog.getInt(
-            self._mw, "Feather Selection", "Feather radius (px):", 5, 1, 250
+            self.mw, "Feather Selection", "Feather radius (px):", 5, 1, 250
         )
         if ok:
-            self._mw._doc.selection.feather(radius)
-            self.update_selection_overlay()
+            self.doc.selection.feather(radius)
+            self.signals.selection_overlay_requested.emit()
 
     def on_grow_sel(self) -> None:
-        if not self._mw._doc or not self._mw._doc.selection.active:
+        if not self.doc or not self.doc.selection.active:
             return
         pixels, ok = QInputDialog.getInt(
-            self._mw, "Grow Selection", "Grow by (px):", 5, 1, 250
+            self.mw, "Grow Selection", "Grow by (px):", 5, 1, 250
         )
         if ok:
-            self._mw._doc.selection.grow(pixels)
-            self.update_selection_overlay()
+            self.doc.selection.grow(pixels)
+            self.signals.selection_overlay_requested.emit()
 
     def on_shrink_sel(self) -> None:
-        if not self._mw._doc or not self._mw._doc.selection.active:
+        if not self.doc or not self.doc.selection.active:
             return
         pixels, ok = QInputDialog.getInt(
-            self._mw, "Shrink Selection", "Shrink by (px):", 5, 1, 250
+            self.mw, "Shrink Selection", "Shrink by (px):", 5, 1, 250
         )
         if ok:
-            self._mw._doc.selection.shrink(pixels)
-            self.update_selection_overlay()
+            self.doc.selection.shrink(pixels)
+            self.signals.selection_overlay_requested.emit()
 
     def on_delete_selection(self) -> None:
-        mw = self._mw
-        if not mw._doc:
+        mw = self.mw
+        if not self.doc:
             return
-        layer = mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if layer is None:
             return
-        mask = mw._doc.selection._mask
+        mask = self.doc.selection._mask
         if mask is None:
             return
-        mw._doc._snapshot("Delete Selection")
+        self.doc._snapshot("Delete Selection")
         lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
         layer_mask = self.extract_layer_mask(mask, lx, ly, w, h)
         if layer_mask is not None:
             layer.pixels[..., 3] *= (1.0 - layer_mask)
-        mw._refresh()
+        self.ctx.refresh()
 
     def on_fill_selection(self, which: str) -> None:
-        mw = self._mw
-        if not mw._doc:
+        mw = self.mw
+        if not self.doc:
             return
-        layer = mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if layer is None:
             return
         import numpy as np
@@ -141,8 +140,8 @@ class SelectionController:
             color = mw._color_panel._mgr.background.to_array()
         if len(color) < 4:
             color = np.array([*color[:3], 1.0], dtype=np.float32)
-        mw._doc._snapshot("Fill Selection")
-        mask = mw._doc.selection._mask
+        self.doc._snapshot("Fill Selection")
+        mask = self.doc.selection._mask
         lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
         if mask is not None:
@@ -155,20 +154,20 @@ class SelectionController:
                     )
         else:
             layer.pixels[..., :] = color
-        mw._refresh()
+        self.ctx.refresh()
 
     def on_cut(self) -> None:
         self.on_copy()
         self.on_delete_selection()
 
     def on_copy(self) -> None:
-        mw = self._mw
-        if not mw._doc:
+        mw = self.mw
+        if not self.doc:
             return
-        layer = mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if layer is None:
             return
-        mask = mw._doc.selection._mask
+        mask = self.doc.selection._mask
         lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
         if mask is not None:
@@ -181,13 +180,13 @@ class SelectionController:
             copied = layer.pixels.copy()
         mw._clipboard = copied.copy()
         mw._clipboard_pos = (lx, ly)
-        mw._status.showMessage("Copied to clipboard", 2000)
+        self.ctx.show_status_message("Copied to clipboard", 2000)
 
     def on_paste(self) -> None:
-        mw = self._mw
+        mw = self.mw
         if not hasattr(mw, "_clipboard") or mw._clipboard is None:
             return
-        if not mw._doc:
+        if not self.doc:
             return
         from ...core.layer import Layer
 
@@ -199,21 +198,21 @@ class SelectionController:
         new_layer.pixels = mw._clipboard.copy()
         if hasattr(mw, "_clipboard_pos"):
             new_layer.position = list(mw._clipboard_pos)
-        mw._doc._snapshot("Paste")
-        mw._doc.layers.add(new_layer)
-        mw._refresh()
+        self.doc._snapshot("Paste")
+        self.doc.layers.add(new_layer)
+        self.ctx.refresh()
 
     def on_duplicate_selection(self) -> None:
-        mw = self._mw
-        if not mw._doc or not mw._doc.selection.active:
+        mw = self.mw
+        if not self.doc or not self.doc.selection.active:
             return
-        layer = mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if layer is None:
             return
         import numpy as np
         from ...core.layer import Layer
 
-        mask = mw._doc.selection._mask
+        mask = self.doc.selection._mask
         lx, ly = layer.position
         h, w = layer.pixels.shape[:2]
         layer_mask = self.extract_layer_mask(mask, lx, ly, w, h)
@@ -236,20 +235,20 @@ class SelectionController:
         )
         new_layer.pixels = cropped
         new_layer.position = [lx + int(x0), ly + int(y0)]
-        mw._doc._snapshot("Duplicate Selection")
-        mw._doc.layers.add(new_layer)
-        mw._refresh()
-        mw._status.showMessage("Duplicated selection to new layer", 2000)
+        self.doc._snapshot("Duplicate Selection")
+        self.doc.layers.add(new_layer)
+        self.ctx.refresh()
+        self.ctx.show_status_message("Duplicated selection to new layer", 2000)
 
     def on_selection_to_mask(self) -> None:
-        if not self._mw._doc:
+        if not self.doc:
             return
-        if self._mw._doc.selection.active:
-            self._mw._doc.selection_to_mask_layer()
-            self._mw._refresh()
+        if self.doc.selection.active:
+            self.doc.selection_to_mask_layer()
+            self.ctx.refresh()
 
     def on_sel_prop_changed(self, key: str, value: object) -> None:
-        tool = self._mw._tools.active_tool
+        tool = self.mw._tools.active_tool
         if tool is None:
             return
         if key == "mode" and hasattr(tool, "mode"):

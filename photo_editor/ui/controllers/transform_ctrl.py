@@ -4,18 +4,19 @@ from __future__ import annotations
 
 from ...core.enums import LayerType, ToolType
 from ...transforms.transform_engine import TransformEngine
+from .base import ControllerBase
 
 
-class TransformController:
+class TransformController(ControllerBase):
     """Handles flip, rotate, and alignment/distribution from Move tool bar."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu/panel signals."""
-        self._mw = main_window
-        mw = main_window
+        super().wire(main_window)
+        mw = self.mw
 
         a = mw._menu.actions_map
         a["flip_h"].triggered.connect(lambda: self.on_transform("flip_h"))
@@ -26,12 +27,12 @@ class TransformController:
         mw._props_panel.align_requested.connect(self.on_align_requested)
 
     def on_transform(self, op: str) -> None:
-        if not self._mw._doc or not self._mw._doc.layers.active_layer:
+        if not self.doc or not self.doc.layers.active_layer:
             return
-        layer = self._mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if layer.locked:
             return
-        self._mw._doc.save_snapshot(op.replace("_", " ").title())
+        self.doc.save_snapshot(op.replace("_", " ").title())
         px = layer.pixels
         if op == "flip_h":
             layer.pixels = TransformEngine.flip_h(px)
@@ -41,32 +42,32 @@ class TransformController:
             layer.pixels = TransformEngine.rotate(px, -90)
         elif op == "rotate_ccw":
             layer.pixels = TransformEngine.rotate(px, 90)
-        self._mw._refresh()
+        self.ctx.refresh()
 
     def on_align_requested(self, action: str) -> None:
         """Handle alignment/distribution from the Move properties bar."""
-        mw = self._mw
-        if mw._doc is None:
+        mw = self.mw
+        if self.doc is None:
             return
         from ...tools.move_tool import MoveTool
         method = getattr(MoveTool, action, None)
         if method is not None:
-            method(mw._doc)
-            mw._refresh()
+            method(self.doc)
+            self.ctx.refresh()
 
     def update_transform_box(self) -> None:
         """Show transform bounding box when the Move tool is active."""
-        mw = self._mw
-        if mw._tools.active_type != ToolType.MOVE or not mw._doc:
+        mw = self.mw
+        if mw._tools.active_type != ToolType.MOVE or not self.doc:
             mw._canvas.set_transform_box(None)
             return
-        layer = mw._doc.layers.active_layer
+        layer = self.doc.layers.active_layer
         if not layer:
             mw._canvas.set_transform_box(None)
             return
 
         # Multi-selection: display a union bounding box (with rotation)
-        sel = mw._doc.layers.selected_indices
+        sel = self.doc.layers.selected_indices
         if len(sel) > 1:
             from ...tools.move.hit_test import multi_bbox
             tool = mw._tools.active_tool
@@ -81,16 +82,16 @@ class TransformController:
             if orig is not None and angle != 0.0:
                 mw._canvas.set_transform_box(orig, angle)
             else:
-                mb = multi_bbox(mw._doc)
+                mb = multi_bbox(self.doc)
                 if mb:
                     mw._canvas.set_transform_box(mb, angle)
                 else:
                     mw._canvas.set_transform_box(None)
             return
 
-        if mw._doc.selection.active and mw._doc.selection._mask is not None:
+        if self.doc.selection.active and self.doc.selection._mask is not None:
             import numpy as np
-            mask = mw._doc.selection._mask
+            mask = self.doc.selection._mask
             rows = np.any(mask > 0.5, axis=1)
             cols = np.any(mask > 0.5, axis=0)
             if np.any(rows) and np.any(cols):
@@ -142,7 +143,7 @@ class TransformController:
         min_x, min_y = float("inf"), float("inf")
         max_x, max_y = float("-inf"), float("-inf")
         found = False
-        for child in mw._doc.layers:
+        for child in self.doc.layers:
             if child.parent_id != group.id:
                 continue
             cx, cy = child.position

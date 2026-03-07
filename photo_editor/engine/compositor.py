@@ -123,23 +123,40 @@ class Compositor:
                 standalone_mask_ids.add(l.id)
 
         # Pre-scan for clipping-mask needs — keep standalone masks in-line
+        # Root-level adjustment/filter layers ARE included here; they act as
+        # canvas-wide effects applied to everything composited below them
+        # (Photoshop adjustment-layer semantics).  Child adj/filter layers are
+        # excluded via adj_child_ids (they are applied per-parent instead).
         visible = [
             l for l in layers
             if l.visible and l.parent_id is None
-            and l.layer_type != LayerType.ADJUSTMENT
-            and l.layer_type != LayerType.FILTER
             and l.id not in mask_layer_ids
             and (l.layer_type != LayerType.MASK or l.id in standalone_mask_ids)
             and l.id not in adj_child_ids
         ]
         needs_placed: set[str] = set()
-        for i in range(len(visible) - 1):
-            if visible[i + 1].clipping_mask:
-                needs_placed.add(visible[i].id)
+        # Only raster/group/mask layers participate in clipping-mask chains;
+        # skip root-level adjustment/filter layers in this scan.
+        clippable = [
+            l for l in visible
+            if l.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER)
+        ]
+        for i in range(len(clippable) - 1):
+            if clippable[i + 1].clipping_mask:
+                needs_placed.add(clippable[i].id)
 
         prev_img: np.ndarray | None = None
 
         for layer in visible:
+            # --- Root-level adjustment/filter: apply to accumulated canvas ---
+            if layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                adj = layer.adjustment
+                if adj is not None:
+                    canvas = adj.apply(canvas, layer.adjustment_params or {})
+                    np.clip(canvas, 0, 1, out=canvas)
+                prev_img = None
+                continue
+
             # --- Standalone mask: attenuate canvas built so far --------
             if layer.layer_type == LayerType.MASK and layer.id in standalone_mask_ids:
                 gray = layer.get_mask_grayscale()

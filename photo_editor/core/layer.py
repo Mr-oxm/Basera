@@ -15,11 +15,19 @@ the source.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, TypeAlias
 from uuid import uuid4
 
 import numpy as np
 
 from .enums import BlendMode, LayerType
+
+if TYPE_CHECKING:
+    from ..processors import ImageProcessor
+
+    LayerProcessor: TypeAlias = ImageProcessor
+else:
+    LayerProcessor = object
 
 
 @dataclass
@@ -55,7 +63,7 @@ class Layer:
         self._pixels = np.zeros((self.height, self.width, 4), dtype=np.float32)
         self._mask: np.ndarray | None = None
         self._styles: list = []
-        self._adjustment: object | None = None
+        self._adjustment: LayerProcessor | None = None
         self._adjustment_params: dict = {}
         self.children: list[str] = []
         # Mask layer children — IDs of MASK-type layers attached to this layer
@@ -242,11 +250,11 @@ class Layer:
         return self._styles
 
     @property
-    def adjustment(self):
+    def adjustment(self) -> LayerProcessor | None:
         return self._adjustment
 
     @adjustment.setter
-    def adjustment(self, value) -> None:
+    def adjustment(self, value: LayerProcessor | None) -> None:
         self._adjustment = value
 
     @property

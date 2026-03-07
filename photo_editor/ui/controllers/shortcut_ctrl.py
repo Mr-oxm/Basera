@@ -7,6 +7,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 
 from ...core.color_engine import ColorManager
 from ...core.enums import ToolType
+from .base import ControllerBase
 
 
 TOOL_SHORTCUT_MAP = {
@@ -37,20 +38,20 @@ TOOL_CYCLE_GROUPS: list[tuple[ToolType, ...]] = [
 ]
 
 
-class ShortcutController:
+class ShortcutController(ControllerBase):
     """Handles QShortcut creation and callbacks for tools, colors, brush size, fullscreen."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
         self._active_shortcuts: list[QShortcut] = []
 
     def wire(self, main_window) -> None:
-        self._mw = main_window
+        super().wire(main_window)
         self._rebuild_shortcuts()
         main_window._shortcut_mgr.shortcuts_changed.connect(self._rebuild_shortcuts)
 
     def _rebuild_shortcuts(self) -> None:
-        mw = self._mw
+        mw = self.mw
         for sc in self._active_shortcuts:
             sc.setEnabled(False)
             sc.deleteLater()
@@ -116,7 +117,7 @@ class ShortcutController:
             sc.setEnabled(is_safe)
 
     def _skip_if_text_editing(self) -> bool:
-        mw = self._mw
+        mw = self.mw
         return (
             mw._tools.active_type == ToolType.TEXT
             and mw._canvas._text_editing
@@ -125,7 +126,7 @@ class ShortcutController:
     def _on_tool(self, tool_type: ToolType) -> None:
         if self._skip_if_text_editing():
             return
-        mw = self._mw
+        mw = self.mw
         current = mw._tools.active_type
         for group in TOOL_CYCLE_GROUPS:
             if tool_type in group and current in group:
@@ -145,18 +146,18 @@ class ShortcutController:
         ColorManager.instance().reset()
 
     def _on_brush_size(self, delta: int) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool and hasattr(tool, "size"):
             new_size = max(1, tool.size + delta)
             tool.size = new_size
-            mw._tool_ctrl.update_properties_panel()
-            mw._tool_ctrl.update_brush_cursor()
+            self.signals.properties_panel_requested.emit()
+            self.signals.brush_cursor_requested.emit()
 
     def _on_toggle_fullscreen(self) -> None:
         if self._skip_if_text_editing():
             return
-        mw = self._mw
+        mw = self.mw
         if mw.isFullScreen():
             mw.showNormal()
         else:
@@ -165,5 +166,5 @@ class ShortcutController:
     def _on_keyboard_shortcuts(self) -> None:
         """Open the keyboard shortcuts editor dialog."""
         from ..dialogs.shortcuts_dialog import KeyboardShortcutsDialog
-        dlg = KeyboardShortcutsDialog(self._mw)
+        dlg = KeyboardShortcutsDialog(self.mw)
         dlg.exec()

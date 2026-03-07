@@ -134,6 +134,10 @@ class FileTabBar(QWidget):
         """Update the title of a tab."""
         self._tab_bar.setTabText(index, text)
 
+    def set_tab_tooltip(self, index: int, text: str) -> None:
+        """Update the tooltip of a tab."""
+        self._tab_bar.setTabToolTip(index, text)
+
     def set_tab_modified(self, index: int, modified: bool = True) -> None:
         """Show a dot/indicator that the document has unsaved changes."""
         text = self._tab_bar.tabText(index)

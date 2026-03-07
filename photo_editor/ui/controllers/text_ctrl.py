@@ -6,24 +6,25 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 
 from ...core.enums import LayerType, ToolType
+from .base import ControllerBase
 
 
-class TextController:
+class TextController(ControllerBase):
     """Handles text tool setup, overlay, key events, and exit editing."""
 
     def __init__(self) -> None:
-        self._mw = None
+        super().__init__()
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire panel signals."""
-        self._mw = main_window
-        mw = main_window
+        super().wire(main_window)
+        mw = self.mw
 
         mw._props_panel.text_property_changed.connect(self.on_text_prop_changed)
 
     def setup(self) -> None:
         """Wire callbacks for the text tool (called when text tool is selected)."""
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None:
             return
@@ -31,17 +32,17 @@ class TextController:
         tool.set_overlay_callback(self.update_overlay)
         mw._canvas.set_key_handler(self.on_key)
 
-        if mw._doc and not tool.is_editing:
-            layer = mw._doc.layers.active_layer
+        if self.doc and not tool.is_editing:
+            layer = self.doc.layers.active_layer
             if layer is not None and layer.layer_type == LayerType.TEXT:
                 td = getattr(layer, "_text_data", None)
                 if td is not None:
-                    tool._start_editing(layer, mw._doc)
+                    tool._start_editing(layer, self.doc)
                     self.update_overlay()
-                    mw._refresh()
+                    self.ctx.refresh()
 
     def on_text_prop_changed(self, key: str, value: object) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.TEXT:
             return
@@ -49,13 +50,12 @@ class TextController:
         self.update_overlay()
 
     def on_refresh(self) -> None:
-        mw = self._mw
-        mw._schedule_render()
-        mw._schedule_panel_refresh()
+        self.ctx.schedule_render()
+        self.ctx.schedule_panel_refresh()
         self.update_overlay()
 
     def on_key(self, key: int, text: str, modifiers) -> bool:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.TEXT:
             return False
@@ -65,12 +65,12 @@ class TextController:
         return consumed
 
     def update_overlay(self) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.TEXT:
             if mw._text_editing_active:
                 mw._text_editing_active = False
-                mw._shortcut_ctrl.update_text_editing_shortcuts(False)
+                self.signals.text_editing_shortcuts_requested.emit(False)
             mw._canvas.set_text_editing(False)
             mw._canvas.set_text_box(None)
             mw._canvas.set_text_draw_rect(None)
@@ -79,7 +79,7 @@ class TextController:
         if tool.is_drawing:
             if mw._text_editing_active:
                 mw._text_editing_active = False
-                mw._shortcut_ctrl.update_text_editing_shortcuts(False)
+                self.signals.text_editing_shortcuts_requested.emit(False)
             mw._canvas.set_text_editing(False)
             mw._canvas.set_text_box(None)
             mw._canvas.set_text_draw_rect(tool.draw_rect)
@@ -90,7 +90,7 @@ class TextController:
         is_editing = (tool.is_editing and tool.text_data is not None)
         if mw._text_editing_active != is_editing:
             mw._text_editing_active = is_editing
-            mw._shortcut_ctrl.update_text_editing_shortcuts(is_editing)
+            self.signals.text_editing_shortcuts_requested.emit(is_editing)
 
         if is_editing:
             td = tool.text_data
@@ -139,7 +139,7 @@ class TextController:
             mw._canvas.set_text_selection_rects([])
 
     def update_hover_cursor(self, x: int, y: int) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is None or mw._tools.active_type != ToolType.TEXT:
             return
@@ -158,14 +158,14 @@ class TextController:
             mw._canvas.setCursor(QCursor(Qt.CursorShape.IBeamCursor))
 
     def exit_editing(self) -> None:
-        mw = self._mw
+        mw = self.mw
         tool = mw._tools.active_tool
         if tool is not None and hasattr(tool, "commit_editing"):
-            tool.commit_editing(mw._doc)
+            tool.commit_editing(self.doc)
 
         if mw._text_editing_active:
             mw._text_editing_active = False
-            mw._shortcut_ctrl.update_text_editing_shortcuts(False)
+            self.signals.text_editing_shortcuts_requested.emit(False)
 
         mw._canvas.set_text_editing(False)
         mw._canvas.set_text_box(None)

@@ -507,12 +507,12 @@ class Document:
                 # Restore adjustment / filter layer data
                 adj_name = meta.get("_adjustment_name")
                 if adj_name is not None:
-                    from ..ui.filter_runner import _adj_map, _filter_name_map
+                    from ..registries import get_adjustment_class, get_filter_name_map
                     layer_lt = meta.get("layer_type")
                     if layer_lt == LayerType.FILTER:
-                        cls = _filter_name_map().get(adj_name)
+                        cls = get_filter_name_map().get(adj_name)
                     else:
-                        cls = _adj_map().get(adj_name)
+                        cls = get_adjustment_class(adj_name)
                     if cls is not None:
                         layer._adjustment = cls()
                         layer._adjustment_params = dict(meta.get("_adjustment_params", {}))
