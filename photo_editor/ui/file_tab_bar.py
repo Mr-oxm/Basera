@@ -6,6 +6,8 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import QTabBar, QWidget, QHBoxLayout, QToolButton, QStyle
 
+from .styles import render_qss
+
 
 class _CloseButton(QToolButton):
     """A tiny × button drawn manually so it's always visible."""
@@ -19,17 +21,7 @@ class _CloseButton(QToolButton):
         self._apply_theme(ThemeManager.instance().active_palette)
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(f"""
-            QToolButton {{
-                background: transparent;
-                border: none;
-                border-radius: 3px;
-                padding: 0px;
-            }}
-            QToolButton:hover {{
-                background: {palette['hover']};
-            }}
-        """)
+        self.setStyleSheet(render_qss("file_close_button.qss", palette))
         self._color_normal = QColor(palette['fg_dim'])
         self._color_hover = QColor(palette['fg'])
 
@@ -79,29 +71,7 @@ class FileTabBar(QWidget):
         self._apply_theme(ThemeManager.instance().active_palette)
 
     def _apply_theme(self, palette: dict) -> None:
-        self._tab_bar.setStyleSheet(f"""
-            QTabBar {{
-                background: {palette['bg2']};
-                border: none;
-            }}
-            QTabBar::tab {{
-                background: {palette['bg1']};
-                color: {palette['fg_dim']};
-                padding: 5px 28px 5px 10px;
-                border: none;
-                border-right: 1px solid {palette['bg3']};
-                min-width: 80px;
-                max-width: 220px;
-            }}
-            QTabBar::tab:selected {{
-                background: {palette['bg2']};
-                color: {palette['fg']};
-            }}
-            QTabBar::tab:hover:!selected {{
-                background: {palette['hover']};
-                color: {palette['fg']};
-            }}
-        """)
+        self._tab_bar.setStyleSheet(render_qss("file_tabs.qss", palette))
         self.setStyleSheet(f"background: {palette['bg2']};")
 
     # ---- Public API ---------------------------------------------------------

@@ -265,6 +265,7 @@ class _PresetStrip(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        from ..styles import render_qss
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 0)
         layout.setSpacing(4)
@@ -281,12 +282,24 @@ class _PresetStrip(QWidget):
                     )
                 gradient_css = ", ".join(stop_parts)
                 btn.setStyleSheet(
-                    f"QPushButton {{"
-                    f"  background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                    f"  {gradient_css});"
-                    f"  border: 1px solid #444; border-radius: 4px;"
-                    f"}}"
-                    f"QPushButton:hover {{ border: 1px solid #7aacdf; }}"
+                    render_qss(
+                        "icon_button.qss",
+                        bg=f"qlineargradient(x1:0,y1:0,x2:1,y2:0,{gradient_css})",
+                        border="#444",
+                        radius=4,
+                        fg="#aaa",
+                        font_size=11,
+                        padding="2px 6px",
+                        hover_border="#7aacdf",
+                        hover_fg="#ddd",
+                        hover_bg=f"qlineargradient(x1:0,y1:0,x2:1,y2:0,{gradient_css})",
+                        pressed_bg="#404040",
+                        pressed_border="#7aacdf",
+                        pressed_fg="#ddd",
+                        checked_bg="#404040",
+                        checked_border="#7aacdf",
+                        checked_fg="#ddd",
+                    )
                 )
             btn.setToolTip(name)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -341,6 +354,7 @@ class _StopInfoRow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        from ..styles import format_qss
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 0)
         layout.setSpacing(4)
@@ -366,7 +380,7 @@ class _StopInfoRow(QWidget):
         self._pos_spin.setDecimals(1)
         self._pos_spin.setSuffix("%")
         self._pos_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self._pos_spin.setStyleSheet(_SPIN_STYLE)
+        self._pos_spin.setStyleSheet(format_qss("properties_spin.qss", max_w=50, accent="#5a8abf"))
         self._pos_spin.setFixedWidth(56)
         self._pos_spin.setFixedHeight(20)
         self._pos_spin.valueChanged.connect(
@@ -413,6 +427,7 @@ class GradientEditor(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        from ..styles import format_qss, render_qss
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -421,28 +436,13 @@ class GradientEditor(QWidget):
         type_row = QHBoxLayout()
         type_row.setSpacing(6)
         lbl = QLabel("Type")
-        lbl.setStyleSheet(
-            "color: #888; font-size: 11px; font-weight: 600;"
-            "font-family: 'Segoe UI', 'Inter', sans-serif;"
-        )
+        lbl.setStyleSheet("color: #888; font-size: 11px; font-weight: 600; font-family: 'Segoe UI', 'Inter', sans-serif;")
         type_row.addWidget(lbl)
         self._type_combo = QComboBox()
         self._type_combo.addItems(["Linear", "Radial", "Conical", "Diamond"])
         self._type_combo.setFixedHeight(24)
         self._type_combo.setFixedWidth(90)
-        self._type_combo.setStyleSheet(
-            "QComboBox {"
-            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #ccc; font-size: 11px; padding: 2px 8px;"
-            "}"
-            "QComboBox:hover { border: 1px solid #5a8abf; }"
-            "QComboBox::drop-down { border: none; width: 16px; }"
-            "QComboBox::down-arrow { image: none; border: none; }"
-            "QComboBox QAbstractItemView {"
-            "  background: #333; border: 1px solid #484848; border-radius: 4px;"
-            "  color: #ccc; selection-background-color: #4a6fa5;"
-            "}"
-        )
+        self._type_combo.setStyleSheet(format_qss("properties_combo.qss", widget="QComboBox", accent="#5a8abf"))
         self._type_combo.currentIndexChanged.connect(self._emit_gradient)
         type_row.addWidget(self._type_combo)
         type_row.addStretch()
@@ -453,12 +453,24 @@ class GradientEditor(QWidget):
         rev_btn.setToolTip("Reverse gradient")
         rev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         rev_btn.setStyleSheet(
-            "QPushButton {"
-            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #aaa; font-size: 13px;"
-            "}"
-            "QPushButton:hover { border: 1px solid #5a8abf; color: #ddd; }"
-            "QPushButton:pressed { background: #404040; }"
+            render_qss(
+                "icon_button.qss",
+                bg="#363636",
+                border="#484848",
+                radius=5,
+                fg="#aaa",
+                font_size=13,
+                padding="0px",
+                hover_border="#5a8abf",
+                hover_fg="#ddd",
+                hover_bg="#363636",
+                pressed_bg="#404040",
+                pressed_border="#484848",
+                pressed_fg="#ddd",
+                checked_bg="#404040",
+                checked_border="#5a8abf",
+                checked_fg="#ddd",
+            )
         )
         rev_btn.clicked.connect(self._reverse)
         type_row.addWidget(rev_btn)

@@ -41,41 +41,13 @@ from .color_sliders import ColorSliders
 from .color_wheel import ColorWheel
 from .gradient_editor import GradientEditor
 from .swatch_grid import SwatchGrid
+from ..styles import render_qss
 from ..theme import ThemeManager
 
 
 # ============================================================================
 # Tab bar styled for the popup
 # ============================================================================
-
-def _tab_style(palette: dict) -> str:
-    return f"""
-QTabBar {{
-    background: transparent;
-    border: none;
-}}
-QTabBar::tab {{
-    background: {palette['bg2']};
-    color: {palette['fg_dim']};
-    border: none;
-    padding: 6px 14px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: 'Segoe UI', 'Inter', sans-serif;
-    border-bottom: 2px solid transparent;
-    margin-right: 1px;
-}}
-QTabBar::tab:hover {{
-    color: {palette['fg']};
-    background: {palette['hover']};
-}}
-QTabBar::tab:selected {{
-    color: {palette.get('fg_accent', '#ffffff')};
-    background: {palette['bg1']};
-    border-bottom: 2px solid {palette['accent']};
-}}
-"""
-
 
 # ============================================================================
 # Popup panel (the floating dropdown)
@@ -191,14 +163,8 @@ class _ColorPopup(QWidget):
         self._updating = False
 
     def _apply_theme(self, palette: dict) -> None:
-        self._container.setStyleSheet(
-            "#popupContainer {"
-            f"  background: {palette['bg2']};"
-            f"  border: 1px solid {palette['border']};"
-            "  border-radius: 8px;"
-            "}"
-        )
-        self._tabs.setStyleSheet(_tab_style(palette))
+        self._container.setStyleSheet(render_qss("color_popup_container.qss", palette))
+        self._tabs.setStyleSheet(render_qss("color_popup_tabs.qss", palette))
 
     def set_color(self, c: Color) -> None:
         self._updating = True

@@ -1,0 +1,20 @@
+QPushButton {
+    font-size: 11px;
+    padding: 2px 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #b0b4b8;
+    min-width: 24px;
+    min-height: 24px;
+}
+QPushButton:hover {
+    background: rgba(255,255,255,0.05);
+    color: #e0e4e8;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+QPushButton:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
+    border: 1px solid rgba(110,180,255,0.4);
+    color: #ffffff;
+}

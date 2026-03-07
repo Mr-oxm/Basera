@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QMenuBar
 
 from .shortcut_manager import ShortcutManager
+from .styles import render_qss
 
 
 class EditorMenuBar(QMenuBar):
@@ -27,21 +28,7 @@ class EditorMenuBar(QMenuBar):
         self._apply_theme(ThemeManager.instance().active_palette)
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(f"""
-            QMenuBar {{
-                background-color: {palette['bg3']};
-                color: {palette['fg']};
-                border-bottom: 1px solid {palette['border']};
-            }}
-            QMenuBar::item:selected {{ background-color: {palette['hover']}; }}
-            QMenu {{
-                background-color: {palette['bg2']};
-                color: {palette['fg']};
-                border: 1px solid {palette['border_light']};
-            }}
-            QMenu::item:selected {{ background-color: {palette['accent']}; color: {palette['fg_accent']}; }}
-            QMenu::separator {{ height: 1px; background: {palette['border_light']}; margin: 4px 8px; }}
-        """)
+        self.setStyleSheet(render_qss("menu_bar.qss", palette))
 
     def _build(self) -> None:
         self._file_menu()

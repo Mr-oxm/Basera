@@ -1,0 +1,13 @@
+QMenuBar {
+    background-color: [[bg3]];
+    color: [[fg]];
+    border-bottom: 1px solid [[border]];
+}
+QMenuBar::item:selected { background-color: [[hover]]; }
+QMenu {
+    background-color: [[bg2]];
+    color: [[fg]];
+    border: 1px solid [[border_light]];
+}
+QMenu::item:selected { background-color: [[accent]]; color: [[fg_accent]]; }
+QMenu::separator { height: 1px; background: [[border_light]]; margin: 4px 8px; }

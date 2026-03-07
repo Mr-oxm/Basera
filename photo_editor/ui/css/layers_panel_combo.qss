@@ -1,0 +1,15 @@
+QComboBox {
+    background: [[bg1]];
+    color: [[fg]];
+    border: 1px solid [[border]];
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 11px;
+    min-width: 70px;
+}
+QComboBox::drop-down { border: none; width: 14px; }
+QComboBox QAbstractItemView {
+    background: [[bg2]];
+    color: [[fg]];
+    selection-background-color: [[accent]];
+}

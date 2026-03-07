@@ -1,0 +1,38 @@
+{widget} {{
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: #e0e4e8;
+    font-size: 11px;
+    padding: 2px 6px;
+    min-height: 20px;
+    max-height: 22px;
+}}
+{widget}:hover {{ background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15); }}
+{widget}:focus {{ border: 1px solid {accent}; background: rgba(0, 0, 0, 0.4); }}
+{widget}::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 16px;
+    border: none;
+    background: transparent;
+}}
+{widget}::down-arrow {{
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #aaaaaa;
+}}
+{widget}::down-arrow:hover {{ border-top: 5px solid #eeeeee; }}
+{widget} QAbstractItemView {{
+    background: #2a2c30;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: #e0e4e8;
+    selection-background-color: {accent};
+    outline: none;
+    padding: 2px;
+}}

@@ -1,0 +1,13 @@
+QListWidget {
+    background-color: [[bg1_alt]];
+    border: none;
+    outline: none;
+}
+QListWidget::item {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+QListWidget::item:selected {
+    background: transparent;
+}

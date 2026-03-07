@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox
 
 from ..commands.base import Command
@@ -32,6 +31,8 @@ from .status_bar import EditorStatusBar
 from .theme import ThemeManager, THEMES
 from .tool_manager import ToolManager
 from .toolbar import EditorToolbar
+from .icons import app_icon
+from .styles import render_qss
 
 _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
 
@@ -43,14 +44,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Basera")
         self.resize(1440, 900)
-        
-        import os
-        icon_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "assets", "app", "logo.png"
-        )
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        self.setWindowIcon(app_icon())
         
         ThemeManager.instance().theme_changed.connect(
             lambda _: self.setStyleSheet(THEMES[ThemeManager.instance().active_theme_name])
@@ -555,10 +549,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, "About Basera", about_text)
 
     def _on_theme_changed(self, palette: dict) -> None:
-        self._props_toolbar.setStyleSheet(
-            f"QToolBar {{ background: {palette['bg3']}; border: none; border-bottom: 1px solid {palette['border']}; spacing: 0; padding: 0; }}"
-            f"QToolBar > QWidget {{ background: {palette['bg3']}; }}"
-        )
+        self._props_toolbar.setStyleSheet(render_qss("props_toolbar.qss", palette))
 
     def _on_brush_preset_changed(self, preset) -> None:
         """Apply the selected brush preset to the active brush-type tool."""

@@ -13,56 +13,11 @@ from PySide6.QtWidgets import (
 from ...core.document import Document
 from ...core.enums import LayerType
 from ...vector.geometry import AffineTransform, Vec2, BBox
+from ..styles import format_qss, render_qss
 
 # ============================================================================
 # Styles
 # ============================================================================
-
-_PANEL_STYLE = """
-    QWidget {
-        background-color: #2a2a2a;
-        color: #ddd;
-        font-family: 'Segoe UI', sans-serif;
-        font-size: 11px;
-    }
-    QLabel {
-        color: #aaa;
-    }
-"""
-
-_SPIN_STYLE = """
-    QDoubleSpinBox {
-        background-color: #1e1e1e;
-        border: 1px solid #3d3d3d;
-        border-radius: 3px;
-        padding: 2px;
-        color: #eee;
-        selection-background-color: #4a6fa5;
-    }
-    QDoubleSpinBox:focus {
-        border: 1px solid #4a6fa5;
-    }
-    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-        width: 0px;
-    }
-"""
-
-_BTN_STYLE = """
-    QPushButton {
-        background-color: transparent;
-        border: none;
-        border-radius: 3px;
-        color: #aaa;
-    }
-    QPushButton:hover {
-        background-color: #3d3d3d;
-        color: #eee;
-    }
-    QPushButton:checked {
-        background-color: #3d3d3d;
-        color: #4a6fa5;
-    }
-"""
 
 _ANCHOR_BTN_STYLE = """
     QPushButton {
@@ -134,7 +89,19 @@ class TransformPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(_PANEL_STYLE)
+        self.setStyleSheet(
+            render_qss(
+                "panel_surface.qss",
+                selector="QWidget",
+                row_selector="QWidget#__unused__",
+                bg="#2a2a2a",
+                fg="#ddd",
+                font_size=11,
+                label_fg="#aaa",
+                row_radius=0,
+                row_hover="#2a2a2a",
+            )
+        )
         
         self._doc: Document | None = None
         self._block_signals = False
@@ -173,7 +140,26 @@ class TransformPanel(QWidget):
         self.btn_link = QPushButton("🔗")
         self.btn_link.setCheckable(True)
         self.btn_link.setFixedSize(20, 20)
-        self.btn_link.setStyleSheet(_BTN_STYLE)
+        self.btn_link.setStyleSheet(
+            render_qss(
+                "icon_button.qss",
+                bg="transparent",
+                border="transparent",
+                radius=3,
+                fg="#aaa",
+                font_size=11,
+                padding="0px",
+                hover_border="#3d3d3d",
+                hover_fg="#eee",
+                hover_bg="#3d3d3d",
+                pressed_bg="#3d3d3d",
+                pressed_border="#3d3d3d",
+                pressed_fg="#4a6fa5",
+                checked_bg="#3d3d3d",
+                checked_border="#3d3d3d",
+                checked_fg="#4a6fa5",
+            )
+        )
         self.btn_link.setToolTip("Constrain Proportions")
         grid.addWidget(self.btn_link, 0, 4, 2, 1, Qt.AlignmentFlag.AlignVCenter)
         
@@ -207,7 +193,7 @@ class TransformPanel(QWidget):
         spin = QDoubleSpinBox()
         spin.setRange(min_val, max_val)
         spin.setSuffix(suffix)
-        spin.setStyleSheet(_SPIN_STYLE)
+        spin.setStyleSheet(format_qss("properties_spin.qss", max_w=120, accent="#4a6fa5"))
         spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         spin.setDecimals(1)
         spin.setKeyboardTracking(False) # Wait for Enter/FocusOut to commit

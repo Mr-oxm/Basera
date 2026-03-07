@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..shortcut_manager import ShortcutManager, PRESETS, ACTION_REGISTRY
+from ..styles import render_qss
 
 
 # ---------------------------------------------------------------------------
@@ -307,105 +308,5 @@ class KeyboardShortcutsDialog(QDialog):
 
     @staticmethod
     def _stylesheet() -> str:
-        return """
-        QDialog {
-            background: #2b2b2b;
-            color: #cccccc;
-            font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
-            font-size: 12px;
-        }
-        QLabel {
-            color: #cccccc;
-        }
-        QComboBox {
-            background: #444444;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
-        }
-        QComboBox::drop-down {
-            border: none;
-        }
-        QComboBox QAbstractItemView {
-            background: #383838;
-            color: #cccccc;
-            selection-background-color: #4a6fa5;
-            border: 1px solid #555555;
-        }
-        QLineEdit {
-            background: #3a3a3a;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 5px 10px;
-            font-size: 12px;
-        }
-        QLineEdit:focus {
-            border-color: #4a6fa5;
-        }
-        QTreeWidget {
-            background: #2f2f2f;
-            color: #cccccc;
-            border: 1px solid #444444;
-            border-radius: 3px;
-            font-size: 12px;
-            outline: none;
-            alternate-background-color: #333333;
-        }
-        QTreeWidget::item {
-            padding: 4px 0px;
-            border: none;
-        }
-        QTreeWidget::item:selected {
-            background: #4a6fa5;
-        }
-        QTreeWidget::item:hover {
-            background: #383838;
-        }
-        QHeaderView::section {
-            background: #333333;
-            color: #aaaaaa;
-            border: none;
-            border-bottom: 1px solid #444444;
-            padding: 6px 8px;
-            font-weight: bold;
-            font-size: 11px;
-        }
-        QPushButton {
-            background: #444444;
-            color: #cccccc;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 6px 16px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        QPushButton:hover {
-            background: #505050;
-        }
-        QPushButton:pressed {
-            background: #4a6fa5;
-        }
-        QScrollBar:vertical {
-            background: #2b2b2b;
-            width: 10px;
-            border: none;
-        }
-        QScrollBar::handle:vertical {
-            background: #555555;
-            border-radius: 5px;
-            min-height: 30px;
-        }
-        QScrollBar::handle:vertical:hover {
-            background: #666666;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            height: 0;
-        }
-        QMessageBox {
-            background: #2b2b2b;
-            color: #cccccc;
-        }
-        """
+        from ..theme import ThemeManager
+        return render_qss("shortcuts_dialog.qss", ThemeManager.instance().active_palette)

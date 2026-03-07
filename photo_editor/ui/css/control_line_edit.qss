@@ -1,0 +1,13 @@
+[[selector]] {
+    background: [[bg]];
+    border: 1px solid [[border]];
+    border-radius: [[radius]]px;
+    color: [[fg]];
+    font-family: [[font_family]];
+    font-size: [[font_size]]px;
+    padding: [[padding]];
+}
+[[selector]]:focus {
+    border: 1px solid [[focus_border]];
+    background: [[focus_bg]];
+}

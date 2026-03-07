@@ -7,6 +7,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
 from .base import ROW_HEIGHT, THUMB_SIZE
+from ...styles import render_qss
 from photo_editor.ui.theme import ThemeManager
 from .icons import icon_eye, icon_lock, icon_mask, ico_adjustment, ico_filter, ico_mask_layer, ico_text
 
@@ -45,7 +46,7 @@ class LayerItemWidget(QWidget):
         self._rename_done = False
         palette = ThemeManager.instance().active_palette
 
-        self.setStyleSheet("background: transparent;")
+        self.setStyleSheet(render_qss("layer_item_root.qss"))
 
         layout = QHBoxLayout(self)
         left_margin = 4 + indent * 16
@@ -57,8 +58,7 @@ class LayerItemWidget(QWidget):
             self._arrow_btn = QPushButton(arrow_text)
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
-            self._arrow_btn.setStyleSheet(
-                f"font-size: 9px; padding: 0; color: {palette['fg']}; background: transparent;")
+            self._arrow_btn.setStyleSheet(render_qss("layer_item_arrow.qss", palette))
             self._arrow_btn.setToolTip("Collapse" if not is_collapsed else "Expand")
             self._arrow_btn.clicked.connect(
                 lambda: self.collapse_clicked.emit(layer_id),
@@ -69,8 +69,7 @@ class LayerItemWidget(QWidget):
             self._arrow_btn = QPushButton(arrow_text)
             self._arrow_btn.setFixedSize(18, 18)
             self._arrow_btn.setFlat(True)
-            self._arrow_btn.setStyleSheet(
-                f"font-size: 9px; padding: 0; color: {palette['fg']}; background: transparent;")
+            self._arrow_btn.setStyleSheet(render_qss("layer_item_arrow.qss", palette))
             self._arrow_btn.setToolTip("Show masks" if masks_collapsed else "Hide masks")
             self._arrow_btn.clicked.connect(
                 lambda: self.collapse_clicked.emit(layer_id),
@@ -79,8 +78,7 @@ class LayerItemWidget(QWidget):
 
         self._thumb_label = QLabel()
         self._thumb_label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
-        self._thumb_label.setStyleSheet(
-            f"border: 1px solid {palette['border']}; background: transparent;")
+        self._thumb_label.setStyleSheet(render_qss("layer_item_thumb.qss", palette))
         if is_mask_layer:
             if thumbnail:
                 self._thumb_label.setPixmap(thumbnail)
@@ -102,15 +100,19 @@ class LayerItemWidget(QWidget):
 
         self._name_label = QLabel(name)
         self._name_label.setStyleSheet(
-            f"color: {palette['fg']}; background: transparent; padding: 0 2px;"
-            + (" font-weight: bold;" if is_group else ""))
+            render_qss(
+                "layer_item_name.qss",
+                palette,
+                weight=" font-weight: bold;" if is_group else "",
+            )
+        )
         layout.addWidget(self._name_label, 1)
 
         if has_mask:
             mask_lbl = QLabel()
             mask_lbl.setPixmap(icon_mask(True).pixmap(14, 14))
             mask_lbl.setToolTip("Layer has mask")
-            mask_lbl.setStyleSheet("background: transparent;")
+            mask_lbl.setStyleSheet(render_qss("layer_item_transparent.qss"))
             layout.addWidget(mask_lbl)
 
         if locked:
@@ -118,7 +120,7 @@ class LayerItemWidget(QWidget):
             self._lock_icon.setPixmap(icon_lock(True).pixmap(16, 16))
             self._lock_icon.setFixedSize(20, 20)
             self._lock_icon.setToolTip("Locked")
-            self._lock_icon.setStyleSheet("background: transparent;")
+            self._lock_icon.setStyleSheet(render_qss("layer_item_transparent.qss"))
             layout.addWidget(self._lock_icon)
 
         self._vis_btn = QPushButton()
@@ -127,7 +129,7 @@ class LayerItemWidget(QWidget):
         self._vis_btn.setFixedSize(24, 24)
         self._vis_btn.setFlat(True)
         self._vis_btn.setToolTip("Toggle visibility")
-        self._vis_btn.setStyleSheet("background: transparent; border: none;")
+        self._vis_btn.setStyleSheet(render_qss("layer_item_visibility_button.qss"))
         self._vis_btn.clicked.connect(
             lambda: self.visibility_clicked.emit(layer_id),
         )
@@ -140,7 +142,7 @@ class LayerItemWidget(QWidget):
             self._lock_icon.setPixmap(icon_lock(True).pixmap(16, 16))
             self._lock_icon.setFixedSize(20, 20)
             self._lock_icon.setToolTip("Locked")
-            self._lock_icon.setStyleSheet("background: transparent;")
+            self._lock_icon.setStyleSheet(render_qss("layer_item_transparent.qss"))
             lay = self.layout()
             idx = lay.indexOf(self._vis_btn)
             lay.insertWidget(idx, self._lock_icon)

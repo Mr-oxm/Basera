@@ -1,0 +1,8 @@
+QToolBar {
+    background: [[bg3]];
+    border: none;
+    border-bottom: 1px solid [[border]];
+    spacing: 0;
+    padding: 0;
+}
+QToolBar > QWidget { background: [[bg3]]; }

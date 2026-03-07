@@ -6,229 +6,14 @@ from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget,
 )
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QPainterPath, QColor, QPen, QBrush
+from PySide6.QtGui import QIcon
 
+from ...icons import vector_bool_icon, vector_node_icon
 from ...widgets.color_dropdown import ColorDropdown
 from ....core.color import Color, LinearGradient, RadialGradient
 from ....core.color_engine import ConicalGradient, DiamondGradient
 from ....vector.style import FillPaint, SolidPaint, GradientPaint, GradientType, GradientStop as VecGradientStop
 from .base import ACCENT, COMBO, FLAT_BTN, LABEL, SPIN, make_separator
-
-def _bool_icon(op: str) -> QIcon:
-    from ...theme import ThemeManager
-    palette = ThemeManager.instance().active_palette
-    fg = QColor(palette['fg'])
-    accent = QColor(palette['accent'])
-    fg_dim = QColor(palette.get('fg_dim', '#999999'))
-    
-    pix = QPixmap(18, 18)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    
-    p.setPen(Qt.PenStyle.NoPen)
-    
-    path_a = QPainterPath()
-    path_a.addRect(2.5, 2.5, 9, 9)
-    path_b = QPainterPath()
-    path_b.addRect(6.5, 6.5, 9, 9)
-        
-    if op == "union":
-        res = path_a.united(path_b)
-        p.setBrush(accent)
-        p.drawPath(res)
-        p.setPen(QPen(fg, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(res)
-    elif op == "subtract":
-        res = path_b.subtracted(path_a)
-        p.setBrush(accent)
-        p.drawPath(res)
-        p.setPen(QPen(fg, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(res)
-        
-        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
-        p.drawRect(2.5, 2.5, 9, 9)
-    elif op == "intersect":
-        res = path_a.intersected(path_b)
-        p.setBrush(accent)
-        p.drawPath(res)
-        p.setPen(QPen(fg, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(res)
-        
-        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
-        p.drawPath(path_a.subtracted(path_b))
-        p.drawPath(path_b.subtracted(path_a))
-    elif op == "exclude":
-        res = path_a.united(path_b).subtracted(path_a.intersected(path_b))
-        p.setBrush(accent)
-        p.drawPath(res)
-        p.setPen(QPen(fg, 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(res)
-        
-        p.setPen(QPen(fg_dim, 1, Qt.PenStyle.DashLine))
-        p.drawRect(6.5, 6.5, 5, 5)
-    elif op == "divide":
-        res1 = path_a.subtracted(path_b)
-        res2 = path_b.subtracted(path_a)
-        res3 = path_a.intersected(path_b)
-        
-        p.setBrush(accent)
-        p.setPen(QPen(fg, 1))
-        
-        p.save()
-        p.translate(-0.5, -0.5)
-        p.drawPath(res1)
-        p.restore()
-        
-        p.save()
-        p.translate(0.5, 0.5)
-        p.drawPath(res2)
-        p.restore()
-        
-        p.save()
-        p.translate(0, 0)
-        p.drawPath(res3)
-        p.restore()
-    elif op == "pick_segments":
-        # Curve from 90 to 180 degrees (top left)
-        p.setPen(QPen(fg_dim, 1.5, Qt.PenStyle.DashLine))
-        p.drawArc(3, 4, 12, 12, 16 * 90, 16 * 90)
-        
-        # Curve from 0 to 90 degrees (top right) - Highlighted
-        p.setPen(QPen(accent, 2))
-        p.drawArc(3, 4, 12, 12, 16 * 0, 16 * 90)
-
-        # Draw nodes
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fg)
-        p.drawRect(1.5, 8.5, 3, 3)   # left 
-        p.drawRect(7.5, 2.5, 3, 3)   # top 
-        p.drawRect(13.5, 8.5, 3, 3)  # right 
-
-        # Draw a mouse pointer cursor pointing to the top-right segment
-        cursor = QPainterPath()
-        cx, cy = 11, 4.5
-        cursor.moveTo(cx, cy)
-        cursor.lineTo(cx, cy + 7)
-        cursor.lineTo(cx + 2, cy + 5)
-        cursor.lineTo(cx + 3.5, cy + 8.5)
-        cursor.lineTo(cx + 4.5, cy + 8)
-        cursor.lineTo(cx + 3, cy + 4.5)
-        cursor.lineTo(cx + 6, cy + 4.5)
-        cursor.closeSubpath()
-
-        p.setPen(QPen(QColor(palette['bg1']), 1))
-        p.setBrush(fg)
-        p.drawPath(cursor)
-        
-    p.end()
-    return QIcon(pix)
-
-def _node_icon(op: str) -> QIcon:
-    from ...theme import ThemeManager
-    palette = ThemeManager.instance().active_palette
-    fg = QColor(palette['fg'])
-    accent = QColor(palette['accent'])
-    fg_dim = QColor(palette.get('fg_dim', '#999999'))
-    
-    pix = QPixmap(18, 18)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    
-    if op == "sharp":
-        p.setPen(QPen(fg_dim, 1.5))
-        p.drawLine(3, 14, 9, 4)
-        p.drawLine(9, 4, 15, 14)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(accent)
-        p.drawRect(7.5, 2.5, 3, 3)
-        p.setBrush(fg)
-        p.drawRect(1.5, 12.5, 3, 3)
-        p.drawRect(13.5, 12.5, 3, 3)
-
-    elif op == "smooth":
-        p.setPen(QPen(fg_dim, 1.5))
-        # path showing a smooth continuous curve
-        path = QPainterPath()
-        path.moveTo(3, 13)
-        path.cubicTo(6, 4, 12, 4, 15, 13)
-        p.drawPath(path)
-        
-        # handles for the node
-        p.setPen(QPen(accent, 1))
-        p.drawLine(5, 7, 13, 7)
-        p.setBrush(fg)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(4, 6, 2, 2)
-        p.drawEllipse(12, 6, 2, 2)
-        
-        # Center node
-        p.setBrush(accent)
-        p.drawRect(7.5, 5.5, 3, 3)
-        
-        # End nodes
-        p.setBrush(fg)
-        p.drawRect(1.5, 11.5, 3, 3)
-        p.drawRect(13.5, 11.5, 3, 3)
-
-    elif op == "symmetric":
-        p.setPen(QPen(fg_dim, 1.5))
-        path = QPainterPath()
-        path.moveTo(3, 13)
-        path.cubicTo(6, 4, 12, 4, 15, 13)
-        p.drawPath(path)
-        
-        # Symmetric horizontal handles
-        p.setPen(QPen(accent, 1.5))
-        p.drawLine(6, 7, 12, 7)
-        p.setBrush(fg)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRect(5, 6, 2, 2)
-        p.drawRect(11, 6, 2, 2)
-        
-        p.setBrush(accent)
-        p.drawRect(7.5, 5.5, 3, 3)
-
-    elif op == "delete":
-        p.setPen(QPen(fg_dim, 1.5))
-        p.drawLine(4, 4, 14, 14)
-        p.drawLine(14, 4, 4, 14)
-
-    elif op == "break":
-        p.setPen(QPen(fg_dim, 1.5))
-        path_l = QPainterPath()
-        path_l.moveTo(2, 12)
-        path_l.quadTo(5, 6, 8, 4)
-        p.drawPath(path_l)
-        
-        path_r = QPainterPath()
-        path_r.moveTo(10, 5)
-        path_r.quadTo(13, 7, 16, 13)
-        p.drawPath(path_r)
-        
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(accent)
-        p.drawRect(6.5, 2.5, 3, 3)
-        p.drawRect(8.5, 3.5, 3, 3)
-        
-    elif op == "select_all":
-        p.setPen(QPen(fg, 1, Qt.PenStyle.DashLine))
-        p.drawRect(2, 2, 14, 14)
-        
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(accent)
-        p.drawRect(4, 4, 3, 3)
-        p.drawRect(11, 4, 3, 3)
-        p.drawRect(4, 11, 3, 3)
-        p.drawRect(11, 11, 3, 3)
-
-    p.end()
-    return QIcon(pix)
 
 _VECTOR_BTN = """
     QPushButton {
@@ -403,7 +188,7 @@ class VectorPropertiesBar(QWidget):
 
         from PySide6.QtCore import QSize
         self._sharp_btn = QPushButton(" Sharp")
-        self._sharp_btn.setIcon(_node_icon("sharp"))
+        self._sharp_btn.setIcon(vector_node_icon("sharp"))
         self._sharp_btn.setIconSize(QSize(16, 16))
         self._sharp_btn.setFixedHeight(24)
         self._sharp_btn.setStyleSheet(_VECTOR_BTN)
@@ -412,7 +197,7 @@ class VectorPropertiesBar(QWidget):
         layout.addWidget(self._sharp_btn)
 
         self._smooth_btn = QPushButton(" Smooth")
-        self._smooth_btn.setIcon(_node_icon("smooth"))
+        self._smooth_btn.setIcon(vector_node_icon("smooth"))
         self._smooth_btn.setIconSize(QSize(16, 16))
         self._smooth_btn.setFixedHeight(24)
         self._smooth_btn.setStyleSheet(_VECTOR_BTN)
@@ -421,7 +206,7 @@ class VectorPropertiesBar(QWidget):
         layout.addWidget(self._smooth_btn)
 
         self._symmetric_btn = QPushButton(" Symmetric")
-        self._symmetric_btn.setIcon(_node_icon("symmetric"))
+        self._symmetric_btn.setIcon(vector_node_icon("symmetric"))
         self._symmetric_btn.setIconSize(QSize(16, 16))
         self._symmetric_btn.setFixedHeight(24)
         self._symmetric_btn.setStyleSheet(_VECTOR_BTN)
@@ -433,7 +218,7 @@ class VectorPropertiesBar(QWidget):
         layout.addWidget(self._sep_node_types)
 
         self._delete_btn = QPushButton(" Delete")
-        self._delete_btn.setIcon(_node_icon("delete"))
+        self._delete_btn.setIcon(vector_node_icon("delete"))
         self._delete_btn.setIconSize(QSize(16, 16))
         self._delete_btn.setFixedHeight(24)
         self._delete_btn.setStyleSheet(_VECTOR_BTN)
@@ -442,7 +227,7 @@ class VectorPropertiesBar(QWidget):
         layout.addWidget(self._delete_btn)
 
         self._break_btn = QPushButton(" Break")
-        self._break_btn.setIcon(_node_icon("break"))
+        self._break_btn.setIcon(vector_node_icon("break"))
         self._break_btn.setIconSize(QSize(16, 16))
         self._break_btn.setFixedHeight(24)
         self._break_btn.setStyleSheet(_VECTOR_BTN)
@@ -451,7 +236,7 @@ class VectorPropertiesBar(QWidget):
         layout.addWidget(self._break_btn)
 
         self._selall_btn = QPushButton(" Sel All")
-        self._selall_btn.setIcon(_node_icon("select_all"))
+        self._selall_btn.setIcon(vector_node_icon("select_all"))
         self._selall_btn.setIconSize(QSize(16, 16))
         self._selall_btn.setFixedHeight(24)
         self._selall_btn.setStyleSheet(_VECTOR_BTN)
@@ -484,7 +269,7 @@ class VectorPropertiesBar(QWidget):
 
         self._pick_seg_btn = QPushButton("")
         from PySide6.QtCore import QSize
-        self._pick_seg_btn.setIcon(_bool_icon("pick_segments"))
+        self._pick_seg_btn.setIcon(vector_bool_icon("pick_segments"))
         self._pick_seg_btn.setIconSize(QSize(16, 16))
         self._pick_seg_btn.setFixedHeight(24)
         self._pick_seg_btn.setCheckable(True)
@@ -549,19 +334,19 @@ class VectorPropertiesBar(QWidget):
 
     def _apply_theme(self, palette: dict) -> None:
         """Update dynamically rendered icons when the theme changes."""
-        self._sharp_btn.setIcon(_node_icon("sharp"))
-        self._smooth_btn.setIcon(_node_icon("smooth"))
-        self._symmetric_btn.setIcon(_node_icon("symmetric"))
-        self._delete_btn.setIcon(_node_icon("delete"))
-        self._break_btn.setIcon(_node_icon("break"))
-        self._selall_btn.setIcon(_node_icon("select_all"))
+        self._sharp_btn.setIcon(vector_node_icon("sharp"))
+        self._smooth_btn.setIcon(vector_node_icon("smooth"))
+        self._symmetric_btn.setIcon(vector_node_icon("symmetric"))
+        self._delete_btn.setIcon(vector_node_icon("delete"))
+        self._break_btn.setIcon(vector_node_icon("break"))
+        self._selall_btn.setIcon(vector_node_icon("select_all"))
 
-        self._bool_union_btn.setIcon(_bool_icon("union"))
-        self._bool_subtract_btn.setIcon(_bool_icon("subtract"))
-        self._bool_intersect_btn.setIcon(_bool_icon("intersect"))
-        self._bool_exclude_btn.setIcon(_bool_icon("exclude"))
-        self._bool_divide_btn.setIcon(_bool_icon("divide"))
-        self._pick_seg_btn.setIcon(_bool_icon("pick_segments"))
+        self._bool_union_btn.setIcon(vector_bool_icon("union"))
+        self._bool_subtract_btn.setIcon(vector_bool_icon("subtract"))
+        self._bool_intersect_btn.setIcon(vector_bool_icon("intersect"))
+        self._bool_exclude_btn.setIcon(vector_bool_icon("exclude"))
+        self._bool_divide_btn.setIcon(vector_bool_icon("divide"))
+        self._pick_seg_btn.setIcon(vector_bool_icon("pick_segments"))
 
     _SHAPE_PARAMS: dict[str, tuple[str, str]] = {
         "Rectangle":      ("Radius", ""),
@@ -782,7 +567,7 @@ class VectorPropertiesBar(QWidget):
         btn = QPushButton(text)
         if icon_op:
             from PySide6.QtCore import QSize
-            btn.setIcon(_bool_icon(icon_op))
+            btn.setIcon(vector_bool_icon(icon_op))
             btn.setIconSize(QSize(16, 16))
         btn.setFixedHeight(24)
         btn.setStyleSheet(_BOOL_BTN)

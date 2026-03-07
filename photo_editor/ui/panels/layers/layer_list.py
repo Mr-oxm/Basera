@@ -16,6 +16,7 @@ from .base import (
 )
 from .layer_delegate import LayerItemDelegate
 from photo_editor.ui.theme import ThemeManager
+from ...styles import render_qss
 
 
 class LayerListWidget(QListWidget):
@@ -40,21 +41,7 @@ class LayerListWidget(QListWidget):
         self._apply_theme(ThemeManager.instance().active_palette)
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {palette['bg1_alt']};
-                border: none;
-                outline: none;
-            }}
-            QListWidget::item {{
-                background: transparent;
-                border: none;
-                padding: 0px;
-            }}
-            QListWidget::item:selected {{
-                background: transparent;
-            }}
-        """)
+        self.setStyleSheet(render_qss("layer_list.qss", palette))
 
     def _clear_mask_highlight(self) -> None:
         if self._mask_drop_target is not None:

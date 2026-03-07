@@ -9,25 +9,10 @@ from PySide6.QtWidgets import (
 )
 
 from ...core.document import Document
+from ..styles import render_qss
 from .layers.icons import icon_eye
 from ..theme import ThemeManager
 from .layers.thumbnails import thumb_checker
-
-_PANEL_STYLE = """
-    QWidget {
-        background-color: #2a2a2a;
-        color: #ddd;
-        font-family: 'Segoe UI', sans-serif;
-        font-size: 11px;
-    }
-    #channelRow {
-        background-color: transparent;
-        border-radius: 3px;
-    }
-    #channelRow:hover {
-        background-color: #353535;
-    }
-"""
 
 def channel_pixels_to_pixmap(px: np.ndarray, channel_idx: int, size: int = 32) -> QPixmap:
     pm = QPixmap(thumb_checker(size))
@@ -136,7 +121,19 @@ class ChannelsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(_PANEL_STYLE)
+        self.setStyleSheet(
+            render_qss(
+                "panel_surface.qss",
+                selector="QWidget",
+                row_selector="#channelRow",
+                bg="#2a2a2a",
+                fg="#ddd",
+                font_size=11,
+                label_fg="#ddd",
+                row_radius=3,
+                row_hover="#353535",
+            )
+        )
 
         self._doc: Document | None = None
         self._block_signals = False

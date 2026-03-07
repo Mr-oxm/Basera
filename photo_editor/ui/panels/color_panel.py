@@ -279,6 +279,7 @@ class ColorPanel(QWidget):
         self._sync_from_manager()
 
     def _build_ui(self) -> None:
+        from ..styles import format_qss, render_qss
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -290,13 +291,23 @@ class ColorPanel(QWidget):
         swatch_row.addWidget(self._fgbg)
         swatch_row.addStretch()
 
-        _btn_style = (
-            "QPushButton {"
-            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #aaa; font-size: 11px;"
-            "}"
-            "QPushButton:hover { border: 1px solid #5a8abf; color: #ddd; }"
-            "QPushButton:pressed { background: #404040; }"
+        _btn_style = render_qss(
+            "icon_button.qss",
+            bg="#363636",
+            border="#484848",
+            radius=5,
+            fg="#aaa",
+            font_size=11,
+            padding="0px",
+            hover_border="#5a8abf",
+            hover_fg="#ddd",
+            hover_bg="#363636",
+            pressed_bg="#404040",
+            pressed_border="#484848",
+            pressed_fg="#ddd",
+            checked_bg="#404040",
+            checked_border="#5a8abf",
+            checked_fg="#ddd",
         )
         btn_col = QVBoxLayout()
         btn_col.setSpacing(4)
@@ -333,10 +344,7 @@ class ColorPanel(QWidget):
         opacity_row = QHBoxLayout()
         opacity_row.setSpacing(6)
         lbl = QLabel("Opacity")
-        lbl.setStyleSheet(
-            "color: #999; font-size: 11px; font-weight: 600;"
-            "font-family: 'Segoe UI', 'Inter', sans-serif;"
-        )
+        lbl.setStyleSheet("color: #999; font-size: 11px; font-weight: 600; font-family: 'Segoe UI', 'Inter', sans-serif;")
         lbl.setFixedWidth(44)
         opacity_row.addWidget(lbl)
 
@@ -350,14 +358,7 @@ class ColorPanel(QWidget):
         self._opacity_spin.setFixedHeight(20)
         self._opacity_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._opacity_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._opacity_spin.setStyleSheet(
-            "QSpinBox {"
-            "  background: #333; border: 1px solid #484848; border-radius: 4px;"
-            "  color: #ddd; font-size: 11px; padding: 0 2px;"
-            "  font-family: 'Cascadia Code', 'Consolas', monospace;"
-            "}"
-            "QSpinBox:focus { border: 1px solid #5a8abf; }"
-        )
+        self._opacity_spin.setStyleSheet(format_qss("properties_spin.qss", max_w=56, accent="#5a8abf"))
         opacity_row.addWidget(self._opacity_spin)
         layout.addLayout(opacity_row)
 

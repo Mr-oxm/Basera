@@ -1,0 +1,9 @@
+QCheckBox { color: [[fg_dim]]; font-size: 10px; spacing: 4px; background: transparent; }
+QCheckBox::indicator {
+    width: 13px;
+    height: 13px;
+    border-radius: 2px;
+    border: 1px solid [[border_light]];
+    background: [[bg2]];
+}
+QCheckBox::indicator:checked { background: [[accent]]; border-color: [[accent_border]]; }

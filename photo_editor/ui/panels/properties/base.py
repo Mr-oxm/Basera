@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from ...styles import load_qss_template, render_qss
+
 
 def _qt_message_handler(msg_type: QtMsgType, context, message: str) -> None:
     """Suppress OpenType font warnings while preserving other Qt messages."""
@@ -32,98 +34,13 @@ qInstallMessageHandler(_qt_message_handler)
 # ---- Style constants ----
 _ACCENT = "#6eb4ff"
 _ACCENT_HOVER = "#8ec5ff"
-_LABEL = "font-size: 10px; font-weight: 600; color: #9aa0a6; letter-spacing: 0.6px; background: transparent;"
-_SEPARATOR = """
-    QFrame {
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,0), stop:0.5 rgba(255,255,255,0.08), stop:1 rgba(255,255,255,0));
-        max-width: 1px; margin: 2px 4px; border: none;
-    }
-"""
-_TOGGLE = """
-    QPushButton {{
-        font-size: {font_size}px; font-weight: 600; padding: 2px 5px;
-        background: transparent; border: 1px solid transparent; border-radius: 4px;
-        color: #b0b4b8; min-width: 24px; min-height: 24px;
-    }}
-    QPushButton:hover {{ 
-        background: rgba(255,255,255,0.05); color: #e0e4e8; 
-        border: 1px solid rgba(255,255,255,0.1); 
-    }}
-    QPushButton:checked {{ 
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
-        border: 1px solid rgba(110,180,255,0.4); 
-        color: #ffffff; 
-    }}
-"""
-_ALIGN_BTN = """
-    QPushButton {
-        font-size: 11px; padding: 2px 4px;
-        background: transparent; border: 1px solid transparent; border-radius: 4px;
-        color: #b0b4b8; min-width: 24px; min-height: 24px;
-    }
-    QPushButton:hover { 
-        background: rgba(255,255,255,0.05); color: #e0e4e8; 
-        border: 1px solid rgba(255,255,255,0.1); 
-    }
-    QPushButton:checked { 
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
-        border: 1px solid rgba(110,180,255,0.4); 
-        color: #ffffff; 
-    }
-"""
-_SPIN = """
-    QSpinBox, QDoubleSpinBox {{
-        font-size: 11px; padding: 2px 4px;
-        background: rgba(0, 0, 0, 0.2); color: #e0e4e8;
-        border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        max-width: {max_w}px; min-height: 22px; max-height: 22px;
-    }}
-    QSpinBox:hover, QDoubleSpinBox:hover {{
-        background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15);
-    }}
-    QSpinBox:focus, QDoubleSpinBox:focus {{
-        border: 1px solid {accent}; background: rgba(0, 0, 0, 0.4);
-    }}
-"""
-_COMBO = """
-    {widget} {{
-        background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 4px; color: #e0e4e8; font-size: 11px; padding: 2px 6px;
-        min-height: 20px; max-height: 22px;
-    }}
-    {widget}:hover {{ background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15); }}
-    {widget}:focus {{ border: 1px solid {accent}; background: rgba(0, 0, 0, 0.4); }}
-    {widget}::drop-down {{
-        subcontrol-origin: padding; subcontrol-position: center right;
-        width: 16px; border: none; background: transparent;
-    }}
-    {widget}::down-arrow {{
-        image: none; width: 0; height: 0;
-        border-left: 4px solid transparent; border-right: 4px solid transparent;
-        border-top: 5px solid #aaaaaa;
-    }}
-    {widget}::down-arrow:hover {{ border-top: 5px solid #eeeeee; }}
-    {widget} QAbstractItemView {{
-        background: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
-        color: #e0e4e8; selection-background-color: {accent}; outline: none; padding: 2px;
-    }}
-"""
-_FLAT_BTN = """
-    QPushButton {{
-        background: transparent; border: 1px solid transparent; border-radius: 4px;
-        color: #b0b4b8; font-size: 11px; padding: 2px 8px; font-weight: 500;
-        min-height: 24px;
-    }}
-    QPushButton:hover {{ 
-        background: rgba(255,255,255,0.05); color: #e0e4e8; 
-        border: 1px solid rgba(255,255,255,0.1); 
-    }}
-    QPushButton:pressed {{ 
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1));
-        border: 1px solid rgba(110,180,255,0.4); 
-        color: #ffffff; 
-    }}
-"""
+_LABEL = load_qss_template("properties_label.qss")
+_SEPARATOR = load_qss_template("properties_separator.qss")
+_TOGGLE = load_qss_template("properties_toggle.qss")
+_ALIGN_BTN = load_qss_template("properties_align_button.qss")
+_SPIN = load_qss_template("properties_spin.qss")
+_COMBO = load_qss_template("properties_combo.qss")
+_FLAT_BTN = load_qss_template("properties_flat_button.qss")
 
 
 class FontComboBoxWithPreview(QFontComboBox):
@@ -202,19 +119,13 @@ class PropertyDropdown(QWidget):
             ThemeManager.instance().theme_changed.connect(self._apply_theme)
             self._apply_theme(ThemeManager.instance().active_palette)
         except Exception:
-            self.setStyleSheet("""
-                PropertyDropdown {
-                    background-color: #2a2c30; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px;
-                }
-            """)
+            self.setStyleSheet(
+                render_qss("properties_dropdown.qss", bg2="#2a2c30", border="rgba(255, 255, 255, 0.1)")
+            )
 
     def _apply_theme(self, palette: dict) -> None:
         """Update popup background style based on active theme palette."""
-        self.setStyleSheet(f"""
-            PropertyDropdown {{
-                background-color: {palette['bg2']}; border: 1px solid {palette['border']}; border-radius: 4px;
-            }}
-        """)
+        self.setStyleSheet(render_qss("properties_dropdown.qss", palette))
 
 
 class CompactPropertyWidget(QWidget):
@@ -261,15 +172,7 @@ class CompactPropertyWidget(QWidget):
         self.expand_btn.setToolTip(f"Adjust {label}")
         self.expand_btn.setCheckable(True)
         self.expand_btn.clicked.connect(self._toggle_dropdown)
-        self.expand_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 10px; padding: 0px; font-weight: 600;
-                background: transparent; border: none;
-                border-radius: 4px; color: #b0b4b8;
-            }
-            QPushButton:hover { background: rgba(255,255,255,0.05); color: #e0e4e8; border: 1px solid rgba(255,255,255,0.1); }
-            QPushButton:checked { color: #ffffff; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(110,180,255,0.25), stop:1 rgba(110,180,255,0.1)); border: 1px solid rgba(110,180,255,0.4); }
-        """)
+        self.expand_btn.setStyleSheet(load_qss_template("properties_expand_button.qss"))
         layout.addWidget(self.expand_btn)
         self.dropdown = None
         self.slider = None

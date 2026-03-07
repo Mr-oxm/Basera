@@ -238,6 +238,7 @@ class _ChannelRow(QWidget):
     def __init__(self, label: str, min_val: float, max_val: float,
                  decimals: int = 0, parent=None) -> None:
         super().__init__(parent)
+        from ..styles import format_qss, render_qss
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 1, 0, 1)
         layout.setSpacing(6)
@@ -247,8 +248,7 @@ class _ChannelRow(QWidget):
         lbl.setFixedWidth(16)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet(
-            f"color: {accent}; font-weight: 600; font-size: 11px; "
-            f"font-family: 'Segoe UI', 'Inter', sans-serif;"
+            f"font-weight: 600; font-size: 11px; font-family: 'Segoe UI', 'Inter', sans-serif; color: {accent};"
         )
         layout.addWidget(lbl)
 
@@ -267,16 +267,7 @@ class _ChannelRow(QWidget):
         self._spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._spin.setFixedHeight(20)
         self._spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._spin.setStyleSheet(
-            "QSpinBox, QDoubleSpinBox {"
-            "  background: #333; border: 1px solid #484848; border-radius: 4px;"
-            "  color: #ddd; font-size: 11px; padding: 0 2px;"
-            "  font-family: 'Cascadia Code', 'Consolas', monospace;"
-            "}"
-            "QSpinBox:focus, QDoubleSpinBox:focus {"
-            "  border: 1px solid #5a8abf;"
-            "}"
-        )
+        self._spin.setStyleSheet(format_qss("properties_spin.qss", max_w=56 if decimals else 48, accent="#5a8abf"))
         layout.addWidget(self._spin)
 
         self._slider.value_changed.connect(self._on_slider)
@@ -546,6 +537,7 @@ class ColorSliders(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        from ..styles import format_qss, render_qss
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -557,44 +549,33 @@ class ColorSliders(QWidget):
         self._model_combo.addItems(["RGB", "HSV", "HSL", "CMYK"])
         self._model_combo.setFixedHeight(24)
         self._model_combo.setFixedWidth(72)
-        self._model_combo.setStyleSheet(
-            "QComboBox {"
-            "  background: #363636; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #ccc; font-size: 11px; padding: 2px 8px;"
-            "  font-family: 'Segoe UI', 'Inter', sans-serif;"
-            "}"
-            "QComboBox:hover { border: 1px solid #5a8abf; }"
-            "QComboBox::drop-down {"
-            "  border: none; width: 16px;"
-            "}"
-            "QComboBox::down-arrow { image: none; border: none; }"
-            "QComboBox QAbstractItemView {"
-            "  background: #333; border: 1px solid #484848; border-radius: 4px;"
-            "  color: #ccc; selection-background-color: #4a6fa5;"
-            "}"
-        )
+        self._model_combo.setStyleSheet(format_qss("properties_combo.qss", widget="QComboBox", accent="#5a8abf"))
         self._model_combo.currentIndexChanged.connect(self._on_model_changed)
         top_row.addWidget(self._model_combo)
         top_row.addStretch()
 
         # Hex input
         hex_lbl = QLabel("#")
-        hex_lbl.setStyleSheet(
-            "font-weight: 600; color: #777; font-size: 12px;"
-            "font-family: 'Cascadia Code', 'Consolas', monospace;"
-        )
+        hex_lbl.setStyleSheet("font-weight: 600; color: #777; font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;")
         top_row.addWidget(hex_lbl)
         self._hex_edit = QLineEdit()
         self._hex_edit.setFixedWidth(72)
         self._hex_edit.setFixedHeight(24)
         self._hex_edit.setMaxLength(8)
         self._hex_edit.setStyleSheet(
-            "QLineEdit {"
-            "  background: #333; border: 1px solid #484848; border-radius: 5px;"
-            "  color: #ddd; font-family: 'Cascadia Code', 'Consolas', monospace;"
-            "  font-size: 11px; padding: 2px 6px;"
-            "}"
-            "QLineEdit:focus { border: 1px solid #5a8abf; }"
+            render_qss(
+                "control_line_edit.qss",
+                selector="QLineEdit",
+                bg="#333",
+                border="#484848",
+                radius=5,
+                fg="#ddd",
+                font_family="'Cascadia Code', 'Consolas', monospace'",
+                font_size=11,
+                padding="2px 6px",
+                focus_border="#5a8abf",
+                focus_bg="#333",
+            )
         )
         self._hex_edit.returnPressed.connect(self._on_hex_enter)
         top_row.addWidget(self._hex_edit)

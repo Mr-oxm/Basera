@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from ....core.document import Document
 from ....core.enums import BlendMode, LayerType
+from ...styles import render_qss, themed_value
 
 from .base import (
     ROLE_INDENT,
@@ -85,72 +86,26 @@ class LayersPanel(QWidget):
         self._apply_theme(ThemeManager.instance().active_palette)
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(f"background-color: {palette['bg1']};")
-        self._header.setStyleSheet(f"background-color: {palette['bg2']};")
-        self._opacity_lbl.setStyleSheet(f"color: {palette['fg_dim']}; font-size: 11px;")
-        
-        self._opacity_spin.setStyleSheet(f"""
-            QSpinBox {{
-                background: {palette['bg1']}; color: {palette['fg']}; border: 1px solid {palette['border']};
-                border-radius: 3px; padding: 2px 4px; font-size: 11px;
-            }}
-        """)
-        
-        self._blend_combo.setStyleSheet(f"""
-            QComboBox {{
-                background: {palette['bg1']}; color: {palette['fg']}; border: 1px solid {palette['border']};
-                border-radius: 3px; padding: 2px 4px; font-size: 11px;
-                min-width: 70px;
-            }}
-            QComboBox::drop-down {{ border: none; width: 14px; }}
-            QComboBox QAbstractItemView {{
-                background: {palette['bg2']}; color: {palette['fg']};
-                selection-background-color: {palette['accent']};
-            }}
-        """)
-        
-        self._opacity_slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{
-                background: {palette['border']}; height: 3px; border-radius: 1px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {palette['fg_accent'] if 'fg_accent' in palette else palette['fg']}; width: 10px; height: 10px;
-                margin: -4px 0; border-radius: 5px;
-            }}
-            QSlider::handle:horizontal:hover {{ background: #ffffff; }}
-        """)
-        
-        self._toolbar.setStyleSheet(f"background-color: {palette['bg2']};")
-        self._adj_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none; border-radius: 3px;
-            }}
-            QPushButton:hover {{
-                background: {palette['hover']};
-            }}
-        """)
-        self._adj_menu.setStyleSheet(f"""
-            QMenu {{
-                background: {palette['bg2']}; color: {palette['fg']};
-                border: 1px solid {palette['border']}; padding: 4px 0;
-            }}
-            QMenu::item {{ padding: 4px 20px; }}
-            QMenu::item:selected {{ background: {palette['accent']}; }}
-        """)
-        self._filt_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: none; border-radius: 3px;
-            }}
-            QPushButton:hover {{ background: {palette['hover']}; }}
-        """)
-        self._filt_menu.setStyleSheet(f"""
-            QMenu {{
-                background: {palette['bg2']}; color: {palette['fg']};
-                border: 1px solid {palette['border']}; padding: 4px 0;
-            }}
-            QMenu::item {{ padding: 4px 20px; }}
-            QMenu::item:selected {{ background: {palette['accent']}; }}
-        """)
+        self.setStyleSheet(render_qss("layers_panel_root.qss", palette))
+        self._header.setStyleSheet(render_qss("layers_panel_header.qss", palette))
+        self._opacity_lbl.setStyleSheet(render_qss("layers_panel_opacity_label.qss", palette))
+        self._opacity_spin.setStyleSheet(render_qss("layers_panel_spin.qss", palette))
+        self._blend_combo.setStyleSheet(render_qss("layers_panel_combo.qss", palette))
+        self._opacity_slider.setStyleSheet(
+            render_qss(
+                "layers_panel_slider.qss",
+                palette,
+                slider_handle=themed_value(palette, "fg_accent", palette["fg"]),
+                slider_hover="#ffffff",
+            )
+        )
+        self._toolbar.setStyleSheet(render_qss("layers_panel_toolbar.qss", palette))
+        menu_button_qss = render_qss("layers_panel_menu_button.qss", palette)
+        menu_qss = render_qss("layers_panel_menu.qss", palette)
+        self._adj_btn.setStyleSheet(menu_button_qss)
+        self._adj_menu.setStyleSheet(menu_qss)
+        self._filt_btn.setStyleSheet(menu_button_qss)
+        self._filt_menu.setStyleSheet(menu_qss)
         # Trigger item rebuild on theme change if document is valid
         if self._doc and hasattr(self, '_list'):
             self.refresh(self._doc, thumbnails=True)
@@ -343,10 +298,10 @@ class LayersPanel(QWidget):
                 line = QFrame()
                 line.setFrameShape(QFrame.Shape.HLine)
                 theme_border = ThemeManager.instance().active_palette['border']
-                line.setStyleSheet(f"color: {theme_border};")
+                line.setStyleSheet(render_qss("layers_panel_separator_line.qss", border=theme_border))
                 line.setFixedHeight(1)
                 sep_layout.addWidget(line)
-                sep_widget.setStyleSheet("background: transparent;")
+                sep_widget.setStyleSheet(render_qss("layers_panel_separator_widget.qss"))
 
                 self._list.addItem(item)
                 self._list.setItemWidget(item, sep_widget)

@@ -1,0 +1,8 @@
+QMenu {
+    background: [[bg2]];
+    color: [[fg]];
+    border: 1px solid [[border]];
+    padding: 4px 0;
+}
+QMenu::item { padding: 4px 20px; }
+QMenu::item:selected { background: [[accent]]; }

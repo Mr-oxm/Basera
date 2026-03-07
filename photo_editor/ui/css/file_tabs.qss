@@ -1,0 +1,21 @@
+QTabBar {
+    background: [[bg2]];
+    border: none;
+}
+QTabBar::tab {
+    background: [[bg1]];
+    color: [[fg_dim]];
+    padding: 5px 28px 5px 10px;
+    border: none;
+    border-right: 1px solid [[bg3]];
+    min-width: 80px;
+    max-width: 220px;
+}
+QTabBar::tab:selected {
+    background: [[bg2]];
+    color: [[fg]];
+}
+QTabBar::tab:hover:!selected {
+    background: [[hover]];
+    color: [[fg]];
+}

@@ -13,6 +13,7 @@ from .selection_bar import SelectionPropertiesBar
 from .text_bar import TextPropertiesBar
 from .vector_bar import VectorPropertiesBar
 from .zoom_bar import ZoomPropertiesBar
+from ...styles import render_qss
 
 
 class PropertiesPanel(QWidget):
@@ -287,9 +288,4 @@ class PropertiesPanel(QWidget):
             w.set_value(float(value))
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(f"""
-            PropertiesPanel, PropertiesPanel > QWidget {{
-                background-color: {palette['bg3']};
-            }}
-            QLabel {{ background: transparent; }}
-        """)
+        self.setStyleSheet(render_qss("properties_panel.qss", palette))

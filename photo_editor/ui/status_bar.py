@@ -8,22 +8,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QStatusBar, QWidget
 
+from .styles import render_qss
+
 # ── tiny helpers ────────────────────────────────────────────────────────
 
 _H_PAD = 14  # horizontal padding applied via contentsMargins
-
-_PILL_CSS = """
-    QLabel {{
-        background: {bg};
-        color: {fg};
-        border-radius: 9px;
-        padding: 0px;
-        font-size: 11px;
-        font-weight: {weight};
-        letter-spacing: 0.3px;
-    }}
-"""
-
 
 def _pill(text: str = "") -> QLabel:
     """Create a pill-shaped label."""
@@ -37,7 +26,7 @@ def _pill(text: str = "") -> QLabel:
 def _dot_sep() -> QLabel:
     """Tiny dot separator between pills."""
     dot = QLabel("\u00b7")
-    dot.setStyleSheet("color: #555555; font-size: 14px; font-weight: 700;")
+    dot.setStyleSheet(render_qss("status_bar_dot.qss", fg="#555555"))
     dot.setFixedWidth(8)
     dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
     dot.setContentsMargins(0, 0, 0, 0)
@@ -58,15 +47,8 @@ class EditorStatusBar(QStatusBar):
         self.setSizeGripEnabled(False)
         self.setFixedHeight(30)
 
-        # Remove default QStatusBar item frames
-        self.setStyleSheet(
-            "QStatusBar { border-top: 1px solid #3a3a3a; background: #2e2e2e; }"
-            "QStatusBar::item { border: none; }"
-        )
-
         # ── left cluster ────────────────────────────────────────────────
         left = QWidget()
-        left.setStyleSheet("background: transparent;")
         hl = QHBoxLayout(left)
         hl.setContentsMargins(6, 0, 0, 0)
         hl.setSpacing(5)
@@ -84,7 +66,6 @@ class EditorStatusBar(QStatusBar):
 
         # ── right cluster ───────────────────────────────────────────────
         right = QWidget()
-        right.setStyleSheet("background: transparent;")
         hr = QHBoxLayout(right)
         hr.setContentsMargins(0, 0, 6, 0)
         hr.setSpacing(5)
@@ -141,13 +122,20 @@ class EditorStatusBar(QStatusBar):
         self._auto_rasterize_cb.setChecked(value)
 
     def _apply_theme(self, palette: dict) -> None:
-        self.setStyleSheet(
-            f"QStatusBar {{ border-top: 1px solid {palette['input_bg']}; background: {palette['bg1_alt']}; }}"
-            "QStatusBar::item { border: none; }"
-        )
+        self.setStyleSheet(render_qss("status_bar.qss", palette))
         
-        accent_pill = _PILL_CSS.format(bg=palette['accent'], fg=palette['fg_accent'], weight=600)
-        dim_pill = _PILL_CSS.format(bg="transparent", fg=palette['fg_dim'], weight=400)
+        accent_pill = render_qss(
+            "status_bar_pill.qss",
+            bg=palette['accent'],
+            fg=palette['fg_accent'],
+            weight=600,
+        )
+        dim_pill = render_qss(
+            "status_bar_pill.qss",
+            bg="transparent",
+            fg=palette['fg_dim'],
+            weight=400,
+        )
         
         self._doc_pill.setStyleSheet(accent_pill)
         self._size_pill.setStyleSheet(dim_pill)
@@ -155,9 +143,4 @@ class EditorStatusBar(QStatusBar):
         self._pos_pill.setStyleSheet(dim_pill)
         self._zoom_pill.setStyleSheet(dim_pill)
         
-        self._auto_rasterize_cb.setStyleSheet(
-            f"QCheckBox {{ color: {palette['fg_dim']}; font-size: 10px; spacing: 4px; background: transparent; }}"
-            f"QCheckBox::indicator {{ width: 13px; height: 13px; border-radius: 2px; "
-            f"border: 1px solid {palette['border_light']}; background: {palette['bg2']}; }}"
-            f"QCheckBox::indicator:checked {{ background: {palette['accent']}; border-color: {palette['accent_border']}; }}"
-        )
+        self._auto_rasterize_cb.setStyleSheet(render_qss("status_bar_checkbox.qss", palette))

@@ -1,0 +1,10 @@
+QToolButton {
+    text-align: left;
+    padding: 3px 8px;
+    color: [[fg]];
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+}
+QToolButton:hover { background: [[hover]]; }
+QToolButton:checked { background: [[accent]]; color: [[fg_accent]]; }

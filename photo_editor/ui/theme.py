@@ -2,6 +2,8 @@
 
 from PySide6.QtCore import QObject, Signal
 
+from .styles import render_qss
+
 class ThemeManager(QObject):
     theme_changed = Signal(dict)
     
@@ -25,114 +27,7 @@ class ThemeManager(QObject):
             self.theme_changed.emit(self.active_palette)
 
 def _generate_stylesheet(palette):
-    return f"""
-QMainWindow, QWidget {{
-    background-color: {palette['bg1']};
-    color: {palette['fg']};
-    font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-    font-size: 12px;
-}}
-QMenuBar {{
-    background-color: {palette['bg3']};
-    color: {palette['fg']};
-    border-bottom: 1px solid {palette['border']};
-}}
-QMenuBar::item:selected {{ background-color: {palette['hover']}; }}
-QMenu {{
-    background-color: {palette['bg2']};
-    color: {palette['fg']};
-    border: 1px solid {palette['border_light']};
-}}
-QMenu::item:selected {{ background-color: {palette['accent']}; color: {palette['fg_accent']}; }}
-QMenu::separator {{ height: 1px; background: {palette['border_light']}; margin: 4px 8px; }}
-QToolBar {{
-    background-color: {palette['bg3']};
-    border: none;
-    spacing: 2px;
-    padding: 2px;
-}}
-QToolButton {{ background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 4px; }}
-QToolButton:hover {{ background-color: {palette['border']}; border-color: {palette['border_light']}; }}
-QToolButton:checked {{ background-color: {palette['accent']}; border-color: {palette['accent_border']}; }}
-QDockWidget {{
-    titlebar-close-icon: none;
-    color: {palette['fg']};
-}}
-QDockWidget::title {{
-    background-color: {palette['bg2']};
-    padding: 6px;
-    border-bottom: 1px solid {palette['border']};
-}}
-QListWidget, QTreeWidget {{
-    background-color: {palette['bg1_alt']};
-    border: 1px solid {palette['border']};
-    alternate-background-color: {palette['bg3']};
-}}
-QListWidget::item:selected, QTreeWidget::item:selected {{
-    background-color: {palette['accent']};
-    color: {palette['fg_accent']};
-}}
-QScrollBar:vertical {{
-    background-color: {palette['bg1']}; width: 10px; border: none;
-}}
-QScrollBar::handle:vertical {{
-    background-color: {palette['scroll']}; min-height: 30px; border-radius: 5px;
-}}
-QScrollBar::handle:vertical:hover {{ background-color: {palette['scroll_hover']}; }}
-QScrollBar:horizontal {{
-    background-color: {palette['bg1']}; height: 10px; border: none;
-}}
-QScrollBar::handle:horizontal {{
-    background-color: {palette['scroll']}; min-width: 30px; border-radius: 5px;
-}}
-QPushButton {{
-    background-color: {palette['btn']}; border: 1px solid {palette['border_light']};
-    border-radius: 3px; padding: 5px 12px; color: {palette['fg']};
-}}
-QPushButton:hover {{ background-color: {palette['hover']}; }}
-QPushButton:pressed {{ background-color: {palette['accent']}; color: {palette['fg_accent']}; }}
-QSlider::groove:horizontal {{
-    background: {palette['btn']}; height: 4px; border-radius: 2px;
-}}
-QSlider::handle:horizontal {{
-    background: {palette['slider_handle']}; width: 12px; height: 12px;
-    margin: -4px 0; border-radius: 6px;
-}}
-QSlider::handle:horizontal:hover {{ background: {palette['fg']}; }}
-QComboBox {{
-    background-color: {palette['btn']}; border: 1px solid {palette['border_light']};
-    border-radius: 3px; padding: 3px 8px; color: {palette['fg']};
-}}
-QComboBox::drop-down {{ border: none; }}
-QComboBox QAbstractItemView {{
-    background-color: {palette['bg2']}; color: {palette['fg']};
-    selection-background-color: {palette['accent']};
-    color: {palette['fg_accent']};
-}}
-QSpinBox, QDoubleSpinBox {{
-    background-color: {palette['input_bg']}; border: 1px solid {palette['border_light']};
-    border-radius: 3px; padding: 2px; color: {palette['fg']};
-}}
-QLabel {{ color: {palette['fg']}; }}
-QStatusBar {{
-    background-color: {palette['bg1_alt']} !important;
-    color: {palette['fg_dim']} !important;
-    border-top: 1px solid {palette['input_bg']} !important;
-    padding: 0px !important;
-}}
-QStatusBar::item {{ border: none; }}
-QTabWidget::pane {{ border: 1px solid {palette['border']}; }}
-QTabBar::tab {{
-    background-color: {palette['bg2']}; color: {palette['slider_handle']};
-    padding: 6px 14px; border: 1px solid {palette['border']};
-}}
-QTabBar::tab:selected {{ background-color: {palette['bg1']}; color: {palette['fg']}; border-bottom: none; }}
-QGroupBox {{
-    border: 1px solid {palette['border']}; border-radius: 4px;
-    margin-top: 8px; padding-top: 12px; color: {palette['fg']};
-}}
-QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
-"""
+    return render_qss("base.qss", palette)
 
 PALETTES = {
     "Dark": {

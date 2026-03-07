@@ -1,0 +1,23 @@
+QPushButton {
+    background: [[bg]];
+    border: 1px solid [[border]];
+    border-radius: [[radius]]px;
+    color: [[fg]];
+    font-size: [[font_size]]px;
+    padding: [[padding]];
+}
+QPushButton:hover {
+    border: 1px solid [[hover_border]];
+    color: [[hover_fg]];
+    background: [[hover_bg]];
+}
+QPushButton:pressed {
+    background: [[pressed_bg]];
+    border: 1px solid [[pressed_border]];
+    color: [[pressed_fg]];
+}
+QPushButton:checked {
+    background: [[checked_bg]];
+    border: 1px solid [[checked_border]];
+    color: [[checked_fg]];
+}

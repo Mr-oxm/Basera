@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
+from ..styles import render_qss
 from ..theme import ThemeManager
 
 
@@ -162,89 +163,4 @@ class BrushesPanel(QWidget):
         self._list.blockSignals(False)
 
     def _apply_theme(self, palette: dict) -> None:
-        bg1 = palette.get("bg1", "#2b2b2b")
-        bg2 = palette.get("bg2", "#383838")
-        bg3 = palette.get("bg3", "#333333")
-        fg = palette.get("fg", "#cccccc")
-        fg_dim = palette.get("fg_dim", "#999999")
-        border = palette.get("border", "#444444")
-        border_light = palette.get("border_light", "#555555")
-        accent = palette.get("accent", "#4a6fa5")
-        btn = palette.get("btn", "#444444")
-        input_bg = palette.get("input_bg", "#3a3a3a")
-        hover = palette.get("hover", "#505050")
-
-        self.setStyleSheet(f"""
-            BrushesPanel {{
-                background-color: {bg1};
-            }}
-            QLineEdit {{
-                background-color: {input_bg};
-                border: 1px solid {border};
-                border-radius: 6px;
-                padding: 6px 12px;
-                color: {fg};
-                font-size: 13px;
-                margin-top: 4px;
-                margin-bottom: 2px;
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {accent};
-                background-color: {bg2};
-            }}
-            QComboBox {{
-                background-color: {bg2};
-                border: 1px solid {border};
-                border-radius: 6px;
-                padding: 6px 12px;
-                color: {fg};
-                font-size: 13px;
-                margin-bottom: 4px;
-            }}
-            QComboBox:hover {{
-                border: 1px solid {border_light};
-                background-color: {hover};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 24px;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                width: 0; height: 0;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {fg_dim};
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {bg2};
-                color: {fg};
-                selection-background-color: {accent};
-                selection-color: #ffffff;
-                border: 1px solid {border_light};
-                border-radius: 4px;
-                outline: none;
-                padding: 4px;
-            }}
-            QListWidget {{
-                background-color: {bg1};
-                border: none;
-                outline: none;
-                padding-top: 4px;
-            }}
-            QListWidget::item {{
-                background-color: {bg2};
-                border-radius: 6px;
-                margin-bottom: 4px;
-                color: {fg};
-                font-size: 12px;
-                padding: 4px;
-            }}
-            QListWidget::item:selected {{
-                background-color: {accent};
-                color: #ffffff;
-            }}
-            QListWidget::item:hover:!selected {{
-                background-color: {hover};
-            }}
-        """)
+        self.setStyleSheet(render_qss("brushes_panel.qss", palette))

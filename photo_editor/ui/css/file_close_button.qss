@@ -1,0 +1,9 @@
+QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    padding: 0px;
+}
+QToolButton:hover {
+    background: [[hover]];
+}

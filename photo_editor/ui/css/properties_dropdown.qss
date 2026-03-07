@@ -1,0 +1,5 @@
+PropertyDropdown {
+    background-color: [[bg2]];
+    border: 1px solid [[border]];
+    border-radius: 4px;
+}
