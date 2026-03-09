@@ -39,8 +39,7 @@ def _dot_sep() -> QLabel:
 class EditorStatusBar(QStatusBar):
     """Bottom status bar with contextual information pills."""
 
-    # Emitted when the user toggles auto-rasterize on/off
-    auto_rasterize_changed = Signal(bool)
+    zoom_to_mouse_changed = Signal(bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -70,20 +69,19 @@ class EditorStatusBar(QStatusBar):
         hr.setContentsMargins(0, 0, 6, 0)
         hr.setSpacing(5)
 
-        # Auto-rasterize toggle for vector layers
-        self._auto_rasterize_cb = QCheckBox("Auto-Rasterize")
-        self._auto_rasterize_cb.setChecked(True)
-        self._auto_rasterize_cb.setToolTip(
-            "When checked, vector layers are continuously rasterized.\n"
-            "Uncheck to view curves only (better performance)."
+        self._zoom_to_mouse_cb = QCheckBox("Zoom To Mouse")
+        self._zoom_to_mouse_cb.setChecked(True)
+        self._zoom_to_mouse_cb.setToolTip(
+            "When checked, zoom operations keep the pointer position anchored\n"
+            "instead of zooming toward the center of the canvas."
         )
-        self._auto_rasterize_cb.toggled.connect(self.auto_rasterize_changed.emit)
+        self._zoom_to_mouse_cb.toggled.connect(self.zoom_to_mouse_changed.emit)
 
         self._pos_pill = _pill("x: 0  y: 0")
         self._zoom_pill = _pill("100 %")
 
         hr.addStretch()
-        hr.addWidget(self._auto_rasterize_cb)
+        hr.addWidget(self._zoom_to_mouse_cb)
         hr.addWidget(_dot_sep())
         hr.addWidget(self._pos_pill)
         hr.addWidget(_dot_sep())
@@ -113,13 +111,13 @@ class EditorStatusBar(QStatusBar):
         self._tool_pill.setText(name)
 
     @property
-    def auto_rasterize(self) -> bool:
-        """Whether vector layers should be continuously rasterized."""
-        return self._auto_rasterize_cb.isChecked()
+    def zoom_to_mouse(self) -> bool:
+        """Whether zoom operations anchor to the mouse position."""
+        return self._zoom_to_mouse_cb.isChecked()
 
-    @auto_rasterize.setter
-    def auto_rasterize(self, value: bool) -> None:
-        self._auto_rasterize_cb.setChecked(value)
+    @zoom_to_mouse.setter
+    def zoom_to_mouse(self, value: bool) -> None:
+        self._zoom_to_mouse_cb.setChecked(value)
 
     def _apply_theme(self, palette: dict) -> None:
         self.setStyleSheet(render_qss("status_bar.qss", palette))
@@ -143,4 +141,4 @@ class EditorStatusBar(QStatusBar):
         self._pos_pill.setStyleSheet(dim_pill)
         self._zoom_pill.setStyleSheet(dim_pill)
         
-        self._auto_rasterize_cb.setStyleSheet(render_qss("status_bar_checkbox.qss", palette))
+        self._zoom_to_mouse_cb.setStyleSheet(render_qss("status_bar_checkbox.qss", palette))

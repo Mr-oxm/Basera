@@ -50,7 +50,7 @@ class ViewController(ControllerBase):
 
     def on_zoom(self, factor: float) -> None:
         mw = self.mw
-        mw._canvas.set_zoom(mw._canvas.zoom * factor)
+        mw._canvas.zoom_by(factor)
         mw._status.set_zoom(mw._canvas.zoom)
         self.update_rulers()
 
@@ -69,27 +69,24 @@ class ViewController(ControllerBase):
         mw = self.mw
         canvas = mw._canvas
         if action == "zoom_in":
-            canvas.set_zoom(canvas.zoom * 1.5)
+            canvas.zoom_by(1.5)
         elif action == "zoom_out":
-            canvas.set_zoom(canvas.zoom / 1.5)
+            canvas.zoom_by(1 / 1.5)
         elif action == "fit":
-            if mw._doc:
-                vw = canvas.width()
-                vh = canvas.height()
-                scale = min(vw / mw._doc.width, vh / mw._doc.height) * 0.95
-                canvas.set_zoom(scale)
-                canvas._pan = QPointF(0, 0)
-                canvas.update()
+            canvas.zoom_to_fit()
         elif action == "reset":
             canvas.set_zoom(1.0)
-            canvas._pan = QPointF(0, 0)
-            canvas.update()
+            canvas.set_pan(QPointF(0, 0))
         mw._status.set_zoom(canvas.zoom)
 
-    def on_zoom_tool(self, factor: float) -> None:
+    def on_zoom_tool(self, factor: float, doc_pos: tuple[int, int] | None = None) -> None:
         """Called when the zoom tool requests a zoom change."""
         mw = self.mw
-        mw._canvas.set_zoom(mw._canvas.zoom * factor)
+        anchor = None
+        if doc_pos is not None and mw._canvas.zoom_to_mouse:
+            dr = mw._canvas._doc_rect()
+            anchor = mw._canvas._doc_to_widget(dr, float(doc_pos[0]), float(doc_pos[1]))
+        mw._canvas.zoom_by(factor, anchor=anchor)
         mw._status.set_zoom(mw._canvas.zoom)
         self.update_rulers()
 

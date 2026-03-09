@@ -65,6 +65,7 @@ class CanvasView(_BASE_CLASS):
         self._pixmap: QPixmap | None = None
         self._zoom = 1.0
         self._pan = QPointF(0, 0)
+        self._zoom_to_mouse = True
         self._last_mouse = QPointF()
         self._panning = False
         self._doc_w = 0
@@ -393,25 +394,91 @@ class CanvasView(_BASE_CLASS):
     def zoom(self) -> float:
         return self._zoom
 
-    def set_zoom(self, z: float) -> None:
-        self._zoom = max(0.01, min(z, 32.0))
+    @property
+    def pan(self) -> QPointF:
+        return QPointF(self._pan)
+
+    @property
+    def zoom_to_mouse(self) -> bool:
+        return self._zoom_to_mouse
+
+    def set_zoom_to_mouse(self, enabled: bool) -> None:
+        self._zoom_to_mouse = bool(enabled)
+
+    def fit_zoom(self) -> float:
+        if not self._doc_w or not self._doc_h or self.width() <= 0 or self.height() <= 0:
+            return 1.0
+        sx = self.width() / self._doc_w
+        sy = self.height() / self._doc_h
+        return max(0.01, min(min(sx, sy) * 0.9, 32.0))
+
+    def scrollable_span(self) -> tuple[float, float]:
+        if not self._doc_w or not self._doc_h:
+            return 0.0, 0.0
+        return (
+            max(0.0, self._doc_w * self._zoom - self.width()),
+            max(0.0, self._doc_h * self._zoom - self.height()),
+        )
+
+    def _pan_limits(self) -> tuple[float, float]:
+        span_x, span_y = self.scrollable_span()
+        return span_x / 2.0, span_y / 2.0
+
+    def _clamp_pan(self, pan: QPointF) -> QPointF:
+        limit_x, limit_y = self._pan_limits()
+        return QPointF(
+            max(-limit_x, min(pan.x(), limit_x)),
+            max(-limit_y, min(pan.y(), limit_y)),
+        )
+
+    def set_pan(self, pan: QPointF) -> None:
+        self._pan = self._clamp_pan(pan)
         self.update()
         self.view_changed.emit()
 
+    def scroll_by(self, dx: float = 0.0, dy: float = 0.0) -> None:
+        self.set_pan(self._pan + QPointF(dx, dy))
+
+    def _canvas_to_doc_float(self, pos: QPointF) -> QPointF:
+        cx = self.width() / 2 + self._pan.x()
+        cy = self.height() / 2 + self._pan.y()
+        dx = (pos.x() - cx) / self._zoom + self._doc_w / 2
+        dy = (pos.y() - cy) / self._zoom + self._doc_h / 2
+        return QPointF(dx, dy)
+
+    def _pan_for_anchor(self, doc_pos: QPointF, widget_pos: QPointF, zoom: float) -> QPointF:
+        return self._clamp_pan(QPointF(
+            widget_pos.x() - self.width() / 2 - (doc_pos.x() - self._doc_w / 2) * zoom,
+            widget_pos.y() - self.height() / 2 - (doc_pos.y() - self._doc_h / 2) * zoom,
+        ))
+
+    def set_zoom(self, z: float, anchor: QPointF | None = None) -> None:
+        target_zoom = max(0.01, min(z, 32.0))
+        doc_anchor = None
+        if anchor is not None and self._doc_w and self._doc_h:
+            doc_anchor = self._canvas_to_doc_float(anchor)
+        self._zoom = target_zoom
+        if doc_anchor is not None:
+            self._pan = self._pan_for_anchor(doc_anchor, anchor, target_zoom)
+        else:
+            self._pan = self._clamp_pan(self._pan)
+        self.update()
+        self.view_changed.emit()
+
+    def zoom_by(self, factor: float, anchor: QPointF | None = None) -> None:
+        self.set_zoom(self._zoom * factor, anchor=anchor)
+
     def zoom_to_fit(self) -> None:
         if self._doc_w and self._doc_h:
-            sx = self.width() / self._doc_w
-            sy = self.height() / self._doc_h
-            self._zoom = min(sx, sy) * 0.9
+            self._zoom = self.fit_zoom()
             self._pan = QPointF(0, 0)
             self.update()
             self.view_changed.emit()
 
     def _canvas_to_doc(self, pos: QPointF) -> tuple[int, int]:
-        cx = self.width() / 2 + self._pan.x()
-        cy = self.height() / 2 + self._pan.y()
-        dx = (pos.x() - cx) / self._zoom + self._doc_w / 2
-        dy = (pos.y() - cy) / self._zoom + self._doc_h / 2
+        doc_pos = self._canvas_to_doc_float(pos)
+        dx = doc_pos.x()
+        dy = doc_pos.y()
         return int(dx), int(dy)
 
     def _doc_rect(self) -> QRectF:
@@ -659,6 +726,11 @@ class CanvasView(_BASE_CLASS):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         self._input_handler.handle_mouse_move(event)
+
+    def resizeEvent(self, event) -> None:
+        self._pan = self._clamp_pan(self._pan)
+        super().resizeEvent(event)
+        self.view_changed.emit()
 
     def leaveEvent(self, event) -> None:
         self._input_handler.handle_leave()

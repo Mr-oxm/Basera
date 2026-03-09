@@ -95,6 +95,16 @@ class CanvasController(ControllerBase):
             return
 
         tool_type = mw._tools.active_type
+        if tool_type == ToolType.ZOOM:
+            tool = mw._tools.active_tool
+            if tool is not None:
+                if modifiers & Qt.KeyboardModifier.AltModifier:
+                    tool.zoom_out()
+                else:
+                    tool.on_press(mw._doc, x, y, pressure)
+            self._dragging = False
+            return
+
         if tool_type in self.SEL_TOOLS:
             tool = mw._tools.active_tool
             if tool is not None and hasattr(tool, "mode"):

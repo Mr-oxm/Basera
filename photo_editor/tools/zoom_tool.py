@@ -17,7 +17,7 @@ class ZoomTool(Tool):
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         if self._zoom_callback is not None:
-            self._zoom_callback(1.5)
+            self._zoom_callback(1.5, (x, y))
 
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         pass
@@ -28,4 +28,4 @@ class ZoomTool(Tool):
     def zoom_out(self) -> None:
         """Programmatic zoom-out (e.g. Alt+click)."""
         if self._zoom_callback is not None:
-            self._zoom_callback(1.0 / 1.5)
+            self._zoom_callback(1.0 / 1.5, None)

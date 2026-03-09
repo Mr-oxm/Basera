@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox
+from PySide6.QtCore import Qt, QPointF, QSignalBlocker, QTimer
+from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox, QScrollBar, QWidget
 
 from ..commands.base import Command
 from ..core.brush_engine import BrushManager
@@ -152,7 +153,7 @@ class MainWindow(QMainWindow):
     # ---- UI assembly --------------------------------------------------------
 
     def _build_ui(self) -> None:
-        from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QToolBar
+        from PySide6.QtWidgets import QVBoxLayout, QGridLayout, QToolBar
         from .widgets.rulers import HorizontalRuler, VerticalRuler, RulerCorner, Guide, RULER_SIZE
         
         self._menu = EditorMenuBar(self)
@@ -195,11 +196,19 @@ class MainWindow(QMainWindow):
         self._v_ruler = VerticalRuler()
         self._canvas = CanvasView(self)
         self._canvas.set_tool_manager_ref(self._tools)
+        self._h_scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
+        self._v_scrollbar = QScrollBar(Qt.Orientation.Vertical, self)
+        self._scroll_corner = QWidget(self)
 
         grid.addWidget(self._ruler_corner, 0, 0)
         grid.addWidget(self._h_ruler, 0, 1)
         grid.addWidget(self._v_ruler, 1, 0)
         grid.addWidget(self._canvas, 1, 1)
+        grid.addWidget(self._v_scrollbar, 1, 2)
+        grid.addWidget(self._h_scrollbar, 2, 1)
+        grid.addWidget(self._scroll_corner, 2, 2)
+        grid.setRowStretch(1, 1)
+        grid.setColumnStretch(1, 1)
 
         # Rulers default visible
         self._rulers_visible = True
@@ -352,8 +361,46 @@ class MainWindow(QMainWindow):
     def _wire_canvas(self) -> None:
         self._canvas.cursor_moved.connect(self._status.set_cursor_pos)
         # Canvas input wired by CanvasController
-        self._canvas.view_changed.connect(self._view_ctrl.update_rulers)
+        self._canvas.view_changed.connect(self._on_canvas_view_changed)
+        self._h_scrollbar.valueChanged.connect(self._on_h_scrollbar_changed)
+        self._v_scrollbar.valueChanged.connect(self._on_v_scrollbar_changed)
+        self._status.zoom_to_mouse_changed.connect(self._canvas.set_zoom_to_mouse)
+        self._status.zoom_to_mouse = self._canvas.zoom_to_mouse
         # Guide drag wired by ViewController
+
+    def _on_canvas_view_changed(self) -> None:
+        self._view_ctrl.update_rulers()
+        self._status.set_zoom(self._canvas.zoom)
+        self._sync_canvas_scrollbars()
+
+    def _sync_canvas_scrollbars(self) -> None:
+        span_x, span_y = self._canvas.scrollable_span()
+        limit_x = span_x / 2.0
+        limit_y = span_y / 2.0
+        value_x = int(round(limit_x - self._canvas.pan.x())) if span_x > 0 else 0
+        value_y = int(round(limit_y - self._canvas.pan.y())) if span_y > 0 else 0
+
+        with QSignalBlocker(self._h_scrollbar):
+            self._h_scrollbar.setRange(0, max(0, int(math.ceil(span_x))))
+            self._h_scrollbar.setPageStep(max(1, self._canvas.width()))
+            self._h_scrollbar.setSingleStep(24)
+            self._h_scrollbar.setValue(value_x)
+
+        with QSignalBlocker(self._v_scrollbar):
+            self._v_scrollbar.setRange(0, max(0, int(math.ceil(span_y))))
+            self._v_scrollbar.setPageStep(max(1, self._canvas.height()))
+            self._v_scrollbar.setSingleStep(24)
+            self._v_scrollbar.setValue(value_y)
+
+    def _on_h_scrollbar_changed(self, value: int) -> None:
+        span_x, _ = self._canvas.scrollable_span()
+        limit_x = span_x / 2.0
+        self._canvas.set_pan(QPointF(limit_x - value, self._canvas.pan.y()))
+
+    def _on_v_scrollbar_changed(self, value: int) -> None:
+        _, span_y = self._canvas.scrollable_span()
+        limit_y = span_y / 2.0
+        self._canvas.set_pan(QPointF(self._canvas.pan.x(), limit_y - value))
 
     def _refresh_history_panel(self) -> None:
         if self._doc:
@@ -430,6 +477,7 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         self._canvas.set_image(rgba, force=True)
+        self._sync_canvas_scrollbars()
         self._selection_ctrl.update_selection_overlay()
         self._transform_ctrl.update_transform_box()
         self._transform_panel.refresh(self._doc)
@@ -444,6 +492,7 @@ class MainWindow(QMainWindow):
         if self._doc:
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
+            self._sync_canvas_scrollbars()
         self._status.showMessage(f"Render error: {message}", 3000)
 
     def execute_command(self, command: Command):

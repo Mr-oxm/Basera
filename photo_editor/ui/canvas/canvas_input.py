@@ -17,17 +17,39 @@ if TYPE_CHECKING:
 class CanvasInputHandler:
     """Handles mouse and keyboard events for the canvas."""
 
+    _WHEEL_SCROLL_SCALE = 0.5
+
     def __init__(self, canvas: "CanvasView") -> None:
         self._canvas = canvas
 
     def handle_wheel(self, event: QWheelEvent) -> None:
-        """Handle zoom via scroll wheel."""
+        """Handle canvas scrolling by default and Ctrl+wheel zoom."""
         c = self._canvas
-        delta = event.angleDelta().y()
-        factor = 1.15 if delta > 0 else 1 / 1.15
-        c._zoom = max(0.01, min(c._zoom * factor, 32.0))
-        c.update()
-        c.view_changed.emit()
+        mods = event.modifiers()
+        pixel_delta = event.pixelDelta()
+        angle_delta = event.angleDelta()
+
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            delta = angle_delta.y() or angle_delta.x()
+            if delta == 0:
+                return
+            factor = 1.15 ** (delta / 120.0)
+            anchor = event.position() if c.zoom_to_mouse else None
+            c.zoom_by(factor, anchor=anchor)
+            event.accept()
+            return
+
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            delta = pixel_delta.x() or pixel_delta.y() or angle_delta.x() or angle_delta.y() * self._WHEEL_SCROLL_SCALE
+            if delta:
+                c.scroll_by(dx=delta)
+                event.accept()
+            return
+
+        delta = pixel_delta.y() or angle_delta.y() * self._WHEEL_SCROLL_SCALE
+        if delta:
+            c.scroll_by(dy=delta)
+            event.accept()
 
     def handle_mouse_press(self, event: QMouseEvent) -> bool:
         """Handle mouse press. Returns True if fully handled (no further processing)."""
