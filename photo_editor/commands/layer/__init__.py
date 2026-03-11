@@ -1,7 +1,9 @@
-"""Layer commands — add, remove, duplicate, reorder, merge, resize, rotate."""
+"""Layer commands — add, remove, duplicate, reorder, merge, resize, rotate, clip."""
 
 from .add_group import AddGroupCommand
 from .add_layer import AddLayerCommand
+from .clip_layer import ClipToLayerCommand
+from .drop_as_mask import DropAsMaskCommand
 from .duplicate_layer import DuplicateLayerCommand
 from .flatten import FlattenCommand
 from .merge_down import MergeDownCommand
@@ -15,6 +17,8 @@ from .rotate_layer import RotateLayerCommand
 __all__ = [
     "AddGroupCommand",
     "AddLayerCommand",
+    "ClipToLayerCommand",
+    "DropAsMaskCommand",
     "DuplicateLayerCommand",
     "FlattenCommand",
     "MergeDownCommand",

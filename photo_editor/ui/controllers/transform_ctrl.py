@@ -113,6 +113,35 @@ class TransformController(ControllerBase):
             mw._canvas.set_transform_box(box if box else None)
             return
 
+        # Non-group parent with children (pseudo-group) — show the
+        # parent's own bounds (clipped children don't inflate the BB).
+        # Support rotation: use the same logic as single-layer rotation.
+        if layer.children:
+            tool = mw._tools.active_tool
+            info = None
+            if hasattr(tool, "rotation_info_for"):
+                info = tool.rotation_info_for(layer)
+            if info is not None:
+                bw, bh, angle = info
+                lx, ly = layer.position
+                cx = lx + layer.width / 2
+                cy = ly + layer.height / 2
+                box = (int(cx - bw / 2), int(cy - bh / 2), bw, bh)
+                mw._canvas.set_transform_box(box, angle)
+                return
+            if layer.transform_angle != 0.0 and layer.transform_base_w > 0:
+                bw = layer.transform_base_w
+                bh = layer.transform_base_h
+                lx, ly = layer.position
+                cx = lx + layer.width / 2
+                cy = ly + layer.height / 2
+                box = (int(cx - bw / 2), int(cy - bh / 2), bw, bh)
+                mw._canvas.set_transform_box(box, layer.transform_angle)
+                return
+            lx, ly = layer.position
+            mw._canvas.set_transform_box((lx, ly, layer.width, layer.height))
+            return
+
         tool = mw._tools.active_tool
         info = None
         if hasattr(tool, "rotation_info_for"):

@@ -28,10 +28,16 @@ ROLE_PARENT_ID = Qt.ItemDataRole.UserRole + 3
 ROLE_IS_MASK = Qt.ItemDataRole.UserRole + 4
 ROLE_IS_ADJ_FILTER = Qt.ItemDataRole.UserRole + 5
 ROLE_IS_SEP = Qt.ItemDataRole.UserRole + 6
+ROLE_IS_CLIPPED = Qt.ItemDataRole.UserRole + 7
 
 SEP_HEIGHT = 6
 THUMB_SIZE = 36
 ROW_HEIGHT = 48
+INDENT_WIDTH = 20
+MAX_INDENT_DEPTH = 5
+OVERSCAN_ROWS = 5
+GAP_ANIM_MS = 120
+EJECT_HOLD_MS = 400
 
 
 def draw_icon(size: int, draw_fn) -> QIcon:

@@ -25,6 +25,7 @@ from ...styles import render_qss, themed_value
 from .base import (
     ROLE_INDENT,
     ROLE_IS_ADJ_FILTER,
+    ROLE_IS_CLIPPED,
     ROLE_IS_GROUP,
     ROLE_IS_MASK,
     ROLE_IS_SEP,
@@ -69,9 +70,12 @@ class LayersPanel(QWidget):
     edit_filter_requested = Signal(str)
     layers_reordered = Signal(list, int)
     layers_reparented = Signal(list, str)
-    layers_unparented = Signal(list)
+    layers_reordered_into_group = Signal(list, str, int)  # (ids, group_id, visual_row)
+    layers_unparented = Signal(list, int)  # (layer_ids, target_visual_row)
     mask_dropped_on_layer = Signal(str, str)
     adj_filter_dropped_on_layer = Signal(str, str)
+    clip_to_layer = Signal(str, str)  # (dragged_id, target_id)
+    layer_dropped_as_mask = Signal(str, str)  # raster → mask conversion
     multi_selection_changed = Signal(list)  # list[str] of selected layer IDs
 
     def __init__(self, parent=None) -> None:
@@ -79,6 +83,7 @@ class LayersPanel(QWidget):
         self._doc: Document | None = None
         self._refreshing = False
         self._row_layer_ids: list[str] = []
+        self._row_structure: list[tuple] = []
         self._collapsed_groups: set[str] = set()
         self._collapsed_masks: set[str] = set()
         self._build_ui()
@@ -182,9 +187,12 @@ class LayersPanel(QWidget):
         self._list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._list.layers_reordered.connect(self.layers_reordered.emit)
         self._list.layers_dropped_in_group.connect(self.layers_reparented.emit)
+        self._list.layers_reordered_into_group.connect(self.layers_reordered_into_group.emit)
         self._list.layers_unparented.connect(self.layers_unparented.emit)
         self._list.mask_dropped_on_layer.connect(self.mask_dropped_on_layer.emit)
         self._list.adj_filter_dropped_on_layer.connect(self.adj_filter_dropped_on_layer.emit)
+        self._list.clip_to_layer.connect(self.clip_to_layer.emit)
+        self._list.layer_dropped_as_mask.connect(self.layer_dropped_as_mask.emit)
         self._list.delete_key_pressed.connect(self.delete_requested.emit)
         root.addWidget(self._list, 1)
 
@@ -265,12 +273,15 @@ class LayersPanel(QWidget):
 
         display_order = self._build_display_order(document, self._collapsed_groups, self._collapsed_masks)
         new_ids: list[str] = []
+        new_structure: list[tuple] = []
         for entry in display_order:
             if len(entry) == 3:
                 new_ids.append("__sep__")
+                new_structure.append(("__sep__", entry[1]))
             else:
                 new_ids.append(entry[0].id)
-        structure_changed = (new_ids != self._row_layer_ids)
+                new_structure.append((entry[0].id, entry[1], entry[0].parent_id))
+        structure_changed = (new_structure != self._row_structure)
 
         if not structure_changed and not thumbnails:
             self._sync_row_states(document)
@@ -278,8 +289,39 @@ class LayersPanel(QWidget):
             self._refreshing = False
             return
 
+        if not structure_changed and thumbnails:
+            # Structure intact — just update thumbnails + row state in place
+            self._sync_row_states(document)
+            self._sync_thumbnails(document)
+            self._sync_active(document)
+            self._refreshing = False
+            return
+
+        # Build children map for drag-drop circular detection
+        children_map: dict[str, list[str]] = {}
+        for layer in document.layers:
+            kids = list(layer.children) + list(layer.mask_layers)
+            if kids:
+                children_map[layer.id] = kids
+        self._list.set_children_map(children_map)
+
         self._list.clear()
         self._row_layer_ids = []
+        self._row_structure = new_structure
+
+        # Pre-compute which parents have children of each category (O(N) once)
+        _parents_with_adj: set[str] = set()
+        _parents_with_mask: set[str] = set()
+        _parents_with_raster: set[str] = set()
+        for cl in document.layers:
+            if not cl.parent_id:
+                continue
+            if cl.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                _parents_with_adj.add(cl.parent_id)
+            elif cl.layer_type == LayerType.MASK:
+                _parents_with_mask.add(cl.parent_id)
+            else:
+                _parents_with_raster.add(cl.parent_id)
 
         for entry in display_order:
             if len(entry) == 3:
@@ -314,18 +356,12 @@ class LayersPanel(QWidget):
             is_filter = layer.layer_type == LayerType.FILTER
             is_text = layer.layer_type == LayerType.TEXT
             is_mask_layer = layer.layer_type == LayerType.MASK
+            is_clipped = getattr(layer, 'clipping_mask', False)
             has_mask = layer.mask is not None or bool(layer.mask_layers)
-            has_adj_children = any(
-                cl.parent_id == layer.id
-                and cl.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
-                for cl in document.layers
-            )
-            has_mask_children = any(
-                cl.parent_id == layer.id
-                and cl.layer_type == LayerType.MASK
-                for cl in document.layers
-            )
-            has_children = has_mask or has_mask_children or has_adj_children
+            has_adj_children = layer.id in _parents_with_adj
+            has_mask_children = layer.id in _parents_with_mask
+            has_raster_children = layer.id in _parents_with_raster
+            has_children = has_mask or has_mask_children or has_adj_children or has_raster_children
             is_collapsed = layer.id in self._collapsed_groups
 
             item = QListWidgetItem()
@@ -335,6 +371,7 @@ class LayersPanel(QWidget):
             item.setData(ROLE_PARENT_ID, layer.parent_id or "")
             item.setData(ROLE_IS_MASK, is_mask_layer)
             item.setData(ROLE_IS_ADJ_FILTER, is_adjustment or is_filter)
+            item.setData(ROLE_IS_CLIPPED, is_clipped)
             item.setSizeHint(QSize(0, ROW_HEIGHT))
 
             thumbnail = None
@@ -352,6 +389,7 @@ class LayersPanel(QWidget):
                 thumbnail=thumbnail,
                 is_adjustment=is_adjustment, is_filter=is_filter,
                 is_text=is_text, is_mask_layer=is_mask_layer,
+                is_clipped=is_clipped,
             )
             widget.visibility_clicked.connect(self.visibility_toggled.emit)
             widget.lock_clicked.connect(self.lock_toggled.emit)
@@ -381,6 +419,31 @@ class LayersPanel(QWidget):
             widget = self._list.itemWidget(item)
             if isinstance(widget, LayerItemWidget):
                 widget.update_state(layer.visible, layer.locked)
+
+    def _sync_thumbnails(self, document: Document) -> None:
+        """Update thumbnails on existing row widgets without rebuilding."""
+        layers_by_id = {layer.id: layer for layer in document.layers}
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if not item:
+                continue
+            lid = item.data(ROLE_LAYER_ID)
+            layer = layers_by_id.get(lid)
+            if not layer:
+                continue
+            if layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.TEXT):
+                continue
+            widget = self._list.itemWidget(item)
+            if not isinstance(widget, LayerItemWidget):
+                continue
+            thumb_label = getattr(widget, '_thumb_label', None)
+            if thumb_label is None:
+                continue
+            if layer.layer_type == LayerType.GROUP:
+                pm = make_group_thumbnail(document, layer)
+            else:
+                pm = make_thumbnail(layer)
+            thumb_label.setPixmap(pm)
 
     def refresh_controls_only(self, document: Document) -> None:
         self._doc = document
@@ -478,7 +541,7 @@ class LayersPanel(QWidget):
         def _emit_children(lid, indent, result, is_group, group_collapsed):
             has_masks = lid in mask_children_of
             has_adj = lid in adj_children_of
-            has_raster = is_group and lid in children_of
+            has_raster = lid in children_of
             masks_hidden = lid in masks_collapsed
 
             if is_group and group_collapsed:
@@ -495,7 +558,7 @@ class LayersPanel(QWidget):
                 for child in reversed(adj_children_of[lid]):
                     result.append((child, indent))
 
-            if has_raster and not group_collapsed:
+            if has_raster and not masks_hidden:
                 if (has_masks or has_adj) and not masks_hidden:
                     result.append((None, indent, "sep"))
                 for child in reversed(children_of[lid]):

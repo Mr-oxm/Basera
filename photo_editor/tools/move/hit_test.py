@@ -65,6 +65,12 @@ def bbox(doc: "Document") -> tuple[int, int, int, int] | None:
         return None
     if layer.layer_type == LayerType.GROUP:
         return group_bbox(doc, layer)
+    # Non-group parent with children (pseudo-group) — BB uses the parent's
+    # own bounds only.  Clipped children are masked to the parent's shape
+    # so their overflow is invisible and must NOT inflate the BB.
+    if layer.children:
+        lx, ly = layer.position
+        return (lx, ly, layer.width, layer.height)
     lx, ly = layer.position
     return (lx, ly, layer.width, layer.height)
 
@@ -149,6 +155,31 @@ def hit_test(
     sel = doc.layers.selected_indices
     if len(sel) > 1:
         bb = multi_bbox(doc)
+        if bb is None:
+            return _Mode.NONE, _Handle.NONE
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+
+    # Non-group parent with children (pseudo-group) — hit-test uses the
+    # parent's own bounds.  When the parent is rotated, inverse-rotate
+    # the click point into the parent's local frame (same as single layer).
+    if layer.children:
+        total_angle = layer.transform_angle + current_angle
+        if total_angle != 0.0 and layer.transform_base_w > 0:
+            lx, ly = layer.position
+            cx = lx + layer.width / 2
+            cy = ly + layer.height / 2
+            rad = math.radians(total_angle)
+            dx, dy = x - cx, y - cy
+            rx = dx * math.cos(rad) - dy * math.sin(rad)
+            ry = dx * math.sin(rad) + dy * math.cos(rad)
+            return hit_test_rect(
+                -layer.transform_base_w / 2,
+                -layer.transform_base_h / 2,
+                layer.transform_base_w,
+                layer.transform_base_h,
+                rx, ry,
+            )
+        bb = bbox(doc)
         if bb is None:
             return _Mode.NONE, _Handle.NONE
         return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)

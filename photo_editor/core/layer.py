@@ -46,6 +46,7 @@ class Layer:
     position: tuple[int, int] = (0, 0)
     mask_enabled: bool = True
     clipping_mask: bool = False
+    clips_parent: bool = False
     parent_id: str | None = None
     # Channel visibility toggles
     channel_r: bool = True

@@ -1,6 +1,8 @@
-"""Thumbnail generation for layer previews."""
+"""Thumbnail generation for layer previews — lazy + cached."""
 
 from __future__ import annotations
+
+from collections import OrderedDict
 
 import numpy as np
 
@@ -12,6 +14,29 @@ from .base import THUMB_SIZE
 
 
 _THUMB_CHECKER: QPixmap | None = None
+
+# ---- LRU thumbnail cache ---------------------------------------------------
+# Key: layer.id, Value: QPixmap
+# Thumbnails are only regenerated when explicitly invalidated.
+_THUMB_CACHE_MAX = 256
+_thumb_cache: OrderedDict[str, QPixmap] = OrderedDict()
+
+
+def invalidate_thumbnail(layer_id: str) -> None:
+    """Remove a single thumbnail from the cache (e.g. after pixel edits)."""
+    _thumb_cache.pop(layer_id, None)
+
+
+def invalidate_all_thumbnails() -> None:
+    """Clear the entire thumbnail cache (e.g. after theme change)."""
+    _thumb_cache.clear()
+
+
+def _cache_put(layer_id: str, pm: QPixmap) -> None:
+    _thumb_cache[layer_id] = pm
+    _thumb_cache.move_to_end(layer_id)
+    while len(_thumb_cache) > _THUMB_CACHE_MAX:
+        _thumb_cache.popitem(last=False)
 
 
 def thumb_checker(size: int = THUMB_SIZE) -> QPixmap:
@@ -59,7 +84,11 @@ def pixels_to_thumbnail_pixmap(px: np.ndarray, size: int = THUMB_SIZE) -> QPixma
 
 
 def make_thumbnail(layer, size: int = THUMB_SIZE) -> QPixmap:
-    """Generate a small QPixmap thumbnail for *layer*."""
+    """Generate (or return cached) a small QPixmap thumbnail for *layer*."""
+    cached = _thumb_cache.get(layer.id)
+    if cached is not None:
+        _thumb_cache.move_to_end(layer.id)
+        return cached
     pm = QPixmap(thumb_checker(size))
     try:
         px = layer.pixels
@@ -67,11 +96,16 @@ def make_thumbnail(layer, size: int = THUMB_SIZE) -> QPixmap:
             pm = pixels_to_thumbnail_pixmap(px, size)
     except Exception:
         pass
+    _cache_put(layer.id, pm)
     return pm
 
 
 def make_group_thumbnail(document: Document, group, size: int = THUMB_SIZE) -> QPixmap:
-    """Generate a thumbnail for a group layer by compositing its children."""
+    """Generate (or return cached) a thumbnail for a group layer."""
+    cached = _thumb_cache.get(group.id)
+    if cached is not None:
+        _thumb_cache.move_to_end(group.id)
+        return cached
     pm = QPixmap(thumb_checker(size))
     try:
         from ....engine.compositor import Compositor
@@ -81,4 +115,5 @@ def make_group_thumbnail(document: Document, group, size: int = THUMB_SIZE) -> Q
             pm = pixels_to_thumbnail_pixmap(px, size)
     except Exception:
         pass
+    _cache_put(group.id, pm)
     return pm

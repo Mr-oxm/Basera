@@ -104,7 +104,10 @@ class RotateMixin:
         a0 = math.atan2(self._start_y - gcy, self._start_x - gcx)
         a1 = math.atan2(y - gcy, x - gcx)
         angle_deg = -math.degrees(a1 - a0)
-        self._current_angle = angle_deg
+        # The full angle is committed to each child's transform_angle below,
+        # so the mid-drag accumulator must stay at 0 — same as _apply_rotate.
+        # Otherwise rotation_info_for() double-counts the delta (BB at 2×).
+        self._current_angle = 0.0
 
         rad = math.radians(angle_deg)
         cos_a = math.cos(rad)

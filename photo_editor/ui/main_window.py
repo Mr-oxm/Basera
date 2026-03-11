@@ -434,6 +434,11 @@ class MainWindow(QMainWindow):
             return
         self._canvas.set_document_ref(self._doc)
         if invalidate:
+            # Immediately refresh the layers panel structure (no thumbnails)
+            # so the user gets instant visual feedback while the expensive
+            # async render runs.  The render callback will then refresh
+            # again with thumbnails once the composite is ready.
+            self._layers_panel.refresh(self._doc, thumbnails=False)
             self._pipeline.invalidate(layer_id)
             self._render_scheduler.enqueue_render(self._doc, full_refresh=True)
         else:

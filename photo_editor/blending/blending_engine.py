@@ -64,6 +64,15 @@ class BlendingEngine:
         if w <= 0 or h <= 0:
             return
 
+        # If a mask is provided, clamp the overlap to the mask dimensions
+        # too (the mask may differ in size from the pixel array).
+        if mask is not None:
+            mh, mw = mask.shape[:2]
+            w = min(w, mw - sx)
+            h = min(h, mh - sy)
+            if w <= 0 or h <= 0:
+                return
+
         base = canvas[dy : dy + h, dx : dx + w]
         over = pixels[sy : sy + h, sx : sx + w]
 

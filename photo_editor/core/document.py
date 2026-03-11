@@ -131,10 +131,66 @@ class Document:
             self._dirty = True
 
     def duplicate_layer(self, layer_id: str) -> Layer | None:
+        original = self.layers.get(layer_id)
+        if original is None:
+            return None
+
         dup = self.layers.duplicate(layer_id)
-        if dup:
-            self._snapshot(f"Duplicate {dup.name}")
-            self._dirty = True
+        if dup is None:
+            return None
+
+        # Deep-duplicate all child layers (masks, adjustments, filters,
+        # clips_parent children) and remap references to the new parent.
+        id_map: dict[str, str] = {original.id: dup.id}
+
+        # Collect children in stack order so duplicates keep the same order.
+        child_layers = [
+            c for c in list(self.layers)
+            if c.parent_id == original.id and c.id != dup.id
+        ]
+
+        # Determine insertion point: right before the duplicate parent
+        dup_idx = self.layers.layers.index(dup)
+
+        for child in child_layers:
+            child_dup = child.duplicate()
+            id_map[child.id] = child_dup.id
+            child_dup.parent_id = dup.id
+            child_dup.clips_parent = child.clips_parent
+            child_dup.clipping_mask = child.clipping_mask
+            self.layers.add(child_dup, dup_idx)
+            # Each child inserted before dup shifts dup_idx
+            dup_idx = self.layers.layers.index(dup)
+
+        # Remap the duplicate's children and mask_layers lists to new IDs
+        dup.children = [id_map[cid] for cid in original.children if cid in id_map]
+        dup.mask_layers = [id_map[mid] for mid in original.mask_layers if mid in id_map]
+
+        # Deep-duplicate mask layers for each duplicated child that also
+        # had mask layers (recursive one level — mask layers on children).
+        for child in child_layers:
+            child_dup_id = id_map[child.id]
+            child_dup = self.layers.get(child_dup_id)
+            if child_dup is None:
+                continue
+            if child.mask_layers:
+                new_mask_ids = []
+                cd_idx = self.layers.layers.index(child_dup)
+                for mid in child.mask_layers:
+                    ml = self.layers.get(mid)
+                    if ml is None:
+                        continue
+                    ml_dup = ml.duplicate()
+                    ml_dup.parent_id = child_dup_id
+                    self.layers.add(ml_dup, cd_idx)
+                    new_mask_ids.append(ml_dup.id)
+                    cd_idx = self.layers.layers.index(child_dup)
+                child_dup.mask_layers = new_mask_ids
+            else:
+                child_dup.mask_layers = []
+
+        self._snapshot(f"Duplicate {dup.name}")
+        self._dirty = True
         return dup
 
     def flatten(self) -> None:

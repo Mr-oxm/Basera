@@ -122,6 +122,20 @@ class Compositor:
                     and l.id not in mask_layer_ids):
                 standalone_mask_ids.add(l.id)
 
+        # Regular (non-mask, non-adj) children of non-group parents.
+        # Groups handle their children via _composite_group; non-group
+        # parents clip children to the parent's alpha boundaries.
+        group_ids = {l.id for l in layers if l.layer_type == LayerType.GROUP}
+        regular_children: dict[str, list[Layer]] = {}
+        for l in layers:
+            if (l.parent_id and l.visible
+                    and l.parent_id not in group_ids
+                    and l.layer_type not in (
+                        LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK)
+                    and l.id not in mask_layer_ids
+                    and l.id not in adj_child_ids):
+                regular_children.setdefault(l.parent_id, []).append(l)
+
         # Pre-scan for clipping-mask needs — keep standalone masks in-line
         # Root-level adjustment/filter layers ARE included here; they act as
         # canvas-wide effects applied to everything composited below them
@@ -241,6 +255,14 @@ class Compositor:
                     blend_pos = (layer.position[0] - pad,
                                  layer.position[1] - pad)
 
+            # Check whether any regular child clips the parent
+            _has_clip_child = False
+            if layer.id in regular_children:
+                for _rc in regular_children[layer.id]:
+                    if _rc.clips_parent:
+                        _has_clip_child = True
+                        break
+
             if layer.clipping_mask and prev_img is not None:
                 placed = self._place_pixels(pixels, blend_pos, width, height)
                 placed[..., 3:4] *= prev_img[..., 3:4]
@@ -253,6 +275,65 @@ class Compositor:
                     layer.blend_mode, layer.opacity, placed_mask,
                 )
                 prev_img = placed
+
+            elif _has_clip_child:
+                # Delayed blend: clips_parent children restrict the
+                # parent's visible area before it is composited.
+                parent_placed = self._place_pixels(
+                    pixels, blend_pos, width, height)
+                for child in regular_children[layer.id]:
+                    if not child.clips_parent:
+                        continue
+                    c_pix = child.pixels
+                    if child.styles:
+                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                    c_pix = self._apply_channels(c_pix, child)
+                    c_pos = child.position
+                    if child.id in adj_children:
+                        c_pix, c_pad = self._apply_filters_padded(
+                            c_pix, adj_children[child.id])
+                        if c_pad > 0:
+                            c_pos = (child.position[0] - c_pad,
+                                     child.position[1] - c_pad)
+                    c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                    parent_placed[..., 3:4] *= c_placed[..., 3:4]
+                # Blend the clipped parent onto the canvas
+                placed_mask = (
+                    self._place_mask_combined(layer, stack, width, height)
+                    if mask is not None else None
+                )
+                self._blending.blend_region_inplace(
+                    canvas, parent_placed, (0, 0),
+                    layer.blend_mode, layer.opacity, placed_mask,
+                )
+                # Composite remaining non-clip children (clipped to parent)
+                for child in regular_children[layer.id]:
+                    if child.clips_parent:
+                        continue
+                    c_mask = self._get_effective_mask(child, stack)
+                    c_pix = child.pixels
+                    if child.styles:
+                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                    c_pix = self._apply_channels(c_pix, child)
+                    c_pos = child.position
+                    if child.id in adj_children:
+                        c_pix, c_pad = self._apply_filters_padded(
+                            c_pix, adj_children[child.id])
+                        if c_pad > 0:
+                            c_pos = (child.position[0] - c_pad,
+                                     child.position[1] - c_pad)
+                    c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                    c_placed[..., 3:4] *= parent_placed[..., 3:4]
+                    c_placed_mask = (
+                        self._place_mask_combined(child, stack, width, height)
+                        if c_mask is not None else None
+                    )
+                    self._blending.blend_region_inplace(
+                        canvas, c_placed, (0, 0),
+                        child.blend_mode, child.opacity, c_placed_mask,
+                    )
+                prev_img = parent_placed
+
             else:
                 self._blending.blend_region_inplace(
                     canvas, pixels, blend_pos,
@@ -262,6 +343,38 @@ class Compositor:
                     prev_img = self._place_pixels(pixels, blend_pos, width, height)
                 else:
                     prev_img = None
+
+                # --- Regular children of non-group parents ---
+                # Each child is composited clipped to the parent's alpha.
+                if layer.id in regular_children:
+                    parent_placed = prev_img
+                    if parent_placed is None:
+                        parent_placed = self._place_pixels(
+                            pixels, blend_pos, width, height)
+                    for child in regular_children[layer.id]:
+                        c_mask = self._get_effective_mask(child, stack)
+                        c_pix = child.pixels
+                        if child.styles:
+                            c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                        c_pix = self._apply_channels(c_pix, child)
+                        c_pos = child.position
+                        if child.id in adj_children:
+                            c_pix, c_pad = self._apply_filters_padded(
+                                c_pix, adj_children[child.id])
+                            if c_pad > 0:
+                                c_pos = (child.position[0] - c_pad,
+                                         child.position[1] - c_pad)
+                        c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                        c_placed[..., 3:4] *= parent_placed[..., 3:4]
+                        c_placed_mask = (
+                            self._place_mask_combined(child, stack, width, height)
+                            if c_mask is not None else None
+                        )
+                        self._blending.blend_region_inplace(
+                            canvas, c_placed, (0, 0),
+                            child.blend_mode, child.opacity, c_placed_mask,
+                        )
+                    prev_img = parent_placed
 
         return canvas
 
@@ -289,6 +402,19 @@ class Compositor:
                 adj_children.setdefault(layer.parent_id, []).append(layer)
                 adj_child_ids.add(layer.id)
 
+        # Build regular (non-mask, non-adj) children map for group members.
+        # These are clips_parent / normal children of layers within this group.
+        regular_children: dict[str, list[Layer]] = {}
+        for layer in stack:
+            if (layer.parent_id and layer.visible
+                    and layer.parent_id in group_child_ids
+                    and layer.parent_id != group.id
+                    and layer.layer_type not in (
+                        LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK)
+                    and layer.id not in mask_ids
+                    and layer.id not in adj_child_ids):
+                regular_children.setdefault(layer.parent_id, []).append(layer)
+
         for layer in stack:
             if layer.parent_id != group.id or not layer.visible:
                 continue
@@ -314,10 +440,103 @@ class Compositor:
                 if pad > 0:
                     blend_pos = (layer.position[0] - pad,
                                  layer.position[1] - pad)
-            self._blending.blend_region_inplace(
-                canvas, pixels, blend_pos,
-                layer.blend_mode, layer.opacity, mask,
-            )
+
+            # Check whether any regular child clips the parent
+            _has_clip_child = False
+            if layer.id in regular_children:
+                for _rc in regular_children[layer.id]:
+                    if _rc.clips_parent:
+                        _has_clip_child = True
+                        break
+
+            if _has_clip_child:
+                # Delayed blend: clips_parent children restrict the
+                # parent's visible area before it is composited.
+                parent_placed = self._place_pixels(
+                    pixels, blend_pos, w, h)
+                for child in regular_children[layer.id]:
+                    if not child.clips_parent:
+                        continue
+                    c_pix = child.pixels
+                    if child.styles:
+                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                    c_pix = self._apply_channels(c_pix, child)
+                    c_pos = child.position
+                    if child.id in adj_children:
+                        c_pix, c_pad = self._apply_filters_padded(
+                            c_pix, adj_children[child.id])
+                        if c_pad > 0:
+                            c_pos = (child.position[0] - c_pad,
+                                     child.position[1] - c_pad)
+                    c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                    parent_placed[..., 3:4] *= c_placed[..., 3:4]
+                # Blend the clipped parent onto the group canvas
+                placed_mask = (
+                    self._place_mask_combined(layer, stack, w, h)
+                    if mask is not None else None
+                )
+                self._blending.blend_region_inplace(
+                    canvas, parent_placed, (0, 0),
+                    layer.blend_mode, layer.opacity, placed_mask,
+                )
+                # Composite remaining non-clip children (clipped to parent)
+                for child in regular_children[layer.id]:
+                    if child.clips_parent:
+                        continue
+                    c_mask = self._get_effective_mask(child, stack)
+                    c_pix = child.pixels
+                    if child.styles:
+                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                    c_pix = self._apply_channels(c_pix, child)
+                    c_pos = child.position
+                    if child.id in adj_children:
+                        c_pix, c_pad = self._apply_filters_padded(
+                            c_pix, adj_children[child.id])
+                        if c_pad > 0:
+                            c_pos = (child.position[0] - c_pad,
+                                     child.position[1] - c_pad)
+                    c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                    c_placed[..., 3:4] *= parent_placed[..., 3:4]
+                    c_placed_mask = (
+                        self._place_mask_combined(child, stack, w, h)
+                        if c_mask is not None else None
+                    )
+                    self._blending.blend_region_inplace(
+                        canvas, c_placed, (0, 0),
+                        child.blend_mode, child.opacity, c_placed_mask,
+                    )
+            else:
+                self._blending.blend_region_inplace(
+                    canvas, pixels, blend_pos,
+                    layer.blend_mode, layer.opacity, mask,
+                )
+                # Regular children of non-group parents within the group
+                if layer.id in regular_children:
+                    parent_placed = self._place_pixels(
+                        pixels, blend_pos, w, h)
+                    for child in regular_children[layer.id]:
+                        c_mask = self._get_effective_mask(child, stack)
+                        c_pix = child.pixels
+                        if child.styles:
+                            c_pix = StyleEngine.apply_styles(c_pix, child.styles)
+                        c_pix = self._apply_channels(c_pix, child)
+                        c_pos = child.position
+                        if child.id in adj_children:
+                            c_pix, c_pad = self._apply_filters_padded(
+                                c_pix, adj_children[child.id])
+                            if c_pad > 0:
+                                c_pos = (child.position[0] - c_pad,
+                                         child.position[1] - c_pad)
+                        c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                        c_placed[..., 3:4] *= parent_placed[..., 3:4]
+                        c_placed_mask = (
+                            self._place_mask_combined(child, stack, w, h)
+                            if c_mask is not None else None
+                        )
+                        self._blending.blend_region_inplace(
+                            canvas, c_placed, (0, 0),
+                            child.blend_mode, child.opacity, c_placed_mask,
+                        )
         return canvas
 
     def _layer_bounds(self, layer: Layer, stack: LayerStack) -> tuple[float, float, float, float] | None:

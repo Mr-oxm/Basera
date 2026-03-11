@@ -18,6 +18,8 @@ from .base import Command
 from .layer import (
     AddGroupCommand,
     AddLayerCommand,
+    ClipToLayerCommand,
+    DropAsMaskCommand,
     DuplicateLayerCommand,
     FlattenCommand,
     MergeDownCommand,
@@ -50,6 +52,8 @@ __all__ = [
     # Layer
     "AddGroupCommand",
     "AddLayerCommand",
+    "ClipToLayerCommand",
+    "DropAsMaskCommand",
     "DuplicateLayerCommand",
     "FlattenCommand",
     "MergeDownCommand",

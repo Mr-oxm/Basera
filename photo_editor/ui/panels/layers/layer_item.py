@@ -6,7 +6,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
 
-from .base import ROW_HEIGHT, THUMB_SIZE
+from .base import ROW_HEIGHT, THUMB_SIZE, INDENT_WIDTH, MAX_INDENT_DEPTH
 from ...styles import render_qss
 from photo_editor.ui.theme import ThemeManager
 from .icons import icon_eye, icon_lock, icon_mask, ico_adjustment, ico_filter, ico_mask_layer, ico_text
@@ -19,6 +19,9 @@ class LayerItemWidget(QWidget):
     lock_clicked = Signal(str)
     collapse_clicked = Signal(str)
     rename_finished = Signal(str, str)
+
+    # Data fingerprint for memoization (skip re-render when unchanged)
+    _data_key: tuple = ()
 
     def __init__(
         self,
@@ -37,6 +40,7 @@ class LayerItemWidget(QWidget):
         is_filter: bool = False,
         is_text: bool = False,
         is_mask_layer: bool = False,
+        is_clipped: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -44,15 +48,44 @@ class LayerItemWidget(QWidget):
         self._orig_name = name
         self._edit: QLineEdit | None = None
         self._rename_done = False
+        self._is_clipped = is_clipped
         palette = ThemeManager.instance().active_palette
+
+        # Build memoization key (all the data that affects rendering)
+        self._data_key = (
+            layer_id, name, visible, locked, indent, is_group, is_collapsed,
+            has_mask, has_children, masks_collapsed, is_adjustment, is_filter,
+            is_text, is_mask_layer, is_clipped,
+        )
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(render_qss("layer_item_root.qss"))
 
         layout = QHBoxLayout(self)
-        left_margin = 4 + indent * 16
+        # Cap visual indent at MAX_INDENT_DEPTH
+        capped = min(indent, MAX_INDENT_DEPTH)
+        left_margin = 4 + capped * INDENT_WIDTH
         layout.setContentsMargins(left_margin, 2, 4, 2)
         layout.setSpacing(6)
+
+        # Depth indicator for deeply nested layers (>5 levels)
+        if indent > MAX_INDENT_DEPTH:
+            dots = "\u00B7" * min(indent - MAX_INDENT_DEPTH, 5)
+            depth_lbl = QLabel(dots)
+            depth_lbl.setStyleSheet(f"color: #666; background: transparent; font-size: 8px;")
+            depth_lbl.setFixedWidth(12)
+            layout.addWidget(depth_lbl)
+
+        # Clipping indicator prefix
+        if is_clipped:
+            clip_lbl = QLabel("\u2310")  # ⌐ clip indicator
+            clip_lbl.setStyleSheet(
+                f"color: {palette.get('accent', '#9b59b6')};"
+                "background: transparent; font-size: 14px; font-weight: bold;"
+            )
+            clip_lbl.setFixedWidth(14)
+            clip_lbl.setToolTip("Clipped to layer below")
+            layout.addWidget(clip_lbl)
 
         if is_group:
             arrow_text = "\u25B6" if is_collapsed else "\u25BC"

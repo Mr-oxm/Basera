@@ -218,6 +218,11 @@ class LayerStack:
             # clear ex_parent_id so it acts as a true standalone mask.
             if layer.layer_type == LayerType.MASK and new_parent_id is None:
                 layer.ex_parent_id = None
+            # Clear clipping_mask / clips_parent when unparenting — these
+            # only apply while the layer is scoped to a parent.
+            if new_parent_id is None:
+                layer.clipping_mask = False
+                layer.clips_parent = False
             # Set new parent
             layer.parent_id = new_parent_id
             if new_parent and lid not in new_parent.children:
@@ -254,11 +259,27 @@ class LayerStack:
                     self.update_group_bbox(old_parent)
 
     def create_group_from(self, layer_ids: list[str], group_name: str = "Group") -> "Layer | None":
-        """Create a new group layer containing *layer_ids*."""
+        """Create a new group layer containing *layer_ids*.
+
+        Non-selected children (clips_parent, mask_layers) of selected
+        layers are automatically brought along so hierarchies are preserved.
+        """
         from .enums import LayerType
 
+        # Include non-selected children that belong to selected parents
+        all_ids = list(layer_ids)
+        selected_set = set(all_ids)
+        for lid in list(layer_ids):
+            layer = self.get(lid)
+            if layer is None:
+                continue
+            for child_id in list(layer.children) + list(layer.mask_layers):
+                if child_id not in selected_set:
+                    all_ids.append(child_id)
+                    selected_set.add(child_id)
+
         indices = []
-        for lid in layer_ids:
+        for lid in all_ids:
             for i, layer in enumerate(self._layers):
                 if layer.id == lid:
                     indices.append(i)
@@ -277,10 +298,16 @@ class LayerStack:
         )
         self._layers.insert(top_idx + 1, group)
 
-        # Reparent the selected layers into the new group
-        for lid in layer_ids:
+        # Reparent only top-level selected layers into the new group.
+        # Layers whose parent is also being grouped keep their existing
+        # parent-child relationship so clips_parent hierarchies are preserved.
+        for lid in all_ids:
             layer = self.get(lid)
             if layer is None:
+                continue
+            # Skip children whose parent is also being grouped —
+            # they stay attached to their existing parent.
+            if layer.parent_id and layer.parent_id in selected_set:
                 continue
             # Remove from any previous parent
             if layer.parent_id:

@@ -395,6 +395,61 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._orig_pixels = None
             return  # skip single-layer setup below
 
+        # -- Non-group parent with children (pseudo-group) -----------------
+        # Treat the parent + its regular children as a group so move /
+        # resize / rotate propagate to every child layer.  Mask children
+        # are handled separately via _mask_children + _sync_mask_transforms
+        # so they stay pixel-aligned with the parent.
+        if layer.children:
+            mask_child_ids = set(layer.mask_layers)
+            layer.init_non_destructive()
+            # Parent itself is the first "group child"
+            self._group_children.append(layer)
+            self._group_child_positions[layer.id] = layer.position
+            self._group_child_base_sx[layer.id] = layer.transform_scale_x
+            self._group_child_base_sy[layer.id] = layer.transform_scale_y
+            self._group_child_base_angle[layer.id] = layer.transform_angle
+            self._group_child_dims[layer.id] = (layer.width, layer.height)
+            for child in doc.layers:
+                if child.parent_id != layer.id:
+                    continue
+                # Mask children stay aligned with the parent — skip here
+                if child.id in mask_child_ids:
+                    continue
+                self._group_children.append(child)
+                self._group_child_positions[child.id] = child.position
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                child.init_non_destructive()
+                self._group_child_base_sx[child.id] = child.transform_scale_x
+                self._group_child_base_sy[child.id] = child.transform_scale_y
+                self._group_child_base_angle[child.id] = child.transform_angle
+                self._group_child_dims[child.id] = (child.width, child.height)
+            # Collect mask children so transforms stay aligned with parent
+            self._mask_children: list = []
+            self._mask_child_positions: dict[str, tuple[int, int]] = {}
+            self._mask_child_base_sx: dict[str, float] = {}
+            self._mask_child_base_sy: dict[str, float] = {}
+            self._mask_child_base_angle: dict[str, float] = {}
+            for mid in layer.mask_layers:
+                mc = doc.layers.get(mid)
+                if mc is not None:
+                    mc.init_non_destructive()
+                    self._mask_children.append(mc)
+                    self._mask_child_positions[mc.id] = mc.position
+                    self._mask_child_base_sx[mc.id] = mc.transform_scale_x
+                    self._mask_child_base_sy[mc.id] = mc.transform_scale_y
+                    self._mask_child_base_angle[mc.id] = mc.transform_angle
+            # Bbox = parent's own bounds (clipped children's overflow is
+            # invisible and must NOT inflate the transform reference frame).
+            lx, ly = layer.position
+            bbox = (lx, ly, layer.width, layer.height)
+            self._group_orig_bbox = bbox
+            self._orig_width = layer.width if layer.width > 0 else 1
+            self._orig_height = layer.height if layer.height > 0 else 1
+            self._orig_pixels = None
+            return  # skip single-layer setup below
+
         # -- Single-layer non-destructive setup ----------------------------
         layer.init_non_destructive()
 
@@ -512,12 +567,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         is_multi = bool(getattr(self, "_multi_layers", []))
 
         if self._mode == _Mode.MOVE:
-            ox, oy = self._orig_position
-            layer.position = (ox + dx, oy + dy)
-            # Move all group children together
-            for child in self._group_children:
-                cox, coy = self._group_child_positions[child.id]
-                child.position = (cox + dx, coy + dy)
+            if self._group_children:
+                # Pseudo-group or real group: move every member via the
+                # stored original positions (the active layer is already
+                # included in _group_children for pseudo-groups).
+                for child in self._group_children:
+                    cox, coy = self._group_child_positions[child.id]
+                    child.position = (cox + dx, coy + dy)
+            else:
+                ox, oy = self._orig_position
+                layer.position = (ox + dx, oy + dy)
             # Move mask children with the parent
             for mc in getattr(self, "_mask_children", []):
                 mcox, mcoy = self._mask_child_positions[mc.id]
@@ -531,8 +590,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         elif self._mode == _Mode.RESIZE:
             if is_multi:
                 self._apply_multi_resize(dx, dy)
-            elif is_group:
+            elif is_group or self._group_children:
                 self._apply_group_resize(dx, dy)
+                self._sync_mask_transforms(layer)
             else:
                 self._apply_resize(layer, dx, dy)
                 self._sync_mask_transforms(layer)
@@ -540,8 +600,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         elif self._mode == _Mode.ROTATE:
             if is_multi:
                 self._apply_multi_rotate(x, y)
-            elif is_group:
+            elif is_group or self._group_children:
                 self._apply_group_rotate(x, y)
+                self._sync_mask_transforms(layer)
             else:
                 self._apply_rotate(layer, x, y)
                 self._sync_mask_transforms(layer)
@@ -582,14 +643,17 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             return
 
         if self._mode in (_Mode.ROTATE, _Mode.RESIZE) and self._active_layer is not None:
-            if self._active_layer.layer_type == LayerType.RASTER:
-                self._active_layer.compute_display(fast=False)
-                for mc in getattr(self, "_mask_children", []):
-                    mc.compute_display(fast=False)
-            elif self._active_layer.layer_type == LayerType.GROUP:
+            if self._active_layer.layer_type == LayerType.GROUP or self._group_children:
                 for child in self._group_children:
                     if child.layer_type == LayerType.RASTER:
                         child.compute_display(fast=False)
+                # Finalise mask children aligned to the parent
+                for mc in getattr(self, "_mask_children", []):
+                    mc.compute_display(fast=False)
+            elif self._active_layer.layer_type == LayerType.RASTER:
+                self._active_layer.compute_display(fast=False)
+                for mc in getattr(self, "_mask_children", []):
+                    mc.compute_display(fast=False)
             # Multi-layer final quality pass
             for sl in getattr(self, "_multi_layers", []):
                 if sl.layer_type == LayerType.RASTER and sl._source_pixels is not None:
@@ -599,13 +663,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         if self._active_layer is not None and self._mode != _Mode.NONE:
             if getattr(self, "_multi_layers", []):
                 self._commit_multi_vector_transforms(doc)
+            elif self._active_layer.layer_type == LayerType.GROUP:
+                self._commit_group_vector_transforms(doc)
+                doc.layers.update_group_bbox(self._active_layer)
+            elif self._group_children:
+                # Pseudo-group: commit vector transforms for SHAPE children
+                self._commit_group_vector_transforms(doc)
             elif self._active_layer.layer_type == LayerType.SHAPE:
                 vl = getattr(self._active_layer, "_vector_data", None)
                 if vl:
                     self._commit_vector_transform(doc, self._active_layer, vl)
-            elif self._active_layer.layer_type == LayerType.GROUP:
-                self._commit_group_vector_transforms(doc)
-                doc.layers.update_group_bbox(self._active_layer)
 
         self._dragging = False
         self._orig_pixels = None

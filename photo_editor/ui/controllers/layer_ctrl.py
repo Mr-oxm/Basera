@@ -13,7 +13,9 @@ from ...commands import (
     ApplyMaskLayerCommand,
     AttachAdjustmentToLayerCommand,
     AttachMaskToLayerCommand,
+    ClipToLayerCommand,
     ConvertToMaskCommand,
+    DropAsMaskCommand,
     DuplicateLayerCommand,
     FlattenCommand,
     InvertMaskLayerCommand,
@@ -94,9 +96,12 @@ class LayerController(ControllerBase):
         lp.lock_toggled.connect(self.on_toggle_lock)
         lp.layers_reordered.connect(self.on_layers_reordered)
         lp.layers_reparented.connect(self.on_layers_reparented)
+        lp.layers_reordered_into_group.connect(self.on_layers_reordered_into_group)
         lp.layers_unparented.connect(self.on_layers_unparented)
         lp.mask_dropped_on_layer.connect(self.on_mask_dropped_on_layer)
         lp.adj_filter_dropped_on_layer.connect(self.on_adj_filter_dropped_on_layer)
+        lp.clip_to_layer.connect(self.on_clip_to_layer)
+        lp.layer_dropped_as_mask.connect(self.on_layer_dropped_as_mask)
         lp.rename_requested.connect(self.on_rename_layer)
         lp.adjustment_layer_requested.connect(self.on_adjustment_layer_requested)
         lp.edit_adjustment_requested.connect(self.on_edit_adjustment_requested)
@@ -378,10 +383,39 @@ class LayerController(ControllerBase):
             return
         self.ctx.execute_command(MoveLayerCommand(layer_ids, target_parent_id=group_id))
 
-    def on_layers_unparented(self, layer_ids: list[str]) -> None:
+    def on_layers_reordered_into_group(
+        self, layer_ids: list[str], group_id: str, target_visual_row: int,
+    ) -> None:
+        """Reparent layers into a group AND reorder to a specific position."""
         if self.doc is None:
             return
-        self.ctx.execute_command(MoveLayerCommand(layer_ids, target_parent_id=None))
+        display_ids = self.ctx.layer_row_ids()
+        new_stack_order = reordered_stack_order(
+            display_ids, layer_ids, target_visual_row,
+        )
+        doc = self.doc
+        doc.layers.reparent(layer_ids, group_id)
+        doc.layers.reorder_by_ids(new_stack_order)
+        doc.save_snapshot("Move into Group")
+        doc.mark_dirty()
+        self.ctx.refresh()
+
+    def on_layers_unparented(self, layer_ids: list[str], target_visual_row: int) -> None:
+        if self.doc is None:
+            return
+        # Get current display order BEFORE mutating the stack
+        display_ids = self.ctx.layer_row_ids()
+        # Compute the desired stack order first, then unparent + reorder
+        # atomically in a single snapshot.
+        new_stack_order = reordered_stack_order(
+            display_ids, layer_ids, target_visual_row,
+        )
+        doc = self.doc
+        doc.layers.reparent(layer_ids, None)
+        doc.layers.reorder_by_ids(new_stack_order)
+        doc.save_snapshot("Unparent Layer")
+        doc.mark_dirty()
+        self.ctx.refresh()
 
     def on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
         if self.doc is None:
@@ -392,6 +426,16 @@ class LayerController(ControllerBase):
         if self.doc is None:
             return
         self.ctx.execute_command(AttachAdjustmentToLayerCommand(adj_id, target_id))
+
+    def on_clip_to_layer(self, layer_id: str, target_id: str) -> None:
+        if self.doc is None:
+            return
+        self.ctx.execute_command(ClipToLayerCommand(layer_id, target_id))
+
+    def on_layer_dropped_as_mask(self, layer_id: str, target_id: str) -> None:
+        if self.doc is None:
+            return
+        self.ctx.execute_command(DropAsMaskCommand(layer_id, target_id))
 
     def on_flatten(self) -> None:
         if self.doc:
