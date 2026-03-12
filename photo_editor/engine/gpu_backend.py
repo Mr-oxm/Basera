@@ -94,7 +94,7 @@ class _RunCacheNode(_TopLevelCacheNode):
 
 
 @dataclass
-class _PrefixCacheNode(_TopLevelVisibleNode):
+class _PrefixCacheNode(_TopLevelCacheNode):
     cache_key: str = ""
     layer: Layer | None = None
     cache_dependencies: tuple[str, ...] = ()
@@ -433,14 +433,26 @@ class QtGpuCompositorBackend:
         graph: list[_TopLevelGraphNode],
         cache_key: str,
     ) -> _TopLevelCacheNode | _TopLevelVisibleNode | None:
+        def matches_cache_key(segment: _TopLevelGraphNode) -> bool:
+            segment_cache_key = self._cache_key_for_graph_node(segment)
+            return segment_cache_key == cache_key
+
         return next(
-            (
-                segment
-                for segment in graph
-                if getattr(segment, "cache_key", None) == cache_key
-            ),
+            (segment for segment in graph if matches_cache_key(segment)),
             None,
         )
+
+    @staticmethod
+    def _cache_key_for_graph_node(segment: _TopLevelGraphNode) -> str | None:
+        if isinstance(segment, (_TopLevelCacheNode, _PrefixNode, _SegmentNode, _ChainNode)):
+            return segment.cache_key
+        return None
+
+    @staticmethod
+    def _cache_dependencies_for_graph_node(segment: _TopLevelGraphNode) -> tuple[str, ...]:
+        if isinstance(segment, (_PrefixNode, _PrefixCacheNode)):
+            return segment.cache_dependencies
+        return ()
 
     def _cache_descendants(
         self,
@@ -449,10 +461,10 @@ class QtGpuCompositorBackend:
     ) -> list[str]:
         reverse_edges: dict[str, set[str]] = {}
         for segment in graph:
-            segment_cache_key = getattr(segment, "cache_key", None)
+            segment_cache_key = self._cache_key_for_graph_node(segment)
             if segment_cache_key is None:
                 continue
-            for dependency_key in getattr(segment, "cache_dependencies", ()):
+            for dependency_key in self._cache_dependencies_for_graph_node(segment):
                 reverse_edges.setdefault(dependency_key, set()).add(segment_cache_key)
 
         visited = {cache_key}
@@ -465,9 +477,9 @@ class QtGpuCompositorBackend:
                 visited.add(dependent_key)
                 queue.append(dependent_key)
         return [
-            getattr(segment, "cache_key")
+            segment_cache_key
             for segment in graph
-            if getattr(segment, "cache_key", None) is not None and getattr(segment, "cache_key") in visited
+            if (segment_cache_key := self._cache_key_for_graph_node(segment)) is not None and segment_cache_key in visited
         ]
 
     def _primary_cache_key_for_index(
@@ -476,7 +488,7 @@ class QtGpuCompositorBackend:
         top_index: int,
     ) -> str | None:
         for segment in graph:
-            segment_cache_key = getattr(segment, "cache_key", None)
+            segment_cache_key = self._cache_key_for_graph_node(segment)
             if not segment.contains(top_index) or segment_cache_key is None:
                 continue
             if isinstance(segment, (_RunCacheNode, _SegmentNode, _ChainNode)):
@@ -532,57 +544,89 @@ class QtGpuCompositorBackend:
             segment = graph[graph_index]
             if not isinstance(segment, _TopLevelVisibleNode):
                 return None
-            if isinstance(segment, _PrefixNode):
-                if segment.cache_key is None:
-                    return None
-                plan.append(
-                    _PrefixRenderStep(
-                        graph_index=graph_index,
-                    )
-                )
-                continue
-            if isinstance(segment, _SegmentNode):
-                if segment.cache_key is None:
-                    return None
-                for layer in segment.layers:
-                    if layer.clipping_mask:
-                        return None
-                    if not self._supports_layer(document, layer, allow_clipping_mask=False):
-                        return None
-                plan.append(
-                    _SegmentRenderStep(
-                        segment_layers=segment.layers,
-                        cache_key=segment.cache_key,
-                        graph_index=graph_index,
-                    )
-                )
-                continue
-            if isinstance(segment, _MaskNode):
-                if segment.layer is None:
-                    return None
-                if not self._supports_layer(document, segment.layer, allow_clipping_mask=False):
-                    return None
-                plan.append(_MaskRenderStep(layer=segment.layer, graph_index=graph_index))
-                continue
-            if isinstance(segment, _ChainNode):
-                if segment.layer is None or not segment.layers:
-                    return None
-                base_layer = segment.layers[0]
-                if base_layer.clipping_mask:
-                    return None
-                if not self._supports_layer(document, base_layer, allow_clipping_mask=False):
-                    return None
-                for clipped_layer in segment.layers[1:]:
-                    if not clipped_layer.clipping_mask:
-                        return None
-                    if not self._supports_layer(document, clipped_layer, allow_clipping_mask=True):
-                        return None
-                plan.append(_ChainRenderStep(layer=segment.layer, chain=segment.layers, graph_index=graph_index))
-                continue
+            render_step = self._render_step_for_visible_segment(document, graph_index, segment)
             if isinstance(segment, _PrefixCacheNode):
                 continue
-            return None
+            if render_step is None:
+                return None
+            plan.append(render_step)
         return plan
+
+    def _render_step_for_visible_segment(
+        self,
+        document: Document,
+        graph_index: int,
+        segment: _TopLevelVisibleNode,
+    ) -> _RenderStep | None:
+        if isinstance(segment, _PrefixNode):
+            return self._render_step_for_prefix_node(graph_index, segment)
+        if isinstance(segment, _SegmentNode):
+            return self._render_step_for_segment_node(document, graph_index, segment)
+        if isinstance(segment, _MaskNode):
+            return self._render_step_for_mask_node(document, graph_index, segment)
+        if isinstance(segment, _ChainNode):
+            return self._render_step_for_chain_node(document, graph_index, segment)
+        return None
+
+    @staticmethod
+    def _render_step_for_prefix_node(
+        graph_index: int,
+        segment: _PrefixNode,
+    ) -> _PrefixRenderStep | None:
+        if not segment.cache_key:
+            return None
+        return _PrefixRenderStep(graph_index=graph_index)
+
+    def _render_step_for_segment_node(
+        self,
+        document: Document,
+        graph_index: int,
+        segment: _SegmentNode,
+    ) -> _SegmentRenderStep | None:
+        if not segment.cache_key:
+            return None
+        for layer in segment.layers:
+            if layer.clipping_mask:
+                return None
+            if not self._supports_layer(document, layer, allow_clipping_mask=False):
+                return None
+        return _SegmentRenderStep(
+            segment_layers=segment.layers,
+            cache_key=segment.cache_key,
+            graph_index=graph_index,
+        )
+
+    def _render_step_for_mask_node(
+        self,
+        document: Document,
+        graph_index: int,
+        segment: _MaskNode,
+    ) -> _MaskRenderStep | None:
+        if segment.layer is None:
+            return None
+        if not self._supports_layer(document, segment.layer, allow_clipping_mask=False):
+            return None
+        return _MaskRenderStep(layer=segment.layer, graph_index=graph_index)
+
+    def _render_step_for_chain_node(
+        self,
+        document: Document,
+        graph_index: int,
+        segment: _ChainNode,
+    ) -> _ChainRenderStep | None:
+        if segment.layer is None or not segment.layers:
+            return None
+        base_layer = segment.layers[0]
+        if base_layer.clipping_mask:
+            return None
+        if not self._supports_layer(document, base_layer, allow_clipping_mask=False):
+            return None
+        for clipped_layer in segment.layers[1:]:
+            if not clipped_layer.clipping_mask:
+                return None
+            if not self._supports_layer(document, clipped_layer, allow_clipping_mask=True):
+                return None
+        return _ChainRenderStep(layer=segment.layer, chain=segment.layers, graph_index=graph_index)
 
     def _invalidation_keys_for_document(self, document: Document, layer_id: str) -> list[str] | None:
         layer = document.layers.get(layer_id)
@@ -631,55 +675,92 @@ class QtGpuCompositorBackend:
         graph: list[_TopLevelGraphNode],
     ) -> bool:
         if isinstance(step, _PrefixRenderStep):
-            if step.graph_index < 0:
-                return False
-            entry = self._pixmap_for_prefix(document, graph, graph[step.graph_index])
-            if entry is None:
-                return False
-            self._draw_pixmap(
-                painter,
-                document,
-                target_rect,
-                entry,
-                opacity=1.0,
-                composition_mode=QPainter.CompositionMode.CompositionMode_SourceOver,
-            )
-            return True
+            return self._execute_prefix_render_step(painter, document, target_rect, step, graph)
         if isinstance(step, _MaskRenderStep):
-            if step.layer is None:
-                return False
-            return self._apply_mask_step(painter, document, target_rect, step.layer)
+            return self._execute_mask_render_step(painter, document, target_rect, step)
         if isinstance(step, _ChainRenderStep):
-            if step.layer is None or not step.chain:
-                return False
-            entry = self._pixmap_for_chain(document, list(step.chain)) if len(step.chain) > 1 else self._pixmap_for_layer(document, step.layer)
-            if entry is None:
-                return False
-            self._draw_pixmap(
-                painter,
-                document,
-                target_rect,
-                entry,
-                opacity=float(step.layer.opacity),
-                composition_mode=self._SUPPORTED_BLENDS[step.layer.blend_mode],
-            )
-            return True
+            return self._execute_chain_render_step(painter, document, target_rect, step)
         if isinstance(step, _SegmentRenderStep):
-            if not step.segment_layers:
-                return False
-            entry = self._pixmap_for_segment(document, list(step.segment_layers), step.cache_key)
-            if entry is None:
-                return False
-            self._draw_pixmap(
-                painter,
-                document,
-                target_rect,
-                entry,
-                opacity=1.0,
-                composition_mode=QPainter.CompositionMode.CompositionMode_SourceOver,
-            )
-            return True
+            return self._execute_segment_render_step(painter, document, target_rect, step)
         return False
+
+    def _execute_prefix_render_step(
+        self,
+        painter: QPainter,
+        document: Document,
+        target_rect: QRectF,
+        step: _PrefixRenderStep,
+        graph: list[_TopLevelGraphNode],
+    ) -> bool:
+        if step.graph_index < 0:
+            return False
+        entry = self._pixmap_for_prefix(document, graph, graph[step.graph_index])
+        if entry is None:
+            return False
+        self._draw_pixmap(
+            painter,
+            document,
+            target_rect,
+            entry,
+            opacity=1.0,
+            composition_mode=QPainter.CompositionMode.CompositionMode_SourceOver,
+        )
+        return True
+
+    def _execute_mask_render_step(
+        self,
+        painter: QPainter,
+        document: Document,
+        target_rect: QRectF,
+        step: _MaskRenderStep,
+    ) -> bool:
+        if step.layer is None:
+            return False
+        return self._apply_mask_step(painter, document, target_rect, step.layer)
+
+    def _execute_chain_render_step(
+        self,
+        painter: QPainter,
+        document: Document,
+        target_rect: QRectF,
+        step: _ChainRenderStep,
+    ) -> bool:
+        if step.layer is None or not step.chain:
+            return False
+        entry = self._pixmap_for_chain(document, list(step.chain)) if len(step.chain) > 1 else self._pixmap_for_layer(document, step.layer)
+        if entry is None:
+            return False
+        self._draw_pixmap(
+            painter,
+            document,
+            target_rect,
+            entry,
+            opacity=float(step.layer.opacity),
+            composition_mode=self._SUPPORTED_BLENDS[step.layer.blend_mode],
+        )
+        return True
+
+    def _execute_segment_render_step(
+        self,
+        painter: QPainter,
+        document: Document,
+        target_rect: QRectF,
+        step: _SegmentRenderStep,
+    ) -> bool:
+        if not step.segment_layers:
+            return False
+        entry = self._pixmap_for_segment(document, list(step.segment_layers), step.cache_key)
+        if entry is None:
+            return False
+        self._draw_pixmap(
+            painter,
+            document,
+            target_rect,
+            entry,
+            opacity=1.0,
+            composition_mode=QPainter.CompositionMode.CompositionMode_SourceOver,
+        )
+        return True
 
     def _draw_pixmap(
         self,

@@ -1281,6 +1281,57 @@ Effect:
 - Cache-only nodes now mirror the same precision principle already applied to visible nodes and render steps.
 - This keeps the graph model narrower and makes future cache-node additions easier to reason about without inheriting unnecessary shared fields.
 
+### 66. Graph cache traversal now uses typed helpers instead of dynamic payload access
+
+Files:
+- `photo_editor/engine/gpu_backend.py`
+
+Problem:
+- The graph had already moved to explicit node subclasses, but cache traversal still probed nodes dynamically for `cache_key` and `cache_dependencies`.
+- That left part of invalidation and cache lookup structurally looser than the rest of the GPU backend.
+
+Fix:
+- Added typed helper functions that expose cache keys only for node classes that actually own them.
+- Added a matching helper for cache dependencies and routed cache lookup, descendant traversal, and primary-key resolution through those helpers.
+
+Effect:
+- Graph cache traversal now matches the explicit node-role architecture instead of depending on optional-field probing.
+- Future node-shape cleanup can stay local because graph consumers no longer assume cache payload exists on arbitrary nodes.
+
+### 67. Render-plan construction and step execution now route through typed helper methods
+
+Files:
+- `photo_editor/engine/gpu_backend.py`
+
+Problem:
+- The graph model and render-step model were explicit, but render-plan construction and render-step execution still embedded large subtype-switch blocks inline.
+- That left planning and execution readable only by scanning long mixed-instance chains instead of following a clear typed flow.
+
+Fix:
+- Extracted visible-node to render-step conversion into typed helper methods per node role.
+- Extracted render-step execution into typed helper methods per step role while preserving the existing step classes and behavior.
+
+Effect:
+- The GPU backend now reads more cleanly as graph scheduling, typed plan construction, and typed step execution.
+- Future node or step role changes can stay localized without growing two large central branching blocks.
+
+### 68. Prefix cache nodes now follow the cache-only graph role explicitly
+
+Files:
+- `photo_editor/engine/gpu_backend.py`
+
+Problem:
+- `PrefixCacheNode` was already treated as cache-only by scheduling, but its class still inherited from the visible-node base.
+- That made the node-role model slightly misleading because one cache-only prefix node still appeared under the visible branch of the graph type hierarchy.
+
+Fix:
+- Moved `PrefixCacheNode` onto the cache-node base while keeping its prefix-specific payload and behavior unchanged.
+- Simplified cache-key helper logic so cache-only prefix nodes are covered through the cache-node role instead of a separate special case.
+
+Effect:
+- The graph type hierarchy now matches runtime behavior more closely: renderable prefix nodes are visible, cached prefix nodes are cache-only.
+- This reduces another small role mismatch in the staged GPU backend model.
+
 ### 38. Uint8 conversion is now hardened against NaN and infinity payloads
 
 Files:
