@@ -292,6 +292,29 @@ class TestSingleLayerScaling:
         assert bb[2] > 100
         assert bb[3] > 100
 
+    def test_bb019b_resize_preview_skips_fast_cpu_recompute(self, monkeypatch):
+        """GPU preview path updates geometry during drag without fast CPU recompute."""
+        doc, layer, tool = self._setup()
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        original_compute_display = layer.compute_display
+
+        def _guarded_compute_display(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("fast CPU recompute should be skipped during preview drag")
+            return original_compute_display(*args, **kwargs)
+
+        monkeypatch.setattr(layer, "compute_display", _guarded_compute_display)
+
+        tool.on_press(doc, 200, 200)
+        assert tool.using_live_transform_preview is True
+        tool.on_move(doc, 250, 260)
+        assert layer.transform_scale_x > 1.0
+        assert layer.width > 100
+
+        monkeypatch.setattr(layer, "compute_display", original_compute_display)
+        tool.on_release(doc, 250, 260)
+
 
 # ======================================================================
 # Section 3: Single Layer Rotation — BB-020 .. BB-030
@@ -408,6 +431,31 @@ class TestSingleLayerRotation:
         tool.on_move(doc, int(cx) + 50, int(cy) + 50)
         tool.on_release(doc, int(cx) + 50, int(cy) + 50)
         assert layer.transform_angle == angle
+
+    def test_bb027b_rotate_preview_skips_fast_cpu_recompute(self, monkeypatch):
+        """GPU preview path updates rotation geometry during drag without fast CPU recompute."""
+        doc, layer, tool = self._setup_for_rotation()
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        original_compute_display = layer.compute_display
+
+        def _guarded_compute_display(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("fast CPU recompute should be skipped during preview drag")
+            return original_compute_display(*args, **kwargs)
+
+        monkeypatch.setattr(layer, "compute_display", _guarded_compute_display)
+
+        rh_y = 200 - ROTATE_HANDLE_OFFSET
+        tool.on_press(doc, 250, rh_y)
+        assert tool.using_live_transform_preview is True
+        tool.on_move(doc, 320, 250)
+        assert layer.transform_angle != 0.0
+        assert layer.width > 0
+        assert layer.height > 0
+
+        monkeypatch.setattr(layer, "compute_display", original_compute_display)
+        tool.on_release(doc, 320, 250)
 
     def test_bb028_rotation_info_for_no_rotation(self):
         """BB-028: rotation_info_for returns None for unrotated layer."""

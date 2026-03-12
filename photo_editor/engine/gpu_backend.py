@@ -132,6 +132,19 @@ class _ChainNode(_TopLevelVisibleNode):
         return self.layers[0] if self.layers else None
 
 
+@dataclass(frozen=True)
+class _TransformPreviewSession:
+    layer_id: str
+    excluded_layer_ids: tuple[str, ...]
+    source_cache_key: str
+    center: tuple[float, float]
+    scale_x: float
+    scale_y: float
+    angle: float
+    opacity: float
+    blend_mode: BlendMode
+
+
 @dataclass
 class _TopLevelGraphBuilder:
     graph: list[_TopLevelGraphNode]
@@ -272,6 +285,7 @@ class QtGpuCompositorBackend:
     def __init__(self) -> None:
         self._layer_pixmaps: dict[str, _LayerPixmapEntry] = {}
         self._compositor = Compositor(quality_mode="final")
+        self._transform_preview: _TransformPreviewSession | None = None
 
     def invalidate_all(self) -> None:
         self._layer_pixmaps.clear()
@@ -281,6 +295,16 @@ class QtGpuCompositorBackend:
             self.invalidate_all()
             return
         self._layer_pixmaps.pop(layer_id, None)
+        preview_prefix = f"preview-source:{layer_id}:"
+        for cache_key in tuple(self._layer_pixmaps):
+            if cache_key.startswith(preview_prefix):
+                self._layer_pixmaps.pop(cache_key, None)
+
+    def set_transform_preview(self, session: _TransformPreviewSession | None) -> None:
+        self._transform_preview = session
+
+    def clear_transform_preview(self) -> None:
+        self._transform_preview = None
 
     def invalidate_document_layer(self, document: Document | None, layer_id: str | None) -> None:
         if document is None or layer_id is None:
@@ -298,8 +322,53 @@ class QtGpuCompositorBackend:
             return False
         return self._build_graph_and_render_plan(document) is not None
 
+    def can_render_document_excluding(
+        self,
+        document: Document | None,
+        excluded_layer_ids: tuple[str, ...] = (),
+    ) -> bool:
+        if document is None:
+            return False
+        return self._build_graph_and_render_plan(document, excluded_layer_ids) is not None
+
+    def can_render_transform_preview(self, document: Document | None, layer: Layer | None) -> bool:
+        if document is None or layer is None:
+            return False
+        if not self._supports_transform_preview_layer(document, layer):
+            return False
+        return self.can_render_document_excluding(document, (layer.id,))
+
+    def build_transform_preview_session(
+        self,
+        document: Document | None,
+        layer: Layer | None,
+    ) -> _TransformPreviewSession | None:
+        if document is None or layer is None:
+            return None
+        if not self.can_render_transform_preview(document, layer):
+            return None
+        source_revision = getattr(layer, "_source_revision", 0)
+        source_kind = "source" if getattr(layer, "_source_pixels", None) is not None else "display"
+        return _TransformPreviewSession(
+            layer_id=layer.id,
+            excluded_layer_ids=(layer.id,),
+            source_cache_key=f"preview-source:{layer.id}:{source_kind}:{source_revision}",
+            center=(layer.position[0] + layer.width / 2.0, layer.position[1] + layer.height / 2.0),
+            scale_x=layer.transform_scale_x if getattr(layer, "_source_pixels", None) is not None else 1.0,
+            scale_y=layer.transform_scale_y if getattr(layer, "_source_pixels", None) is not None else 1.0,
+            angle=layer.transform_angle if getattr(layer, "_source_pixels", None) is not None else 0.0,
+            opacity=float(layer.opacity),
+            blend_mode=layer.blend_mode,
+        )
+
     def render_document(self, painter: QPainter, document: Document, target_rect: QRectF) -> bool:
-        graph_and_plan = self._build_graph_and_render_plan(document)
+        preview = self._transform_preview
+        if preview is not None:
+            preview_layer = document.layers.get(preview.layer_id)
+            if not self._supports_transform_preview_layer(document, preview_layer):
+                preview = None
+        excluded_layer_ids = preview.excluded_layer_ids if preview is not None else ()
+        graph_and_plan = self._build_graph_and_render_plan(document, excluded_layer_ids)
         if graph_and_plan is None:
             return False
         graph, plan = graph_and_plan
@@ -309,13 +378,39 @@ class QtGpuCompositorBackend:
         for step in plan:
             if not self._execute_render_step(painter, document, target_rect, step, graph):
                 return False
+        if preview is not None and not self._draw_transform_preview(painter, document, target_rect, preview):
+            return False
         return True
 
-    def _top_level_visible_layers(self, document: Document) -> list[Layer]:
+    def _top_level_visible_layers(
+        self,
+        document: Document,
+        excluded_layer_ids: tuple[str, ...] = (),
+    ) -> list[Layer]:
+        excluded = set(excluded_layer_ids)
         return [
             layer for layer in document.layers
-            if layer.visible and layer.parent_id is None
+            if layer.visible and layer.parent_id is None and layer.id not in excluded
         ]
+
+    def _supports_transform_preview_layer(self, document: Document, layer: Layer | None) -> bool:
+        if layer is None:
+            return False
+        if layer.layer_type != LayerType.RASTER:
+            return False
+        if not layer.visible or layer.parent_id is not None:
+            return False
+        if layer.styles or layer.children or layer.mask_layers:
+            return False
+        if layer.mask is not None or layer.ex_parent_id is not None:
+            return False
+        if layer.clipping_mask or layer.clips_parent:
+            return False
+        if layer.blend_mode not in self._SUPPORTED_BLENDS:
+            return False
+        if not (layer.channel_r and layer.channel_g and layer.channel_b and layer.channel_a):
+            return False
+        return True
 
     @staticmethod
     def _is_root_effect(layer: Layer) -> bool:
@@ -652,8 +747,9 @@ class QtGpuCompositorBackend:
     def _build_graph_and_render_plan(
         self,
         document: Document,
+        excluded_layer_ids: tuple[str, ...] = (),
     ) -> tuple[list[_TopLevelGraphNode], list[_RenderStep]] | None:
-        top_level = self._top_level_visible_layers(document)
+        top_level = self._top_level_visible_layers(document, excluded_layer_ids)
         graph = self._build_top_level_graph(top_level)
         plan = self._render_plan_from_graph(document, graph)
         if plan is None:
@@ -665,6 +761,66 @@ class QtGpuCompositorBackend:
         if graph_and_plan is None:
             return None
         return graph_and_plan[1]
+
+    def _preview_source_pixels_u8(self, layer: Layer) -> np.ndarray:
+        source_pixels = getattr(layer, "_source_pixels", None)
+        if source_pixels is not None:
+            return source_pixels.copy()
+        return layer.copy_display_u8()
+
+    def _pixmap_for_transform_preview(
+        self,
+        document: Document,
+        session: _TransformPreviewSession,
+    ) -> _LayerPixmapEntry | None:
+        layer = document.layers.get(session.layer_id)
+        if layer is None:
+            return None
+        existing = self._layer_pixmaps.get(session.source_cache_key)
+        rgba = self._preview_source_pixels_u8(layer)
+        current_size = (int(rgba.shape[1]), int(rgba.shape[0]))
+        if existing is not None and existing.size == current_size:
+            return existing
+        if rgba.size == 0:
+            return None
+        h, w = rgba.shape[:2]
+        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(qimg.copy())
+        entry = _LayerPixmapEntry(pixmap=pixmap, size=(w, h), blend_position=(0, 0))
+        self._layer_pixmaps[session.source_cache_key] = entry
+        return entry
+
+    def _draw_transform_preview(
+        self,
+        painter: QPainter,
+        document: Document,
+        target_rect: QRectF,
+        session: _TransformPreviewSession,
+    ) -> bool:
+        entry = self._pixmap_for_transform_preview(document, session)
+        if entry is None:
+            return False
+        if document.width <= 0 or document.height <= 0:
+            return False
+        scale_x = float(target_rect.width()) / float(document.width)
+        scale_y = float(target_rect.height()) / float(document.height)
+        center_x = target_rect.left() + float(session.center[0]) * scale_x
+        center_y = target_rect.top() + float(session.center[1]) * scale_y
+
+        painter.save()
+        painter.setOpacity(float(session.opacity))
+        painter.setCompositionMode(self._SUPPORTED_BLENDS[session.blend_mode])
+        painter.translate(center_x, center_y)
+        if session.angle != 0.0:
+            painter.rotate(-float(session.angle))
+        painter.scale(float(session.scale_x) * scale_x, float(session.scale_y) * scale_y)
+        painter.drawPixmap(
+            QRectF(-entry.size[0] / 2.0, -entry.size[1] / 2.0, float(entry.size[0]), float(entry.size[1])),
+            entry.pixmap,
+            QRectF(0, 0, float(entry.size[0]), float(entry.size[1])),
+        )
+        painter.restore()
+        return True
 
     def _execute_render_step(
         self,

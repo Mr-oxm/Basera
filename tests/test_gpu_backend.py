@@ -269,6 +269,40 @@ def test_qt_gpu_backend_supports_top_level_clipping_chain_document(app) -> None:
     np.testing.assert_allclose(gpu_like, cpu, atol=1)
 
 
+def test_qt_gpu_backend_builds_transform_preview_session_for_supported_raster(app) -> None:
+    doc = Document(256, 256, "GPU Transform Preview")
+    base = doc.layers[0]
+    base.pixels[:] = 0.0
+    base.pixels[40:216, 56:200] = np.array([0.2, 0.7, 0.95, 0.85], dtype=np.float32)
+    base.init_non_destructive()
+    base.transform_scale_x = 1.35
+    base.transform_scale_y = 0.85
+    base.transform_angle = 18.0
+    base.update_transform_preview_geometry()
+
+    backend = QtGpuCompositorBackend()
+
+    assert backend.can_render_transform_preview(doc, base) is True
+    session = backend.build_transform_preview_session(doc, base)
+    assert session is not None
+    assert session.layer_id == base.id
+    assert session.excluded_layer_ids == (base.id,)
+    assert session.scale_x == pytest.approx(1.35)
+    assert session.scale_y == pytest.approx(0.85)
+    assert session.angle == pytest.approx(18.0)
+
+
+def test_qt_gpu_backend_rejects_transform_preview_for_masked_raster(app) -> None:
+    doc = Document(128, 128, "GPU Transform Preview Unsupported")
+    base = doc.layers[0]
+    base.add_mask(fill_white=False)
+
+    backend = QtGpuCompositorBackend()
+
+    assert backend.can_render_transform_preview(doc, base) is False
+    assert backend.build_transform_preview_session(doc, base) is None
+
+
 def test_qt_gpu_backend_tracks_clipping_chain_as_cache_bearing_graph_segment(app) -> None:
     doc = Document(64, 64, "GPU Clip Graph")
     base = doc.layers[0]

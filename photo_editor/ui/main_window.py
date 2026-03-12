@@ -72,6 +72,9 @@ class MainWindow(QMainWindow):
             preview_max_size=self._preview_max_size,
         )
         self._tools = ToolManager()
+        move_tool = self._tools._tools.get(ToolType.MOVE)
+        if move_tool is not None:
+            move_tool.supports_live_transform_preview = self._supports_move_tool_transform_preview
 
         # Brush manager — load ABR files from assets
         self._brush_mgr = BrushManager.instance()
@@ -396,11 +399,38 @@ class MainWindow(QMainWindow):
         return isinstance(self._canvas, QOpenGLWidget)
 
     def _uses_gpu_interactive_backend(self) -> bool:
+        preview_session = self._current_transform_preview_session()
+        if preview_session is not None:
+            return (
+                self._gpu_backend_enabled
+                and self._doc is not None
+                and self._gpu_backend.can_render_document_excluding(self._doc, preview_session.excluded_layer_ids)
+            )
         return (
             self._gpu_backend_enabled
             and self._doc is not None
             and self._gpu_backend.can_render_document(self._doc)
         )
+
+    def _supports_move_tool_transform_preview(self, document: Document, layer) -> bool:
+        return self._gpu_backend_enabled and self._gpu_backend.can_render_transform_preview(document, layer)
+
+    def _current_transform_preview_session(self):
+        if not self._gpu_backend_enabled or self._doc is None or self._tools.active_type != ToolType.MOVE:
+            return None
+        move_tool = self._tools.active_tool
+        if move_tool is None or not getattr(move_tool, "using_live_transform_preview", False):
+            return None
+        active_layer = getattr(move_tool, "_active_layer", None)
+        if active_layer is None:
+            return None
+        return self._gpu_backend.build_transform_preview_session(self._doc, active_layer)
+
+    def _sync_transform_preview_session(self) -> None:
+        if not self._gpu_backend_enabled:
+            self._gpu_backend.clear_transform_preview()
+            return
+        self._gpu_backend.set_transform_preview(self._current_transform_preview_session())
 
     def _invalidate_gpu_backend(self, layer_id: str | None) -> None:
         if not self._gpu_backend_enabled:
@@ -475,6 +505,7 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         self._canvas.set_document_ref(self._doc)
+        self._sync_transform_preview_session()
         if invalidate:
             # Immediately refresh the layers panel structure (no thumbnails)
             # so the user gets instant visual feedback while the expensive
@@ -518,6 +549,7 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         active = self._doc.layers.active_layer
+        self._sync_transform_preview_session()
         self._invalidate_gpu_backend(active.id if active else None)
         if self._uses_gpu_interactive_backend():
             self._canvas.set_document_ref(self._doc)
@@ -537,6 +569,7 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         active = self._doc.layers.active_layer
+        self._sync_transform_preview_session()
         self._invalidate_gpu_backend(active.id if active else None)
         if self._uses_gpu_interactive_backend():
             self._canvas.set_document_ref(self._doc)
@@ -557,6 +590,7 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         active = self._doc.layers.active_layer
+        self._sync_transform_preview_session()
         self._invalidate_gpu_backend(active.id if active else None)
         if self._uses_gpu_interactive_backend():
             self._canvas.set_document_ref(self._doc)

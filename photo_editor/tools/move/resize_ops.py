@@ -82,7 +82,7 @@ class ResizeMixin:
     # Single-layer resize
     # ------------------------------------------------------------------
 
-    def _apply_resize(self, layer, dx: int, dy: int) -> None:
+    def _apply_resize(self, layer, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive resize: update scale params and recompute from source."""
         if layer._source_pixels is None:
             return
@@ -123,7 +123,10 @@ class ResizeMixin:
 
         layer.transform_scale_x = new_sx
         layer.transform_scale_y = new_sy
-        layer.compute_display(fast=True)
+        if preview_only:
+            layer.update_transform_preview_geometry()
+        else:
+            layer.compute_display(fast=True)
 
         if is_rot:
             # Rotated resize: reposition so the anchor corner stays fixed

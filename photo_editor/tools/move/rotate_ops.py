@@ -52,7 +52,7 @@ class RotateMixin:
     # Single-layer rotate
     # ------------------------------------------------------------------
 
-    def _apply_rotate(self, layer, x: int, y: int) -> None:
+    def _apply_rotate(self, layer, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive rotate: update angle and recompute display from source.
 
         The layer centre is kept stationary; the position is adjusted
@@ -76,7 +76,10 @@ class RotateMixin:
         # Total angle = angle at drag start + delta this drag
         total_angle = self._base_angle + delta_deg
         layer.transform_angle = total_angle
-        layer.compute_display(fast=True)
+        if preview_only:
+            layer.update_transform_preview_geometry()
+        else:
+            layer.compute_display(fast=True)
 
         # Reposition so the visual centre stays fixed
         layer.position = (int(cx - layer.width / 2),

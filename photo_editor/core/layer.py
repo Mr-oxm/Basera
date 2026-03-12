@@ -14,6 +14,7 @@ the source.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias
 from uuid import uuid4
@@ -436,6 +437,40 @@ class Layer:
         self.height, self.width = result.shape[:2]
         self._cache_current_transform_result(cache_key, mask_result)
         self._pixels_dirty = False
+
+    def update_transform_preview_geometry(
+        self,
+        scale_x: float | None = None,
+        scale_y: float | None = None,
+        angle: float | None = None,
+    ) -> None:
+        """Update transform geometry without rebuilding display pixels.
+
+        This is used by the interactive GPU preview path so hit-testing,
+        bounding boxes, and overlays track the live transform while the
+        exact raster result is deferred to CPU commit on release.
+        """
+        if self._source_pixels is None:
+            return
+
+        sx = scale_x if scale_x is not None else self.transform_scale_x
+        sy = scale_y if scale_y is not None else self.transform_scale_y
+        ang = angle if angle is not None else self.transform_angle
+
+        base_w = max(1, int(round(self.source_width * float(sx))))
+        base_h = max(1, int(round(self.source_height * float(sy))))
+        self.transform_base_w = base_w
+        self.transform_base_h = base_h
+
+        if ang != 0.0:
+            rad = math.radians(float(ang))
+            cos_a = abs(math.cos(rad))
+            sin_a = abs(math.sin(rad))
+            self.width = max(1, int(math.ceil(base_w * cos_a + base_h * sin_a)))
+            self.height = max(1, int(math.ceil(base_w * sin_a + base_h * cos_a)))
+        else:
+            self.width = base_w
+            self.height = base_h
 
     def invalidate_transform(self) -> None:
         """Mark display pixels as needing lazy recompute from source."""

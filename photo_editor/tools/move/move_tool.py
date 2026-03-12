@@ -103,11 +103,21 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # Callback for marquee layer selection
         # Signature: (indices: list[int]) -> None
         self.on_marquee_select: callable | None = None
+        self.supports_live_transform_preview: callable | None = None
         # Deferred auto-select: when press lands on a MOVE zone we hold off
         # switching until we know it's a click (not a drag).  Stores the
         # topmost layer index found by find_layer_at, or None.
         self._pending_autoselect_idx: int | None = None
         self._move_snapshot_saved: bool = False
+        self._use_live_transform_preview: bool = False
+
+    def deactivate(self) -> None:
+        super().deactivate()
+        self._use_live_transform_preview = False
+
+    @property
+    def using_live_transform_preview(self) -> bool:
+        return self._use_live_transform_preview
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -200,6 +210,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         layer = doc.layers.active_layer
+        self._use_live_transform_preview = False
 
         # --- Reset marquee state ---
         self._marquee_start = None
@@ -534,6 +545,8 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             layer.position[0] + layer.width / 2.0,
             layer.position[1] + layer.height / 2.0,
         )
+        if self.supports_live_transform_preview is not None and self._mode in (_Mode.MOVE, _Mode.RESIZE, _Mode.ROTATE):
+            self._use_live_transform_preview = bool(self.supports_live_transform_preview(doc, layer))
 
     @property
     def marquee_rect(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
@@ -652,7 +665,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._apply_group_resize(dx, dy)
                 self._sync_mask_transforms(layer)
             else:
-                self._apply_resize(layer, dx, dy)
+                self._apply_resize(layer, dx, dy, preview_only=self._use_live_transform_preview)
                 self._sync_mask_transforms(layer)
 
         elif self._mode == _Mode.ROTATE:
@@ -662,7 +675,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._apply_group_rotate(x, y)
                 self._sync_mask_transforms(layer)
             else:
-                self._apply_rotate(layer, x, y)
+                self._apply_rotate(layer, x, y, preview_only=self._use_live_transform_preview)
                 self._sync_mask_transforms(layer)
 
         self._mark_transform_dirty(doc, dirty_before)
@@ -769,6 +782,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._multi_base_angle = {}
         self._multi_dims = {}
         self._move_snapshot_saved = False
+        self._use_live_transform_preview = False
 
     # ------------------------------------------------------------------
     # Alignment helpers — delegate to align_ops module

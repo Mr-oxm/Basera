@@ -1332,6 +1332,41 @@ Effect:
 - The graph type hierarchy now matches runtime behavior more closely: renderable prefix nodes are visible, cached prefix nodes are cache-only.
 - This reduces another small role mismatch in the staged GPU backend model.
 
+### 69. Single-layer raster transforms now use GPU preview with CPU commit fallback
+
+Files:
+- `photo_editor/core/layer.py`
+- `photo_editor/tools/move/move_tool.py`
+- `photo_editor/tools/move/resize_ops.py`
+- `photo_editor/tools/move/rotate_ops.py`
+- `photo_editor/engine/gpu_backend.py`
+- `photo_editor/ui/main_window.py`
+- `tests/test_bb_move_tool.py`
+- `tests/test_gpu_backend.py`
+
+Problem:
+- Interactive resize and rotate still called `compute_display(fast=True)` on every drag step.
+- On 4K and 5K raster layers that meant every mouse move still paid a full CPU source resample and rotation through the non-destructive transform path.
+- The existing Qt GPU backend only accelerated document compositing after transformed layer pixels already existed, so it did not remove the main transform bottleneck.
+
+Fix:
+- Added a geometry-only transform preview update on `Layer` so width, height, and transform bounds can track live drag state without rebuilding raster pixels.
+- Added an opt-in live transform preview path to `MoveTool` for the safe subset: single top-level raster layers with no masks, clips, styles, or child semantics that would change preview correctness.
+- Added transient transform preview support to the Qt GPU backend so the committed background is rendered without the active layer and the active layer is redrawn as a transformed preview texture on top.
+- Kept the CPU exact path as the commit stage on release: the final raster result is still produced once through `compute_display(fast=False)` and then cached normally.
+- Unsupported cases stay on the previous CPU live-transform behavior automatically.
+
+Effect:
+- Supported single-layer raster transforms no longer do per-frame CPU pixel recompute during drag.
+- CPU remains authoritative for the committed result and acts as the rollback path for every unsupported or unavailable preview case.
+
+Measured 4K / 5K results on this workspace:
+- 4K (`3840x2160`) resize drag step: CPU live recompute about `345.77 ms`; GPU preview path about `0.12 ms` for the drag update plus about `19.60 ms` to render the preview frame; final CPU commit on release about `814.73 ms`.
+- 4K (`3840x2160`) rotate drag step: CPU live recompute about `310.94 ms`; GPU preview path about `0.11 ms` for the drag update plus about `23.09 ms` to render the preview frame; final CPU commit on release about `733.19 ms`.
+- 5K (`5120x2880`) resize drag step: CPU live recompute about `606.50 ms`; GPU preview path about `0.10 ms` for the drag update plus about `29.28 ms` to render the preview frame; final CPU commit on release about `1449.97 ms`.
+- 5K (`5120x2880`) rotate drag step: CPU live recompute about `548.79 ms`; GPU preview path about `0.16 ms` for the drag update plus about `41.80 ms` to render the preview frame; final CPU commit on release about `1302.35 ms`.
+- Additional move-only measurement on the same large raster documents showed near-identical full-frame render cost with and without the preview session (`4K`: about `199.40 ms` baseline vs about `207.53 ms` preview, `5K`: about `353.17 ms` baseline vs about `354.09 ms` preview), which indicates the remaining move heaviness is now dominated by background redraw/compositing cost rather than transform math itself.
+
 ### 38. Uint8 conversion is now hardened against NaN and infinity payloads
 
 Files:
