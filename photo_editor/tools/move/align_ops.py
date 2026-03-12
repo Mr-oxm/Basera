@@ -41,9 +41,11 @@ def align_left(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Left")
     _, ly = layer.position
-    layer.position = (0, ly)
+    new_pos = (0, ly)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Left")
+        layer.position = new_pos
 
 
 def align_center_h(doc: "Document") -> None:
@@ -51,9 +53,11 @@ def align_center_h(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Center H")
     _, ly = layer.position
-    layer.position = ((doc.width - layer.width) // 2, ly)
+    new_pos = ((doc.width - layer.width) // 2, ly)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Center H")
+        layer.position = new_pos
 
 
 def align_right(doc: "Document") -> None:
@@ -61,9 +65,11 @@ def align_right(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Right")
     _, ly = layer.position
-    layer.position = (doc.width - layer.width, ly)
+    new_pos = (doc.width - layer.width, ly)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Right")
+        layer.position = new_pos
 
 
 def align_top(doc: "Document") -> None:
@@ -71,9 +77,11 @@ def align_top(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Top")
     lx, _ = layer.position
-    layer.position = (lx, 0)
+    new_pos = (lx, 0)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Top")
+        layer.position = new_pos
 
 
 def align_middle_v(doc: "Document") -> None:
@@ -81,9 +89,11 @@ def align_middle_v(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Middle V")
     lx, _ = layer.position
-    layer.position = (lx, (doc.height - layer.height) // 2)
+    new_pos = (lx, (doc.height - layer.height) // 2)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Middle V")
+        layer.position = new_pos
 
 
 def align_bottom(doc: "Document") -> None:
@@ -91,9 +101,11 @@ def align_bottom(doc: "Document") -> None:
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return
-    doc.save_snapshot("Align Bottom")
     lx, _ = layer.position
-    layer.position = (lx, doc.height - layer.height)
+    new_pos = (lx, doc.height - layer.height)
+    if new_pos != layer.position:
+        doc.save_metadata_snapshot("Align Bottom")
+        layer.position = new_pos
 
 
 # ---------------------------------------------------------------------------

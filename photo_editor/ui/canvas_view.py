@@ -138,6 +138,7 @@ class CanvasView(_BASE_CLASS):
         # References set by MainWindow for vector overlay drawing
         self._doc_ref = None          # Document | None
         self._tool_manager_ref = None  # ToolManager | None
+        self._document_renderer = None
 
         # Boolean preview overlay state (set by VectorController)
         self._bool_preview_path = None   # VectorPath | None
@@ -155,17 +156,29 @@ class CanvasView(_BASE_CLASS):
 
     # ---- Public API ---------------------------------------------------------
 
-    def set_image(self, rgba: np.ndarray, force: bool = False) -> None:
+    def set_image(
+        self,
+        rgba: np.ndarray,
+        force: bool = False,
+        document_size: tuple[int, int] | None = None,
+    ) -> None:
         # Skip redundant QPixmap creation when the buffer is identical
         if not force and rgba is self._last_rgba:
             return
         self._last_rgba = rgba
         h, w = rgba.shape[:2]
-        self._doc_w, self._doc_h = w, h
+        if document_size is not None:
+            self._doc_w, self._doc_h = document_size
+        else:
+            self._doc_w, self._doc_h = w, h
         # Use the buffer directly without .copy() — QPixmap.fromImage
         # copies the data internally so we don't need a second copy.
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         self._pixmap = QPixmap.fromImage(qimg)
+        self.update()
+
+    def set_document_renderer(self, renderer) -> None:
+        self._document_renderer = renderer
         self.update()
 
     def set_selection_mask(self, mask: np.ndarray | None) -> None:
@@ -497,10 +510,6 @@ class CanvasView(_BASE_CLASS):
         palette = ThemeManager.instance().active_palette
         p.fillRect(self.rect(), QColor(palette['bg1']))
 
-        if self._pixmap is None:
-            p.end()
-            return
-
         dr = self._doc_rect()
 
         # Checkerboard — single hardware-accelerated tiled draw
@@ -509,8 +518,15 @@ class CanvasView(_BASE_CLASS):
         p.drawTiledPixmap(dr.toAlignedRect(), checker_tile())
         p.restore()
 
-        # Document image
-        p.drawPixmap(dr.toAlignedRect(), self._pixmap)
+        rendered_document = False
+        if self._document_renderer is not None and self._doc_ref is not None:
+            rendered_document = bool(self._document_renderer.render_document(p, self._doc_ref, dr))
+
+        if not rendered_document:
+            if self._pixmap is None:
+                p.end()
+                return
+            p.drawPixmap(dr.toAlignedRect(), self._pixmap)
 
         # Selection overlay — marching ants
         if self._sel_contours:
@@ -693,6 +709,9 @@ class CanvasView(_BASE_CLASS):
     def set_document_ref(self, doc) -> None:
         """Store a reference to the active Document for overlay drawing."""
         self._doc_ref = doc
+        if doc is not None:
+            self._doc_w = getattr(doc, "width", self._doc_w)
+            self._doc_h = getattr(doc, "height", self._doc_h)
 
     def set_tool_manager_ref(self, tm) -> None:
         """Store a reference to the ToolManager for overlay state."""

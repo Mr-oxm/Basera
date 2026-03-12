@@ -529,14 +529,12 @@ class TextTool(Tool):
         need_h = max(rh, td.box_height)
         need_w = max(rw, td.box_width)
         if layer.width != need_w or layer.height != need_h:
-            layer._pixels = np.zeros((need_h, need_w, 4), dtype=np.float32)
-            layer.width = need_w
-            layer.height = need_h
+            layer.pixels = np.zeros((need_h, need_w, 4), dtype=np.float32)
         else:
-            layer._pixels[:] = 0.0
+            layer.ensure_pixels_float()[:] = 0.0
         # Paste rendered text
         ph, pw = min(rh, need_h), min(rw, need_w)
-        layer._pixels[:ph, :pw] = rendered[:ph, :pw]
+        layer.ensure_pixels_float()[:ph, :pw] = rendered[:ph, :pw]
 
     def _re_render_text(self) -> None:
         """Re-render the current editing text layer."""

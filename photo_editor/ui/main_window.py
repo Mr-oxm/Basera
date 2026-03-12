@@ -6,12 +6,13 @@ import math
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QSignalBlocker, QTimer
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox, QScrollBar, QWidget
+from PySide6.QtWidgets import QApplication, QDockWidget, QMainWindow, QMessageBox, QScrollBar, QWidget
 
 from ..commands.base import Command
 from ..core.brush_engine import BrushManager
 from ..core.document import Document
 from ..core.enums import BlendMode, ToolType
+from ..engine.gpu_backend import QtGpuCompositorBackend
 from ..engine.render_pipeline import RenderPipeline
 from ..engine.renderer import RenderScheduler
 from .canvas_view import CanvasView
@@ -36,6 +37,9 @@ from .icons import app_icon
 from .styles import render_qss
 
 _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
+_INTERACTIVE_PREVIEW_MAX_SIZE = 2048
+_INTERACTIVE_PREVIEW_MIN_SIZE = 512
+_FULL_RES_IDLE_MS = 120
 
 
 class MainWindow(QMainWindow):
@@ -55,11 +59,17 @@ class MainWindow(QMainWindow):
 
         self._doc: Document | None = None
         self._app_signals = AppSignals()
-        self._pipeline = RenderPipeline()
+        self._gpu_backend = QtGpuCompositorBackend()
+        self._gpu_backend_enabled = False
+        self._interactive_pipeline = RenderPipeline(quality_mode="preview")
+        self._final_pipeline = RenderPipeline(quality_mode="final")
+        self._pipeline = self._final_pipeline
+        self._preview_max_size = _INTERACTIVE_PREVIEW_MAX_SIZE
         self._render_scheduler = RenderScheduler(
-            self._pipeline,
+            self._interactive_pipeline,
+            final_pipeline=self._final_pipeline,
             interval_ms=33,
-            preview_max_size=0,  # Full res for now; set to 2048 when coord scaling is ready
+            preview_max_size=self._preview_max_size,
         )
         self._tools = ToolManager()
 
@@ -83,6 +93,10 @@ class MainWindow(QMainWindow):
         self._panel_refresh_timer.setSingleShot(True)
         self._panel_refresh_timer.timeout.connect(self._do_deferred_panel_refresh)
         self._panel_refresh_pending = False
+        self._full_res_timer = QTimer(self)
+        self._full_res_timer.setInterval(_FULL_RES_IDLE_MS)
+        self._full_res_timer.setSingleShot(True)
+        self._full_res_timer.timeout.connect(self._queue_full_resolution_render)
         
         # Track whether text editing is active to manage conflicting shortcuts
         self._text_editing_active = False
@@ -367,6 +381,34 @@ class MainWindow(QMainWindow):
         self._status.zoom_to_mouse_changed.connect(self._canvas.set_zoom_to_mouse)
         self._status.zoom_to_mouse = self._canvas.zoom_to_mouse
         # Guide drag wired by ViewController
+        self._gpu_backend_enabled = self._should_enable_gpu_backend()
+        self._canvas.set_document_renderer(self._gpu_backend if self._gpu_backend_enabled else None)
+
+    def _should_enable_gpu_backend(self) -> bool:
+        app = QApplication.instance()
+        platform = app.platformName().lower() if app is not None else ""
+        if platform in {"offscreen", "minimal"}:
+            return False
+        try:
+            from PySide6.QtOpenGLWidgets import QOpenGLWidget
+        except ImportError:
+            return False
+        return isinstance(self._canvas, QOpenGLWidget)
+
+    def _uses_gpu_interactive_backend(self) -> bool:
+        return (
+            self._gpu_backend_enabled
+            and self._doc is not None
+            and self._gpu_backend.can_render_document(self._doc)
+        )
+
+    def _invalidate_gpu_backend(self, layer_id: str | None) -> None:
+        if not self._gpu_backend_enabled:
+            return
+        if layer_id is None or self._doc is None:
+            self._gpu_backend.invalidate_layer(layer_id)
+            return
+        self._gpu_backend.invalidate_document_layer(self._doc, layer_id)
 
     def _on_canvas_view_changed(self) -> None:
         self._view_ctrl.update_rulers()
@@ -439,12 +481,30 @@ class MainWindow(QMainWindow):
             # async render runs.  The render callback will then refresh
             # again with thumbnails once the composite is ready.
             self._layers_panel.refresh(self._doc, thumbnails=False)
-            self._pipeline.invalidate(layer_id)
+            self._invalidate_gpu_backend(layer_id)
+            if self._uses_gpu_interactive_backend():
+                self._canvas.update()
+                self._sync_canvas_scrollbars()
+                self._history_panel.refresh(self._doc.history)
+                self._transform_panel.refresh(self._doc)
+                self._channels_panel.refresh(self._doc)
+                self._selection_ctrl.update_selection_overlay()
+                self._transform_ctrl.update_transform_box()
+                self._view_ctrl.update_rulers()
+                self._schedule_panel_refresh()
+                return
+            self._invalidate_render_region(layer_id)
+            self._update_preview_budget()
             self._render_scheduler.enqueue_render(self._doc, full_refresh=True)
+            self._schedule_full_resolution_render()
         else:
             # Cache hit — sync path is fast
-            result = self._pipeline.execute_to_uint8(self._doc)
-            self._canvas.set_image(result, force=False)
+            result = self._final_pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(
+                result,
+                force=False,
+                document_size=(self._doc.width, self._doc.height),
+            )
             self._layers_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
             self._transform_panel.refresh(self._doc)
@@ -458,46 +518,150 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return
         active = self._doc.layers.active_layer
-        self._pipeline.invalidate(active.id if active else None)
+        self._invalidate_gpu_backend(active.id if active else None)
+        if self._uses_gpu_interactive_backend():
+            self._canvas.set_document_ref(self._doc)
+            self._canvas.update()
+            self._sync_canvas_scrollbars()
+            self._selection_ctrl.update_selection_overlay()
+            self._transform_ctrl.update_transform_box()
+            self._view_ctrl.update_rulers()
+            return
+        self._invalidate_render_region(active.id if active else None)
+        self._update_preview_budget()
         self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+        self._schedule_full_resolution_render()
 
     def _refresh_lightweight(self) -> None:
         """Re-render canvas + lightweight panel sync (no thumbnails). Async."""
         if not self._doc:
             return
         active = self._doc.layers.active_layer
-        self._pipeline.invalidate(active.id if active else None)
+        self._invalidate_gpu_backend(active.id if active else None)
+        if self._uses_gpu_interactive_backend():
+            self._canvas.set_document_ref(self._doc)
+            self._canvas.update()
+            self._sync_canvas_scrollbars()
+            self._selection_ctrl.update_selection_overlay()
+            self._transform_ctrl.update_transform_box()
+            self._view_ctrl.update_rulers()
+            self._schedule_panel_refresh()
+            return
+        self._invalidate_render_region(active.id if active else None)
+        self._update_preview_budget()
         self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+        self._schedule_full_resolution_render()
 
     def _schedule_render(self) -> None:
         """Request a deferred render (throttled ~30fps, off UI thread)."""
         if not self._doc:
             return
         active = self._doc.layers.active_layer
-        self._pipeline.invalidate(active.id if active else None)
+        self._invalidate_gpu_backend(active.id if active else None)
+        if self._uses_gpu_interactive_backend():
+            self._canvas.set_document_ref(self._doc)
+            self._canvas.update()
+            self._sync_canvas_scrollbars()
+            self._selection_ctrl.update_selection_overlay()
+            self._transform_ctrl.update_transform_box()
+            self._view_ctrl.update_rulers()
+            return
+        self._invalidate_render_region(active.id if active else None)
+        self._update_preview_budget()
         self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
+        self._schedule_full_resolution_render()
 
-    def _on_render_ready(self, rgba, _gen_id: int, full_refresh: bool) -> None:
+    def _invalidate_render_region(self, layer_id: str | None) -> None:
+        if not self._doc:
+            return
+        dirty_region = self._doc.consume_dirty_region()
+        if dirty_region is not None:
+            self._interactive_pipeline.invalidate_region(*dirty_region)
+            self._final_pipeline.invalidate_region(*dirty_region)
+            return
+        self._interactive_pipeline.invalidate(layer_id)
+        self._final_pipeline.invalidate(layer_id)
+
+    def _effective_preview_max_size(self) -> int:
+        canvas = self._canvas
+        viewport_w = max(1, canvas.width())
+        viewport_h = max(1, canvas.height())
+        dpr = max(1.0, canvas.devicePixelRatioF())
+        viewport_budget = int(max(viewport_w, viewport_h) * dpr * 1.5)
+        return max(
+            _INTERACTIVE_PREVIEW_MIN_SIZE,
+            min(_INTERACTIVE_PREVIEW_MAX_SIZE, viewport_budget),
+        )
+
+    def _update_preview_budget(self) -> None:
+        self._preview_max_size = self._effective_preview_max_size()
+        self._render_scheduler.set_preview_max_size(self._preview_max_size)
+
+    def _schedule_full_resolution_render(self) -> None:
+        if not self._doc:
+            return
+        self._update_preview_budget()
+        if max(self._doc.width, self._doc.height) <= self._preview_max_size:
+            self._full_res_timer.stop()
+            return
+        self._full_res_timer.start()
+
+    def _queue_full_resolution_render(self) -> None:
+        if not self._doc:
+            return
+        self._render_scheduler.enqueue_immediate(
+            self._doc,
+            full_resolution=True,
+            full_refresh=False,
+        )
+
+    def _compact_inactive_layer_storage(self) -> bool:
+        if not self._doc:
+            return False
+        active = self._doc.layers.active_layer
+        compacted = False
+        for layer in self._doc.layers:
+            if layer is active:
+                continue
+            if getattr(layer, "_source_pixels", None) is not None and getattr(layer, "_pixels_dirty", False):
+                continue
+            compacted = layer.compact_display_storage() or compacted
+        return compacted
+
+    def _on_render_ready(self, rgba, _gen_id: int, full_refresh: bool, full_resolution: bool) -> None:
         """Render worker completed — update canvas and optionally panels."""
         if not self._doc:
             return
-        self._canvas.set_image(rgba, force=True)
+        pipeline = self._final_pipeline if full_resolution else self._interactive_pipeline
+        self._canvas.set_image(
+            rgba,
+            force=True,
+            document_size=(self._doc.width, self._doc.height),
+        )
         self._sync_canvas_scrollbars()
         self._selection_ctrl.update_selection_overlay()
         self._transform_ctrl.update_transform_box()
-        self._transform_panel.refresh(self._doc)
-        self._channels_panel.refresh(self._doc)
         self._view_ctrl.update_rulers()
+        if self._compact_inactive_layer_storage():
+            pipeline.rebase_cached_output_to_uint8()
         if full_refresh:
             self._layers_panel.refresh(self._doc)
             self._history_panel.refresh(self._doc.history)
+            self._transform_panel.refresh(self._doc)
+            self._channels_panel.refresh(self._doc)
 
     def _on_render_error(self, message: str) -> None:
         """Render worker failed — fallback to sync render."""
         if self._doc:
-            result = self._pipeline.execute_to_uint8(self._doc)
-            self._canvas.set_image(result, force=True)
+            result = self._final_pipeline.execute_to_uint8(self._doc)
+            self._canvas.set_image(
+                result,
+                force=True,
+                document_size=(self._doc.width, self._doc.height),
+            )
             self._sync_canvas_scrollbars()
+            if self._compact_inactive_layer_storage():
+                self._final_pipeline.rebase_cached_output_to_uint8()
         self._status.showMessage(f"Render error: {message}", 3000)
 
     def execute_command(self, command: Command):
@@ -508,7 +672,6 @@ class MainWindow(QMainWindow):
         if not self._doc:
             return None
         result = command.execute(self._doc)
-        self._pipeline.invalidate()
         self._refresh()
         return result
 
@@ -534,7 +697,6 @@ class MainWindow(QMainWindow):
             if on_success:
                 on_success(result)
             else:
-                self._pipeline.invalidate()
                 self._refresh()
 
         def on_err(msg: str) -> None:

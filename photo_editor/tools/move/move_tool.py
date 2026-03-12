@@ -107,6 +107,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # switching until we know it's a click (not a drag).  Stores the
         # topmost layer index found by find_layer_at, or None.
         self._pending_autoselect_idx: int | None = None
+        self._move_snapshot_saved: bool = False
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -125,6 +126,35 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         if total != 0.0 and layer.transform_base_w > 0:
             return (layer.transform_base_w, layer.transform_base_h, total)
         return None
+
+    def _dirty_layer_ids(self) -> list[str]:
+        ids: set[str] = set()
+        if self._active_layer is not None:
+            ids.add(self._active_layer.id)
+        for layer in getattr(self, "_group_children", []):
+            ids.add(layer.id)
+        for layer in getattr(self, "_mask_children", []):
+            ids.add(layer.id)
+        for layer in getattr(self, "_multi_layers", []):
+            ids.add(layer.id)
+        return list(ids)
+
+    @staticmethod
+    def _selection_signature(doc: Document) -> tuple[int, tuple[int, ...]]:
+        return (doc.layers.active_index, tuple(sorted(doc.layers.selected_indices)))
+
+    def _save_selection_history_if_changed(
+        self,
+        doc: Document,
+        before: tuple[int, tuple[int, ...]],
+        action: str = "Select Layer",
+    ) -> None:
+        if self._selection_signature(doc) != before:
+            doc.save_metadata_snapshot(action)
+
+    def _mark_transform_dirty(self, doc: Document, before_bounds) -> None:
+        after_bounds = doc.layers_visual_bounds(self._dirty_layer_ids())
+        doc.mark_region_pair_dirty(before_bounds, after_bounds)
 
     # ------------------------------------------------------------------
     # Hit-test wrappers (delegate to hit_test module)
@@ -214,7 +244,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                     if self.shift_held:
                         # Shift+click: immediate — toggling a multi-select is
                         # always a deliberate single-click action.
+                        selection_before = self._selection_signature(doc)
                         doc.layers.select_toggle(topmost_idx)
+                        self._save_selection_history_if_changed(doc, selection_before, "Select Layers")
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(
                                 doc.layers.active_index if doc.layers.active_index >= 0 else topmost_idx)
@@ -234,7 +266,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                     else:
                         # Clearly clicking on a different layer (e.g. transparent
                         # area of active layer, or no active layer) — switch now.
+                        selection_before = self._selection_signature(doc)
                         doc.layers.active_index = topmost_idx
+                        self._save_selection_history_if_changed(doc, selection_before)
                         if self.on_layer_auto_selected:
                             self.on_layer_auto_selected(topmost_idx)
                         layer = doc.layers.active_layer
@@ -276,7 +310,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                     return
 
         label = {_Mode.MOVE: "Move", _Mode.RESIZE: "Resize", _Mode.ROTATE: "Rotate"}
-        doc.save_snapshot(label.get(self._mode, "Transform"))
+        should_snapshot_now = self._mode in (_Mode.RESIZE, _Mode.ROTATE)
 
         self._start_x, self._start_y = x, y
         self._orig_position = layer.position
@@ -285,6 +319,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._is_rotated_resize = False
         self._current_angle = 0.0
         self._base_angle = layer.transform_angle
+        self._move_snapshot_saved = False
 
         # -- Floating selection: if a selection is active and mode is MOVE,
         #    cut selected pixels into a floating buffer. -------------------
@@ -300,6 +335,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
 
             sel_mask = self._get_sel_mask(doc)
             if sel_mask is not None and sel_mask.max() > 0:
+                doc.save_snapshot(label.get(self._mode, "Transform"))
                 mask4 = sel_mask[..., np.newaxis]
                 self._float_orig = layer.pixels.copy()
                 self._float_pixels = layer.pixels * mask4
@@ -316,6 +352,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # If there's an existing float but we're not continuing it, commit it
         if self._floating:
             self.commit_float(doc)
+
+        if should_snapshot_now:
+            doc.save_snapshot(label.get(self._mode, "Transform"))
 
         # -- Multi-selection setup (treat like a virtual group) -------------
         self._multi_layers: list = []
@@ -379,11 +418,12 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                         if bounds is not None:
                             child.position = (int(bounds[0]), int(bounds[1]))
                         child.pixels = px
-                child.init_non_destructive()
-                self._group_child_base_sx[child.id] = child.transform_scale_x
-                self._group_child_base_sy[child.id] = child.transform_scale_y
-                self._group_child_base_angle[child.id] = child.transform_angle
-                self._group_child_dims[child.id] = (child.width, child.height)
+                if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                    child.init_non_destructive()
+                    self._group_child_base_sx[child.id] = child.transform_scale_x
+                    self._group_child_base_sy[child.id] = child.transform_scale_y
+                    self._group_child_base_angle[child.id] = child.transform_angle
+                    self._group_child_dims[child.id] = (child.width, child.height)
             bbox = _ht.group_bbox(doc, layer)
             self._group_orig_bbox = bbox
             if bbox:
@@ -402,14 +442,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # so they stay pixel-aligned with the parent.
         if layer.children:
             mask_child_ids = set(layer.mask_layers)
-            layer.init_non_destructive()
+            if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                layer.init_non_destructive()
             # Parent itself is the first "group child"
             self._group_children.append(layer)
             self._group_child_positions[layer.id] = layer.position
-            self._group_child_base_sx[layer.id] = layer.transform_scale_x
-            self._group_child_base_sy[layer.id] = layer.transform_scale_y
-            self._group_child_base_angle[layer.id] = layer.transform_angle
-            self._group_child_dims[layer.id] = (layer.width, layer.height)
+            if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                self._group_child_base_sx[layer.id] = layer.transform_scale_x
+                self._group_child_base_sy[layer.id] = layer.transform_scale_y
+                self._group_child_base_angle[layer.id] = layer.transform_angle
+                self._group_child_dims[layer.id] = (layer.width, layer.height)
             for child in doc.layers:
                 if child.parent_id != layer.id:
                     continue
@@ -420,11 +462,12 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._group_child_positions[child.id] = child.position
                 if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
                     continue
-                child.init_non_destructive()
-                self._group_child_base_sx[child.id] = child.transform_scale_x
-                self._group_child_base_sy[child.id] = child.transform_scale_y
-                self._group_child_base_angle[child.id] = child.transform_angle
-                self._group_child_dims[child.id] = (child.width, child.height)
+                if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                    child.init_non_destructive()
+                    self._group_child_base_sx[child.id] = child.transform_scale_x
+                    self._group_child_base_sy[child.id] = child.transform_scale_y
+                    self._group_child_base_angle[child.id] = child.transform_angle
+                    self._group_child_dims[child.id] = (child.width, child.height)
             # Collect mask children so transforms stay aligned with parent
             self._mask_children: list = []
             self._mask_child_positions: dict[str, tuple[int, int]] = {}
@@ -434,12 +477,13 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             for mid in layer.mask_layers:
                 mc = doc.layers.get(mid)
                 if mc is not None:
-                    mc.init_non_destructive()
                     self._mask_children.append(mc)
                     self._mask_child_positions[mc.id] = mc.position
-                    self._mask_child_base_sx[mc.id] = mc.transform_scale_x
-                    self._mask_child_base_sy[mc.id] = mc.transform_scale_y
-                    self._mask_child_base_angle[mc.id] = mc.transform_angle
+                    if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                        mc.init_non_destructive()
+                        self._mask_child_base_sx[mc.id] = mc.transform_scale_x
+                        self._mask_child_base_sy[mc.id] = mc.transform_scale_y
+                        self._mask_child_base_angle[mc.id] = mc.transform_angle
             # Bbox = parent's own bounds (clipped children's overflow is
             # invisible and must NOT inflate the transform reference frame).
             lx, ly = layer.position
@@ -451,7 +495,8 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             return  # skip single-layer setup below
 
         # -- Single-layer non-destructive setup ----------------------------
-        layer.init_non_destructive()
+        if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+            layer.init_non_destructive()
 
         # Collect mask children so transforms propagate to them
         self._mask_children: list = []
@@ -462,12 +507,13 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         for mid in layer.mask_layers:
             mc = doc.layers.get(mid)
             if mc is not None:
-                mc.init_non_destructive()
                 self._mask_children.append(mc)
                 self._mask_child_positions[mc.id] = mc.position
-                self._mask_child_base_sx[mc.id] = mc.transform_scale_x
-                self._mask_child_base_sy[mc.id] = mc.transform_scale_y
-                self._mask_child_base_angle[mc.id] = mc.transform_angle
+                if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
+                    mc.init_non_destructive()
+                    self._mask_child_base_sx[mc.id] = mc.transform_scale_x
+                    self._mask_child_base_sy[mc.id] = mc.transform_scale_y
+                    self._mask_child_base_angle[mc.id] = mc.transform_angle
 
         if self._mode == _Mode.ROTATE:
             self._orig_width = layer.width
@@ -507,7 +553,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         ry0, ry1 = min(sy, ey), max(sy, ey)
         # Minimum 4px drag to count as a marquee
         if abs(rx1 - rx0) < 4 and abs(ry1 - ry0) < 4:
+            selection_before = self._selection_signature(doc)
             doc.layers.select_clear()
+            self._save_selection_history_if_changed(doc, selection_before, "Select Layers")
             if self.on_deselect_all:
                 self.on_deselect_all()
             return
@@ -522,21 +570,27 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             if lx < rx1 and lx2 > rx0 and ly < ry1 and ly2 > ry0:
                 hit_indices.append(i)
         if hit_indices:
+            selection_before = self._selection_signature(doc)
             doc.layers.select_clear()
             for idx in hit_indices:
                 doc.layers.select_add(idx)
             # Set active to the topmost (smallest index) selected layer
             doc.layers._active_index = min(hit_indices)
+            self._save_selection_history_if_changed(doc, selection_before, "Select Layers")
             if self.on_marquee_select:
                 self.on_marquee_select(hit_indices)
         else:
+            selection_before = self._selection_signature(doc)
             doc.layers.select_clear()
+            self._save_selection_history_if_changed(doc, selection_before, "Select Layers")
             if self.on_deselect_all:
                 self.on_deselect_all()
 
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         if not self._dragging:
             return
+
+        dirty_before = doc.layers_visual_bounds(self._dirty_layer_ids())
 
         # Marquee drag-select update
         if self._marquee_start is not None:
@@ -561,12 +615,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._float_dy = self._float_committed_dy + dy
             layer.pixels[:] = self._float_base
             self._composite_float(layer.pixels, self._float_dx, self._float_dy)
+            doc.mark_region_pair_dirty(dirty_before, doc.layers_visual_bounds(self._dirty_layer_ids()))
             return
 
         is_group = layer.layer_type == LayerType.GROUP
         is_multi = bool(getattr(self, "_multi_layers", []))
 
         if self._mode == _Mode.MOVE:
+            if not self._move_snapshot_saved and (dx != 0 or dy != 0):
+                doc.save_metadata_snapshot("Move")
+                self._move_snapshot_saved = True
             if self._group_children:
                 # Pseudo-group or real group: move every member via the
                 # stored original positions (the active layer is already
@@ -607,6 +665,8 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._apply_rotate(layer, x, y)
                 self._sync_mask_transforms(layer)
 
+        self._mark_transform_dirty(doc, dirty_before)
+
     def on_release(self, doc: Document, x: int, y: int) -> None:
         # Marquee drag-select: finish and select layers inside the box
         if self._marquee_start is not None:
@@ -614,7 +674,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._finish_marquee_select(doc)
             else:
                 # Click without drag on empty space → deselect all
+                selection_before = self._selection_signature(doc)
                 doc.layers.select_clear()
+                self._save_selection_history_if_changed(doc, selection_before, "Select Layers")
                 if self.on_deselect_all:
                     self.on_deselect_all()
             self._marquee_start = None
@@ -629,7 +691,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         if self._pending_autoselect_idx is not None:
             idx = self._pending_autoselect_idx
             self._pending_autoselect_idx = None
+            selection_before = self._selection_signature(doc)
             doc.layers.active_index = idx
+            self._save_selection_history_if_changed(doc, selection_before)
             if self.on_layer_auto_selected:
                 self.on_layer_auto_selected(idx)
 
@@ -643,6 +707,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             return
 
         if self._mode in (_Mode.ROTATE, _Mode.RESIZE) and self._active_layer is not None:
+            dirty_before = doc.layers_visual_bounds(self._dirty_layer_ids())
             if self._active_layer.layer_type == LayerType.GROUP or self._group_children:
                 for child in self._group_children:
                     if child.layer_type == LayerType.RASTER:
@@ -658,6 +723,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             for sl in getattr(self, "_multi_layers", []):
                 if sl.layer_type == LayerType.RASTER and sl._source_pixels is not None:
                     sl.compute_display(fast=False)
+            self._mark_transform_dirty(doc, dirty_before)
 
         # --- Vector layer commit ---
         if self._active_layer is not None and self._mode != _Mode.NONE:
@@ -702,6 +768,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._multi_base_sy = {}
         self._multi_base_angle = {}
         self._multi_dims = {}
+        self._move_snapshot_saved = False
 
     # ------------------------------------------------------------------
     # Alignment helpers — delegate to align_ops module

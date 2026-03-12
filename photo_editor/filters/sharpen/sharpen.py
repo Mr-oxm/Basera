@@ -41,3 +41,9 @@ class Sharpen(Filter):
         result = cv2.addWeighted(rgb, 1.0 - strength, sharpened, strength, 0)
 
         return self._merge(result, alpha)
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return True
+
+    def region_padding(self, params: dict | None = None) -> int:
+        return 1

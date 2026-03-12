@@ -53,6 +53,22 @@ class LayerController(ControllerBase):
         self._blend_preview_original: BlendMode | None = None
         self._numpad_first: int | None = None
         self._numpad_timer: QTimer | None = None
+        self._pending_opacity_history: tuple[str, float] | None = None
+
+    def _selection_signature(self) -> tuple[int, tuple[int, ...]] | None:
+        if not self.doc:
+            return None
+        return (
+            self.doc.layers.active_index,
+            tuple(sorted(self.doc.layers.selected_indices)),
+        )
+
+    def _capture_selection_history(self, action: str = "Select Layer") -> None:
+        if self.doc:
+            self.doc.save_metadata_snapshot(action)
+
+    def _reset_pending_opacity_history(self) -> None:
+        self._pending_opacity_history = None
 
     def wire(self, main_window) -> None:
         """Connect to main window and wire menu/panel signals."""
@@ -250,7 +266,12 @@ class LayerController(ControllerBase):
 
     def on_layer_selected(self, stack_index: int) -> None:
         if self.doc:
+            before = self._selection_signature()
             self.doc.layers.active_index = stack_index
+            after = self._selection_signature()
+            if before != after:
+                self._capture_selection_history()
+            self._reset_pending_opacity_history()
 
             if self.mw._tools.active_type == ToolType.NODE:
                 al = self.doc.layers.active_layer
@@ -304,6 +325,7 @@ class LayerController(ControllerBase):
         if not self.doc:
             return
         stack = self.doc.layers
+        before = self._selection_signature()
         new_sel = selected_indices_from_layer_ids(layer_ids, stack.layers)
         stack._selected_indices = new_sel
         # Keep active_index pointing at something sensible
@@ -311,6 +333,10 @@ class LayerController(ControllerBase):
             stack._active_index = max(new_sel)
         elif not new_sel:
             stack._active_index = -1
+        after = self._selection_signature()
+        if before != after:
+            self._capture_selection_history("Select Layers")
+        self._reset_pending_opacity_history()
         self.signals.transform_box_requested.emit()
         self.signals.channels_panel_refresh_requested.emit()
 
@@ -323,13 +349,24 @@ class LayerController(ControllerBase):
 
     def on_opacity(self, val: float) -> None:
         if self.doc and self.doc.layers.active_layer:
-            self.doc.layers.active_layer.opacity = val
+            layer = self.doc.layers.active_layer
+            pending = self._pending_opacity_history
+            if pending is None or pending[0] != layer.id:
+                if float(layer.opacity) != float(val):
+                    self.doc.save_metadata_snapshot("Change Opacity")
+                    self._pending_opacity_history = (layer.id, float(val))
+            elif abs(pending[1] - float(val)) > 1e-6:
+                self._pending_opacity_history = (layer.id, float(val))
+            layer.opacity = val
             self.ctx.refresh_canvas_only()
 
     def on_blend_mode(self, mode: BlendMode) -> None:
         self._blend_preview_original = None
         if self.doc and self.doc.layers.active_layer:
+            if self.doc.layers.active_layer.blend_mode != mode:
+                self.doc.save_metadata_snapshot("Change Blend Mode")
             self.doc.layers.active_layer.blend_mode = mode
+            self._reset_pending_opacity_history()
             self.ctx.refresh_canvas_only()
 
     def on_blend_hover(self, mode: BlendMode) -> None:
@@ -352,7 +389,9 @@ class LayerController(ControllerBase):
         if self.doc:
             layer = self.doc.layers.get(layer_id)
             if layer:
+                self.doc.save_metadata_snapshot("Toggle Layer Visibility")
                 layer.visible = not layer.visible
+                self._reset_pending_opacity_history()
                 self.ctx.refresh_canvas_only()
                 self.ctx.refresh_layers_panel(thumbnails=False)
 
@@ -360,7 +399,9 @@ class LayerController(ControllerBase):
         if self.doc:
             layer = self.doc.layers.get(layer_id)
             if layer:
+                self.doc.save_metadata_snapshot("Toggle Layer Lock")
                 layer.locked = not layer.locked
+                self._reset_pending_opacity_history()
                 self.ctx.refresh_layer_controls()
                 self.signals.transform_box_requested.emit()
 
@@ -374,6 +415,7 @@ class LayerController(ControllerBase):
     def on_layers_reordered(self, layer_ids: list[str], target_visual_row: int) -> None:
         if not self.doc:
             return
+        self._reset_pending_opacity_history()
         display_ids = self.ctx.layer_row_ids()
         new_stack_order = reordered_stack_order(display_ids, layer_ids, target_visual_row)
         self.ctx.execute_command(ReorderLayersCommand(new_stack_order))
@@ -394,10 +436,26 @@ class LayerController(ControllerBase):
             display_ids, layer_ids, target_visual_row,
         )
         doc = self.doc
+        before = doc.layers_visual_bounds(layer_ids)
+        affected_parent_ids = {
+            layer.parent_id for layer in doc.layers if layer.id in layer_ids and layer.parent_id is not None
+        }
+        affected_parent_ids.add(group_id)
+        for parent_id in affected_parent_ids:
+            if parent_id is None:
+                continue
+            before = doc._merge_rects(before, doc.layer_visual_bounds(parent_id, include_related=False))
         doc.layers.reparent(layer_ids, group_id)
         doc.layers.reorder_by_ids(new_stack_order)
-        doc.save_snapshot("Move into Group")
+        doc.save_metadata_snapshot("Move into Group")
         doc.mark_dirty()
+        after = doc.layers_visual_bounds(layer_ids)
+        for parent_id in affected_parent_ids:
+            if parent_id is None:
+                continue
+            after = doc._merge_rects(after, doc.layer_visual_bounds(parent_id, include_related=False))
+        doc.mark_region_pair_dirty(before, after)
+        self._reset_pending_opacity_history()
         self.ctx.refresh()
 
     def on_layers_unparented(self, layer_ids: list[str], target_visual_row: int) -> None:
@@ -411,10 +469,25 @@ class LayerController(ControllerBase):
             display_ids, layer_ids, target_visual_row,
         )
         doc = self.doc
+        before = doc.layers_visual_bounds(layer_ids)
+        affected_parent_ids = {
+            layer.parent_id for layer in doc.layers if layer.id in layer_ids and layer.parent_id is not None
+        }
+        for parent_id in affected_parent_ids:
+            if parent_id is None:
+                continue
+            before = doc._merge_rects(before, doc.layer_visual_bounds(parent_id, include_related=False))
         doc.layers.reparent(layer_ids, None)
         doc.layers.reorder_by_ids(new_stack_order)
-        doc.save_snapshot("Unparent Layer")
+        doc.save_metadata_snapshot("Unparent Layer")
         doc.mark_dirty()
+        after = doc.layers_visual_bounds(layer_ids)
+        for parent_id in affected_parent_ids:
+            if parent_id is None:
+                continue
+            after = doc._merge_rects(after, doc.layer_visual_bounds(parent_id, include_related=False))
+        doc.mark_region_pair_dirty(before, after)
+        self._reset_pending_opacity_history()
         self.ctx.refresh()
 
     def on_mask_dropped_on_layer(self, mask_id: str, target_id: str) -> None:
@@ -503,7 +576,10 @@ class LayerController(ControllerBase):
     def _set_opacity_pct(self, pct: int) -> None:
         mw = self._mw
         if mw._doc and mw._doc.layers.active_layer:
+            if float(mw._doc.layers.active_layer.opacity) != pct / 100.0:
+                mw._doc.save_metadata_snapshot("Change Opacity")
             mw._doc.layers.active_layer.opacity = pct / 100.0
+            self._pending_opacity_history = (mw._doc.layers.active_layer.id, pct / 100.0)
             self.ctx.refresh_layer_controls()
             self.ctx.refresh_canvas_only()
             self.ctx.show_status_message(f"Opacity: {pct}%", 1500)

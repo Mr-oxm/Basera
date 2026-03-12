@@ -25,6 +25,19 @@ class PatternOverlay(LayerStyle):
 
     # ------------------------------------------------------------------
     def apply(self, layer_image: np.ndarray) -> np.ndarray:
+        return self.apply_region(layer_image, 0, 0, layer_image.shape[1], layer_image.shape[0])
+
+    def supports_region_rendering(self) -> bool:
+        return True
+
+    def apply_region(
+        self,
+        layer_image: np.ndarray,
+        offset_x: int,
+        offset_y: int,
+        full_width: int,
+        full_height: int,
+    ) -> np.ndarray:
         img = self._f32(layer_image).copy()
         p = self.params.extra
         if not self.params.enabled:
@@ -37,7 +50,9 @@ class PatternOverlay(LayerStyle):
         alpha = img[:, :, 3]
 
         cell = max(int(8 * scale), 1)
-        pattern = self._checkerboard(h, w, cell)
+        rows = (np.arange(offset_y, offset_y + h) // cell).astype(np.int32)
+        cols = (np.arange(offset_x, offset_x + w) // cell).astype(np.int32)
+        pattern = ((rows[:, None] + cols[None, :]) % 2).astype(np.float32)
 
         # Convert pattern to RGB (white / mid-grey)
         pat_rgb = np.empty((h, w, 3), dtype=np.float32)

@@ -10,6 +10,8 @@ from ..core.document import Document
 class Tool(ABC):
     """Base class for interactive canvas tools."""
 
+    _PATCH_TILE_SIZE = 256
+
     def __init__(self, name: str) -> None:
         self.name = name
         self._active = False
@@ -61,7 +63,7 @@ class Tool(ABC):
             return None
         mask = doc.selection._mask
         lx, ly = layer.position
-        lh, lw = layer.pixels.shape[:2]
+        lh, lw = int(layer.height), int(layer.width)
         dh, dw = mask.shape[:2]
 
         dy0 = max(0, ly)
@@ -76,6 +78,109 @@ class Tool(ABC):
         sx0, sx1 = dx0 - lx, dx1 - lx
         out[sy0:sy1, sx0:sx1] = mask[dy0:dy1, dx0:dx1]
         return out
+
+    @staticmethod
+    def _begin_destructive_patch(doc: Document, action: str) -> None:
+        layer = doc.layers.active_layer
+        if layer is None or layer.locked:
+            return
+        doc.begin_layer_tile_patch(action, layer.id, tile_size=Tool._PATCH_TILE_SIZE)
+
+    @staticmethod
+    def _commit_destructive_patch(doc: Document) -> None:
+        doc.commit_layer_tile_patch()
+
+    @staticmethod
+    def _discard_destructive_patch(doc: Document) -> None:
+        doc.discard_layer_tile_patch()
+
+    @staticmethod
+    def _capture_patch_circle(doc: Document, x: int, y: int, radius: int) -> None:
+        layer = doc.layers.active_layer
+        if layer is None:
+            return
+        lx, ly = layer.position
+        doc.capture_layer_tile_region(
+            layer,
+            x - lx - radius,
+            y - ly - radius,
+            radius * 2 + 1,
+            radius * 2 + 1,
+        )
+
+    @staticmethod
+    def _capture_patch_rect(doc: Document, x: int, y: int, width: int, height: int) -> None:
+        layer = doc.layers.active_layer
+        if layer is None:
+            return
+        lx, ly = layer.position
+        doc.capture_layer_tile_region(layer, x - lx, y - ly, width, height)
+
+    def _capture_patch_stroke(
+        self,
+        doc: Document,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        radius: int,
+    ) -> None:
+        pad = max(1, radius)
+        left = min(x0, x1) - pad
+        top = min(y0, y1) - pad
+        right = max(x0, x1) + pad + 1
+        bottom = max(y0, y1) + pad + 1
+        self._capture_patch_rect(doc, left, top, right - left, bottom - top)
+
+    @staticmethod
+    def _mutate_active_layer_local_region(
+        doc: Document,
+        local_left: int,
+        local_top: int,
+        local_right: int,
+        local_bottom: int,
+        mutate,
+        *,
+        write_left: int | None = None,
+        write_top: int | None = None,
+        write_right: int | None = None,
+        write_bottom: int | None = None,
+    ) -> bool:
+        layer = doc.layers.active_layer
+        if layer is None:
+            return False
+        if not layer.can_mutate_display_region_locally():
+            return False
+        decoded = layer.read_display_region_float(
+            local_left,
+            local_top,
+            local_right - local_left,
+            local_bottom - local_top,
+        )
+        if decoded is None:
+            return False
+        region, (region_x, region_y) = decoded
+        mutate(region, region_x, region_y)
+        dest_left = region_x if write_left is None else write_left
+        dest_top = region_y if write_top is None else write_top
+        dest_right = region_x + region.shape[1] if write_right is None else write_right
+        dest_bottom = region_y + region.shape[0] if write_bottom is None else write_bottom
+        clip_left = max(dest_left, region_x)
+        clip_top = max(dest_top, region_y)
+        clip_right = min(dest_right, region_x + region.shape[1])
+        clip_bottom = min(dest_bottom, region_y + region.shape[0])
+        if clip_right <= clip_left or clip_bottom <= clip_top:
+            return False
+        sx0 = clip_left - region_x
+        sy0 = clip_top - region_y
+        sx1 = sx0 + (clip_right - clip_left)
+        sy1 = sy0 + (clip_bottom - clip_top)
+        layer.write_display_region_float(
+            clip_left,
+            clip_top,
+            region[sy0:sy1, sx0:sx1],
+        )
+        return True
 
     def generate_preview_dab(self) -> np.ndarray | None:
         """Return an RGBA uint8 array showing what a single dab looks like.

@@ -24,9 +24,10 @@ if TYPE_CHECKING:
 class Compositor:
     """Composites a LayerStack into a flat RGBA image."""
 
-    def __init__(self, image_pool: ImagePool | None = None) -> None:
+    def __init__(self, image_pool: ImagePool | None = None, quality_mode: str = "final") -> None:
         self._blending = BlendingEngine()
         self._pool = image_pool
+        self._quality_mode = quality_mode
 
     @staticmethod
     def _calc_filter_padding(adj_layers: list[Layer]) -> int:
@@ -43,13 +44,15 @@ class Compositor:
             if adj_layer.layer_type != LayerType.FILTER:
                 continue
             params = adj_layer.adjustment_params or {}
-            r = params.get("radius",
-                    params.get("distance",
-                    params.get("amount", 0)))
-            try:
-                pad = max(pad, int(float(r) * 3) + 4)
-            except (TypeError, ValueError):
-                pass
+            pad = max(
+                pad,
+                int(
+                    max(
+                        params.get("radius", 0),
+                        params.get("distance", params.get("amount", 0)),
+                    )
+                ),
+            )
         return pad
 
     def _apply_filters_padded(
@@ -77,6 +80,47 @@ class Compositor:
         return pixels, pad
 
     @staticmethod
+    def _processors_support_region_rendering(adj_layers: list[Layer]) -> bool:
+        for adj_layer in adj_layers:
+            processor = adj_layer.adjustment
+            if processor is None:
+                continue
+            if not processor.supports_region_rendering(adj_layer.adjustment_params or {}):
+                return False
+        return True
+
+    @staticmethod
+    def _apply_region_processors(pixels: np.ndarray, adj_layers: list[Layer]) -> np.ndarray:
+        result = pixels.copy()
+        for adj_layer in adj_layers:
+            processor = adj_layer.adjustment
+            if processor is None:
+                continue
+            result = processor.apply(result, adj_layer.adjustment_params or {})
+        np.clip(result, 0, 1, out=result)
+        return result
+
+    @staticmethod
+    def _processors_region_padding(adj_layers: list[Layer]) -> int:
+        padding = 0
+        for adj_layer in adj_layers:
+            processor = adj_layer.adjustment
+            if processor is None:
+                continue
+            padding += int(processor.region_padding(adj_layer.adjustment_params or {}))
+        return padding
+
+    @staticmethod
+    def _processors_expand_bounds(adj_layers: list[Layer]) -> bool:
+        for adj_layer in adj_layers:
+            processor = adj_layer.adjustment
+            if processor is None:
+                continue
+            if processor.expands_bounds(adj_layer.adjustment_params or {}):
+                return True
+        return False
+
+    @staticmethod
     def _apply_channels(pixels: np.ndarray, layer: Layer) -> np.ndarray:
         if layer.channel_r and layer.channel_g and layer.channel_b and layer.channel_a:
             return pixels
@@ -94,7 +138,60 @@ class Compositor:
         """
         return MaskManager.get_combined_mask(layer, stack)
 
+    def _root_filter_padding(self, stack: LayerStack) -> int:
+        root_adj_layers = [
+            layer for layer in stack
+            if layer.visible and layer.parent_id is None
+            and layer.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+        ]
+        return self._calc_filter_padding(root_adj_layers)
+
+    def can_render_region_incrementally(self, stack: LayerStack) -> bool:
+        """Return True when region redraw is structurally supported."""
+        return True
+
+    def composite_region(
+        self,
+        stack: LayerStack,
+        width: int,
+        height: int,
+        x: int,
+        y: int,
+        region_width: int,
+        region_height: int,
+    ) -> np.ndarray:
+        """Composite only a document-space region.
+
+        Root-level filters get extra padding so neighborhood-based operations
+        like blur remain correct at tile boundaries before the final crop.
+        """
+        pad = self._root_filter_padding(stack)
+        work_x = max(0, x - pad)
+        work_y = max(0, y - pad)
+        work_x1 = min(width, x + region_width + pad)
+        work_y1 = min(height, y + region_height + pad)
+        work = self._composite_at_origin(
+            stack,
+            work_x1 - work_x,
+            work_y1 - work_y,
+            work_x,
+            work_y,
+        )
+        crop_x = x - work_x
+        crop_y = y - work_y
+        return work[crop_y:crop_y + region_height, crop_x:crop_x + region_width].copy()
+
     def composite(self, stack: LayerStack, width: int, height: int) -> np.ndarray:
+        return self._composite_at_origin(stack, width, height, 0, 0)
+
+    def _composite_at_origin(
+        self,
+        stack: LayerStack,
+        width: int,
+        height: int,
+        origin_x: int,
+        origin_y: int,
+    ) -> np.ndarray:
         canvas = np.zeros((height, width, 4), dtype=np.float32)
         layers = list(stack)
 
@@ -181,10 +278,9 @@ class Compositor:
                 placed_gray.fill(0)
                 lx, ly = layer.position
                 mh, mw = gray.shape[:2]
-                sx, sy = max(0, -lx), max(0, -ly)
-                dx, dy = max(0, lx), max(0, ly)
-                rw = min(mw - sx, width - dx)
-                rh = min(mh - sy, height - dy)
+                sx, sy, dx, dy, rw, rh = self._placement_rect(
+                    mw, mh, lx, ly, origin_x, origin_y, width, height,
+                )
                 if rw > 0 and rh > 0:
                     placed_gray[dy:dy + rh, dx:dx + rw] = gray[sy:sy + rh, sx:sx + rw]
                 if layer.ex_parent_id:
@@ -198,7 +294,9 @@ class Compositor:
                 continue
 
             if layer.layer_type == LayerType.GROUP:
-                group_img = self._composite_group(layer, stack, width, height)
+                group_img = self._composite_group(
+                    layer, stack, width, height, origin_x, origin_y,
+                )
                 # Apply child adj/filter layers scoped to this group
                 if layer.id in adj_children:
                     for adj_layer in adj_children[layer.id]:
@@ -222,10 +320,9 @@ class Compositor:
                     placed_mask.fill(0)
                     gx, gy = layer.position
                     mh_, mw_ = group_mask.shape[:2]
-                    sx_, sy_ = max(0, -gx), max(0, -gy)
-                    dx_, dy_ = max(0, gx), max(0, gy)
-                    rw_ = min(mw_ - sx_, width - dx_)
-                    rh_ = min(mh_ - sy_, height - dy_)
+                    sx_, sy_, dx_, dy_, rw_, rh_ = self._placement_rect(
+                        mw_, mh_, gx, gy, origin_x, origin_y, width, height,
+                    )
                     if rw_ > 0 and rh_ > 0:
                         placed_mask[dy_:dy_ + rh_, dx_:dx_ + rw_] = group_mask[sy_:sy_ + rh_, sx_:sx_ + rw_]
                     group_img[..., 3] *= placed_mask
@@ -241,19 +338,9 @@ class Compositor:
             # Combined mask: legacy mask + mask layers
             mask = self._get_effective_mask(layer, stack)
 
-            # Apply child adjustment/filter layers to this layer's pixels
-            pixels = layer.pixels
-            if layer.styles:
-                pixels = StyleEngine.apply_styles(pixels, layer.styles)
-            pixels = self._apply_channels(pixels, layer)
-            blend_pos = layer.position
-            if layer.id in adj_children:
-                pixels, pad = self._apply_filters_padded(
-                    pixels, adj_children[layer.id],
-                )
-                if pad > 0:
-                    blend_pos = (layer.position[0] - pad,
-                                 layer.position[1] - pad)
+            pixels, blend_pos = self._layer_pixels_for_canvas(
+                layer, width, height, origin_x, origin_y, adj_children,
+            )
 
             # Check whether any regular child clips the parent
             _has_clip_child = False
@@ -264,10 +351,10 @@ class Compositor:
                         break
 
             if layer.clipping_mask and prev_img is not None:
-                placed = self._place_pixels(pixels, blend_pos, width, height)
+                placed = self._place_pixels(pixels, blend_pos, width, height, origin_x, origin_y)
                 placed[..., 3:4] *= prev_img[..., 3:4]
                 placed_mask = (
-                    self._place_mask_combined(layer, stack, width, height)
+                    self._place_mask_combined(layer, stack, width, height, origin_x, origin_y)
                     if mask is not None else None
                 )
                 self._blending.blend_region_inplace(
@@ -280,26 +367,18 @@ class Compositor:
                 # Delayed blend: clips_parent children restrict the
                 # parent's visible area before it is composited.
                 parent_placed = self._place_pixels(
-                    pixels, blend_pos, width, height)
+                    pixels, blend_pos, width, height, origin_x, origin_y)
                 for child in regular_children[layer.id]:
                     if not child.clips_parent:
                         continue
-                    c_pix = child.pixels
-                    if child.styles:
-                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                    c_pix = self._apply_channels(c_pix, child)
-                    c_pos = child.position
-                    if child.id in adj_children:
-                        c_pix, c_pad = self._apply_filters_padded(
-                            c_pix, adj_children[child.id])
-                        if c_pad > 0:
-                            c_pos = (child.position[0] - c_pad,
-                                     child.position[1] - c_pad)
-                    c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                    c_pix, c_pos = self._layer_pixels_for_canvas(
+                        child, width, height, origin_x, origin_y, adj_children,
+                    )
+                    c_placed = self._place_pixels(c_pix, c_pos, width, height, origin_x, origin_y)
                     parent_placed[..., 3:4] *= c_placed[..., 3:4]
                 # Blend the clipped parent onto the canvas
                 placed_mask = (
-                    self._place_mask_combined(layer, stack, width, height)
+                    self._place_mask_combined(layer, stack, width, height, origin_x, origin_y)
                     if mask is not None else None
                 )
                 self._blending.blend_region_inplace(
@@ -311,21 +390,13 @@ class Compositor:
                     if child.clips_parent:
                         continue
                     c_mask = self._get_effective_mask(child, stack)
-                    c_pix = child.pixels
-                    if child.styles:
-                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                    c_pix = self._apply_channels(c_pix, child)
-                    c_pos = child.position
-                    if child.id in adj_children:
-                        c_pix, c_pad = self._apply_filters_padded(
-                            c_pix, adj_children[child.id])
-                        if c_pad > 0:
-                            c_pos = (child.position[0] - c_pad,
-                                     child.position[1] - c_pad)
-                    c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                    c_pix, c_pos = self._layer_pixels_for_canvas(
+                        child, width, height, origin_x, origin_y, adj_children,
+                    )
+                    c_placed = self._place_pixels(c_pix, c_pos, width, height, origin_x, origin_y)
                     c_placed[..., 3:4] *= parent_placed[..., 3:4]
                     c_placed_mask = (
-                        self._place_mask_combined(child, stack, width, height)
+                        self._place_mask_combined(child, stack, width, height, origin_x, origin_y)
                         if c_mask is not None else None
                     )
                     self._blending.blend_region_inplace(
@@ -336,11 +407,11 @@ class Compositor:
 
             else:
                 self._blending.blend_region_inplace(
-                    canvas, pixels, blend_pos,
+                    canvas, pixels, (blend_pos[0] - origin_x, blend_pos[1] - origin_y),
                     layer.blend_mode, layer.opacity, mask,
                 )
                 if layer.id in needs_placed:
-                    prev_img = self._place_pixels(pixels, blend_pos, width, height)
+                    prev_img = self._place_pixels(pixels, blend_pos, width, height, origin_x, origin_y)
                 else:
                     prev_img = None
 
@@ -350,24 +421,16 @@ class Compositor:
                     parent_placed = prev_img
                     if parent_placed is None:
                         parent_placed = self._place_pixels(
-                            pixels, blend_pos, width, height)
+                            pixels, blend_pos, width, height, origin_x, origin_y)
                     for child in regular_children[layer.id]:
                         c_mask = self._get_effective_mask(child, stack)
-                        c_pix = child.pixels
-                        if child.styles:
-                            c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                        c_pix = self._apply_channels(c_pix, child)
-                        c_pos = child.position
-                        if child.id in adj_children:
-                            c_pix, c_pad = self._apply_filters_padded(
-                                c_pix, adj_children[child.id])
-                            if c_pad > 0:
-                                c_pos = (child.position[0] - c_pad,
-                                         child.position[1] - c_pad)
-                        c_placed = self._place_pixels(c_pix, c_pos, width, height)
+                        c_pix, c_pos = self._layer_pixels_for_canvas(
+                            child, width, height, origin_x, origin_y, adj_children,
+                        )
+                        c_placed = self._place_pixels(c_pix, c_pos, width, height, origin_x, origin_y)
                         c_placed[..., 3:4] *= parent_placed[..., 3:4]
                         c_placed_mask = (
-                            self._place_mask_combined(child, stack, width, height)
+                            self._place_mask_combined(child, stack, width, height, origin_x, origin_y)
                             if c_mask is not None else None
                         )
                         self._blending.blend_region_inplace(
@@ -380,6 +443,7 @@ class Compositor:
 
     def _composite_group(
         self, group: Layer, stack: LayerStack, w: int, h: int,
+        origin_x: int = 0, origin_y: int = 0,
     ) -> np.ndarray:
         canvas = np.zeros((h, w, 4), dtype=np.float32)
         # Collect mask-layer IDs used by children of this group
@@ -453,26 +517,18 @@ class Compositor:
                 # Delayed blend: clips_parent children restrict the
                 # parent's visible area before it is composited.
                 parent_placed = self._place_pixels(
-                    pixels, blend_pos, w, h)
+                    pixels, blend_pos, w, h, origin_x, origin_y)
                 for child in regular_children[layer.id]:
                     if not child.clips_parent:
                         continue
-                    c_pix = child.pixels
-                    if child.styles:
-                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                    c_pix = self._apply_channels(c_pix, child)
-                    c_pos = child.position
-                    if child.id in adj_children:
-                        c_pix, c_pad = self._apply_filters_padded(
-                            c_pix, adj_children[child.id])
-                        if c_pad > 0:
-                            c_pos = (child.position[0] - c_pad,
-                                     child.position[1] - c_pad)
-                    c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                    c_pix, c_pos = self._layer_pixels_for_canvas(
+                        child, w, h, origin_x, origin_y, adj_children,
+                    )
+                    c_placed = self._place_pixels(c_pix, c_pos, w, h, origin_x, origin_y)
                     parent_placed[..., 3:4] *= c_placed[..., 3:4]
                 # Blend the clipped parent onto the group canvas
                 placed_mask = (
-                    self._place_mask_combined(layer, stack, w, h)
+                    self._place_mask_combined(layer, stack, w, h, origin_x, origin_y)
                     if mask is not None else None
                 )
                 self._blending.blend_region_inplace(
@@ -484,21 +540,13 @@ class Compositor:
                     if child.clips_parent:
                         continue
                     c_mask = self._get_effective_mask(child, stack)
-                    c_pix = child.pixels
-                    if child.styles:
-                        c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                    c_pix = self._apply_channels(c_pix, child)
-                    c_pos = child.position
-                    if child.id in adj_children:
-                        c_pix, c_pad = self._apply_filters_padded(
-                            c_pix, adj_children[child.id])
-                        if c_pad > 0:
-                            c_pos = (child.position[0] - c_pad,
-                                     child.position[1] - c_pad)
-                    c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                    c_pix, c_pos = self._layer_pixels_for_canvas(
+                        child, w, h, origin_x, origin_y, adj_children,
+                    )
+                    c_placed = self._place_pixels(c_pix, c_pos, w, h, origin_x, origin_y)
                     c_placed[..., 3:4] *= parent_placed[..., 3:4]
                     c_placed_mask = (
-                        self._place_mask_combined(child, stack, w, h)
+                        self._place_mask_combined(child, stack, w, h, origin_x, origin_y)
                         if c_mask is not None else None
                     )
                     self._blending.blend_region_inplace(
@@ -507,30 +555,22 @@ class Compositor:
                     )
             else:
                 self._blending.blend_region_inplace(
-                    canvas, pixels, blend_pos,
+                    canvas, pixels, (blend_pos[0] - origin_x, blend_pos[1] - origin_y),
                     layer.blend_mode, layer.opacity, mask,
                 )
                 # Regular children of non-group parents within the group
                 if layer.id in regular_children:
                     parent_placed = self._place_pixels(
-                        pixels, blend_pos, w, h)
+                        pixels, blend_pos, w, h, origin_x, origin_y)
                     for child in regular_children[layer.id]:
                         c_mask = self._get_effective_mask(child, stack)
-                        c_pix = child.pixels
-                        if child.styles:
-                            c_pix = StyleEngine.apply_styles(c_pix, child.styles)
-                        c_pix = self._apply_channels(c_pix, child)
-                        c_pos = child.position
-                        if child.id in adj_children:
-                            c_pix, c_pad = self._apply_filters_padded(
-                                c_pix, adj_children[child.id])
-                            if c_pad > 0:
-                                c_pos = (child.position[0] - c_pad,
-                                         child.position[1] - c_pad)
-                        c_placed = self._place_pixels(c_pix, c_pos, w, h)
+                        c_pix, c_pos = self._layer_pixels_for_canvas(
+                            child, w, h, origin_x, origin_y, adj_children,
+                        )
+                        c_placed = self._place_pixels(c_pix, c_pos, w, h, origin_x, origin_y)
                         c_placed[..., 3:4] *= parent_placed[..., 3:4]
                         c_placed_mask = (
-                            self._place_mask_combined(child, stack, w, h)
+                            self._place_mask_combined(child, stack, w, h, origin_x, origin_y)
                             if c_mask is not None else None
                         )
                         self._blending.blend_region_inplace(
@@ -562,10 +602,72 @@ class Compositor:
             return (min_x, min_y, max_x, max_y) if found else None
         try:
             lx, ly = layer.position
-            lh, lw = layer.pixels.shape[:2]
+            lw = int(layer.width)
+            lh = int(layer.height)
             return (float(lx), float(ly), float(lx + lw), float(ly + lh))
-        except (AttributeError, IndexError):
+        except (AttributeError, IndexError, TypeError, ValueError):
             return None
+
+    def _layer_pixels_for_canvas(
+        self,
+        layer: Layer,
+        canvas_w: int,
+        canvas_h: int,
+        origin_x: int,
+        origin_y: int,
+        adj_children: dict,
+    ) -> tuple[np.ndarray | None, tuple[int, int]]:
+        position = layer.position
+        child_processors = adj_children.get(layer.id, [])
+        region_styles_supported = (not layer.styles) or StyleEngine.can_apply_styles_regionally(layer.styles)
+        region_processors_supported = (not child_processors) or self._processors_support_region_rendering(child_processors)
+        style_padding = StyleEngine.style_region_padding(layer.styles) if layer.styles else 0
+        processor_padding = self._processors_region_padding(child_processors) if child_processors else 0
+        effect_padding = style_padding + processor_padding
+        if (
+            self._quality_mode == "preview"
+            and
+            layer.layer_type != LayerType.GROUP
+            and region_styles_supported
+            and region_processors_supported
+            and layer.can_decode_display_roi()
+        ):
+            decoded = layer.decode_display_roi_padded(
+                origin_x - effect_padding,
+                origin_y - effect_padding,
+                canvas_w + effect_padding * 2,
+                canvas_h + effect_padding * 2,
+                position=position,
+            )
+            if decoded is not None:
+                pixels, position = decoded
+                offset_x = position[0] - layer.position[0]
+                offset_y = position[1] - layer.position[1]
+                if layer.styles:
+                    pixels = StyleEngine.apply_styles_region(
+                        pixels,
+                        layer.styles,
+                        offset_x,
+                        offset_y,
+                        int(layer.width),
+                        int(layer.height),
+                    )
+                pixels = self._apply_channels(pixels, layer)
+                if child_processors:
+                    pixels = self._apply_region_processors(pixels, child_processors)
+                return pixels, position
+
+        pixels = layer.pixels
+        if layer.styles:
+            pixels = StyleEngine.apply_styles(pixels, layer.styles)
+        pixels = self._apply_channels(pixels, layer)
+        if layer.id in adj_children:
+            pixels, pad = self._apply_filters_padded(
+                pixels, adj_children[layer.id],
+            )
+            if pad > 0:
+                position = (layer.position[0] - pad, layer.position[1] - pad)
+        return pixels, position
 
     def _get_layer_pixels(self, layer: Layer, stack: LayerStack,
                           adj_children: dict) -> np.ndarray | None:
@@ -661,16 +763,35 @@ class Compositor:
         return canvas
 
     @staticmethod
+    def _placement_rect(
+        src_w: int,
+        src_h: int,
+        pos_x: int,
+        pos_y: int,
+        origin_x: int,
+        origin_y: int,
+        canvas_w: int,
+        canvas_h: int,
+    ) -> tuple[int, int, int, int, int, int]:
+        sx = max(0, origin_x - pos_x)
+        sy = max(0, origin_y - pos_y)
+        dx = max(0, pos_x - origin_x)
+        dy = max(0, pos_y - origin_y)
+        width = min(src_w - sx, canvas_w - dx)
+        height = min(src_h - sy, canvas_h - dy)
+        return sx, sy, dx, dy, max(0, width), max(0, height)
+
+    @staticmethod
     def _place_pixels(pixels: np.ndarray, position: tuple[int, int],
-                      cw: int, ch: int) -> np.ndarray:
+                      cw: int, ch: int,
+                      origin_x: int = 0, origin_y: int = 0) -> np.ndarray:
         """Place arbitrary pixel data at *position* onto a canvas-sized array."""
         canvas = np.zeros((ch, cw, 4), dtype=np.float32)
         lx, ly = position
         lh, lw = pixels.shape[:2]
-        sx, sy = max(0, -lx), max(0, -ly)
-        dx, dy = max(0, lx), max(0, ly)
-        w = min(lw - sx, cw - dx)
-        h = min(lh - sy, ch - dy)
+        sx, sy, dx, dy, w, h = Compositor._placement_rect(
+            lw, lh, lx, ly, origin_x, origin_y, cw, ch,
+        )
         if w > 0 and h > 0:
             canvas[dy : dy + h, dx : dx + w] = pixels[sy : sy + h, sx : sx + w]
         return canvas
@@ -691,7 +812,8 @@ class Compositor:
         return canvas
 
     def _place_mask_combined(self, layer: Layer, stack: LayerStack,
-                             cw: int, ch: int) -> np.ndarray | None:
+                             cw: int, ch: int,
+                             origin_x: int = 0, origin_y: int = 0) -> np.ndarray | None:
         """Place the combined mask (legacy + mask layers) onto a canvas."""
         combined = self._get_effective_mask(layer, stack)
         if combined is None:
@@ -699,10 +821,9 @@ class Compositor:
         canvas = np.zeros((ch, cw), dtype=np.float32)
         lx, ly = layer.position
         mh, mw = combined.shape[:2]
-        sx, sy = max(0, -lx), max(0, -ly)
-        dx, dy = max(0, lx), max(0, ly)
-        w = min(mw - sx, cw - dx)
-        h = min(mh - sy, ch - dy)
+        sx, sy, dx, dy, w, h = self._placement_rect(
+            mw, mh, lx, ly, origin_x, origin_y, cw, ch,
+        )
         if w > 0 and h > 0:
             canvas[dy : dy + h, dx : dx + w] = combined[sy : sy + h, sx : sx + w]
         return canvas

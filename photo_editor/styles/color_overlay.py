@@ -49,3 +49,16 @@ class ColorOverlay(LayerStyle):
             out[:, :, c] = img[:, :, c] * (1.0 - t) + blended[:, :, c] * t
 
         return np.clip(out, 0, 1)
+
+    def supports_region_rendering(self) -> bool:
+        return True
+
+    def apply_region(
+        self,
+        layer_image: np.ndarray,
+        offset_x: int,
+        offset_y: int,
+        full_width: int,
+        full_height: int,
+    ) -> np.ndarray:
+        return self.apply(layer_image)

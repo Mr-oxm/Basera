@@ -290,7 +290,7 @@ def rasterize_vector_layer_tight(
             union = union.union(obj.bbox())
 
     if union.is_empty:
-        layer._pixels = np.zeros((1, 1, 4), dtype=np.float32)
+        layer.pixels = np.zeros((1, 1, 4), dtype=np.float32)
         layer.position = (0, 0)
         layer._pixels_dirty = False
         return

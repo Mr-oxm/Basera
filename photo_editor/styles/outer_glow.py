@@ -65,3 +65,14 @@ class OuterGlow(LayerStyle):
             out[:, :, c][mask] /= out[:, :, 3][mask]
 
         return np.clip(out, 0, 1)
+
+    def supports_region_rendering(self) -> bool:
+        return True
+
+    def region_padding(self) -> int:
+        size = int(self.params.extra.get("size", 10))
+        spread = float(self.params.extra.get("spread", 0))
+        return max(size * 2 + 1, int(size * spread) + size + 1)
+
+    def apply_region(self, layer_image: np.ndarray, offset_x: int, offset_y: int, full_width: int, full_height: int) -> np.ndarray:
+        return self.apply(layer_image)

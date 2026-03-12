@@ -59,3 +59,6 @@ class Filter(ImageProcessor):
         rgb = pm_blurred[..., :3] / safe_alpha
         rgb = np.clip(rgb, 0.0, 1.0)
         return np.concatenate([rgb, np.clip(out_alpha, 0.0, 1.0)], axis=-1).astype(np.float32)
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return False

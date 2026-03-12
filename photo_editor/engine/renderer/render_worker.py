@@ -30,7 +30,7 @@ class RenderCommand:
 class _RenderWorkerSignals(QObject):
     """Signals emitted when render completes (thread-safe)."""
 
-    finished = Signal(object, int, bool)  # (uint8_rgba, generation_id, full_refresh)
+    finished = Signal(object, int, bool, bool)  # (uint8_rgba, generation_id, full_refresh, full_resolution)
     error = Signal(str)
 
 
@@ -57,16 +57,18 @@ class RenderWorker(QRunnable):
     def run(self) -> None:
         try:
             result = self._do_render()
-            self.signals.finished.emit(result, self._generation_id, self._full_refresh)
+            self.signals.finished.emit(
+                result,
+                self._generation_id,
+                self._full_refresh,
+                self._command.full_resolution,
+            )
         except Exception as exc:
             self.signals.error.emit(str(exc))
 
     def _do_render(self) -> np.ndarray:
         """Execute render and return uint8 RGBA."""
-        self._pipeline.invalidate()
-        rgba_float = self._pipeline.execute(self._document)
-        # Convert to uint8
-        rgba_u8 = np.clip(rgba_float * 255, 0, 255).astype(np.uint8)
+        rgba_u8 = self._pipeline.execute_to_uint8(self._document)
 
         if not self._command.full_resolution and self._command.preview_max_size > 0:
             rgba_u8 = self._downsample_to_preview(rgba_u8)

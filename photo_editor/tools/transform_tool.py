@@ -46,7 +46,7 @@ class TransformTool(Tool):
         layer.init_non_destructive()
 
         self._start_x, self._start_y = x, y
-        h, w = layer.pixels.shape[:2]
+        h, w = int(layer.height), int(layer.width)
         lx, ly = layer.position
         self._center_x = lx + w / 2.0
         self._center_y = ly + h / 2.0

@@ -92,3 +92,18 @@ class Stroke(LayerStyle):
             out[:, :, c][mask] /= out[:, :, 3][mask]
 
         return np.clip(out, 0, 1)
+
+    def supports_region_rendering(self) -> bool:
+        return True
+
+    def region_padding(self) -> int:
+        size = max(int(self.params.extra.get("size", 3)), 1)
+        position = str(self.params.extra.get("position", "outside")).lower()
+        if position == "inside":
+            return size
+        if position == "center":
+            return max(size // 2, 1)
+        return size
+
+    def apply_region(self, layer_image: np.ndarray, offset_x: int, offset_y: int, full_width: int, full_height: int) -> np.ndarray:
+        return self.apply(layer_image)

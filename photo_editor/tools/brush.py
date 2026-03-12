@@ -137,24 +137,60 @@ class BrushTool(Tool):
         step = max(1.0, radius * 2 * self.spacing)
         sel_mask = self._get_sel_mask(doc)
         paint_color = self._get_paint_color(layer)
+        self._capture_patch_stroke(doc, x0, y0, x1, y1, radius)
+        local_left = min(x0, x1) - lx - radius
+        local_top = min(y0, y1) - ly - radius
+        local_right = max(x0, x1) - lx + radius + 1
+        local_bottom = max(y0, y1) - ly + radius + 1
 
         # Check for active brush tip
         tip = self._get_active_tip()
 
-        if tip is not None:
-            # Use preset tip image
-            tip_size = max(1, int(self.size * pressure))
-            for px, py in self._stroke_points(x0, y0, x1, y1, step):
-                self._stamp_tip(layer.pixels, px - lx, py - ly,
-                                tip, tip_size, paint_color,
-                                eff_opacity, hardness=self.hardness,
-                                sel_mask=sel_mask)
-        else:
-            # Fallback to circular dab
-            for px, py in self._stroke_points(x0, y0, x1, y1, step):
-                self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
-                                   paint_color, self.hardness, eff_opacity,
-                                   sel_mask=sel_mask)
+        def paint_into(target: np.ndarray, offset_x: int, offset_y: int) -> None:
+            local_sel = None
+            if sel_mask is not None:
+                local_sel = sel_mask[offset_y:offset_y + target.shape[0], offset_x:offset_x + target.shape[1]]
+            if tip is not None:
+                tip_size = max(1, int(self.size * pressure))
+                for px, py in self._stroke_points(x0, y0, x1, y1, step):
+                    self._stamp_tip(
+                        target,
+                        px - lx - offset_x,
+                        py - ly - offset_y,
+                        tip,
+                        tip_size,
+                        paint_color,
+                        eff_opacity,
+                        hardness=self.hardness,
+                        sel_mask=local_sel,
+                    )
+            else:
+                for px, py in self._stroke_points(x0, y0, x1, y1, step):
+                    self._stamp_circle(
+                        target,
+                        px - lx - offset_x,
+                        py - ly - offset_y,
+                        radius,
+                        paint_color,
+                        self.hardness,
+                        eff_opacity,
+                        sel_mask=local_sel,
+                    )
+
+        if layer.can_mutate_display_region_locally():
+            decoded = layer.read_display_region_float(
+                local_left,
+                local_top,
+                local_right - local_left,
+                local_bottom - local_top,
+            )
+            if decoded is not None:
+                region, (region_x, region_y) = decoded
+                paint_into(region, region_x, region_y)
+                layer.write_display_region_float(region_x, region_y, region)
+                return
+
+        paint_into(layer.pixels, 0, 0)
 
     # ------------------------------------------------------------------
     # Tool interface
@@ -162,7 +198,7 @@ class BrushTool(Tool):
 
     def on_press(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         self._rasterize_if_needed(doc)
-        doc.save_snapshot("Brush Stroke")
+        self._begin_destructive_patch(doc, "Brush Stroke")
         self._drawing = True
         self._last_x, self._last_y = x, y
         # Initial dab at the press point
@@ -176,3 +212,4 @@ class BrushTool(Tool):
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         self._drawing = False
+        self._commit_destructive_patch(doc)

@@ -50,3 +50,14 @@ def test_main_window_launch(qtbot):
     w.show()
     w.close()
     assert w.isHidden() or not w.isVisible()
+
+
+def test_main_window_preview_budget_tracks_viewport(qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w._canvas.resize(400, 300)
+
+    size = w._effective_preview_max_size()
+
+    assert 512 <= size <= 2048
+    assert size == 750

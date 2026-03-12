@@ -61,10 +61,13 @@ def point_on_layer(
 
     # --- Raster / shape layers: pixel alpha test ----------------------
     px, py = x - lx, y - ly
-    h, w = layer.pixels.shape[:2]
+    h, w = int(layer.height), int(layer.width)
     if px < 0 or px >= w or py < 0 or py >= h:
         return False
-    return float(layer.pixels[py, px, 3]) >= alpha_threshold
+    pixel = layer.read_display_pixel_float(px, py)
+    if pixel is None:
+        return False
+    return float(pixel[3]) >= alpha_threshold
 
 
 def find_layer_at(

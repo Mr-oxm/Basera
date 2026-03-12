@@ -67,3 +67,16 @@ class MotionBlur(Filter):
         blurred = cv2.filter2D(pm, -1, kernel)
 
         return self._unpremultiply(blurred, orig_alpha, preserve)
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return True
+
+    def region_padding(self, params: dict | None = None) -> int:
+        params = params or {}
+        distance = int(params.get("distance", self.default_params["distance"]))
+        distance = max(1, min(distance, 200))
+        return distance + 2
+
+    def expands_bounds(self, params: dict | None = None) -> bool:
+        params = params or {}
+        return not bool(params.get("preserve_alpha", self.default_params["preserve_alpha"]))

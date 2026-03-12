@@ -35,9 +35,17 @@ class TileCache:
         return self._tiles.get(key)
 
     def invalidate_region(self, x: int, y: int, w: int, h: int) -> None:
-        for ty in range(y, y + h, self.tile_size):
-            for tx in range(x, x + w, self.tile_size):
-                key = (tx - tx % self.tile_size, ty - ty % self.tile_size)
+        if w <= 0 or h <= 0:
+            return
+        start_tx = x - x % self.tile_size
+        start_ty = y - y % self.tile_size
+        end_x = x + w - 1
+        end_y = y + h - 1
+        end_tx = end_x - end_x % self.tile_size
+        end_ty = end_y - end_y % self.tile_size
+        for ty in range(start_ty, end_ty + 1, self.tile_size):
+            for tx in range(start_tx, end_tx + 1, self.tile_size):
+                key = (tx, ty)
                 if key in self._tiles:
                     self._tiles[key].dirty = True
 

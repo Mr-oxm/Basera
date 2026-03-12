@@ -18,6 +18,15 @@ class ImageProcessor(ABC):
     def apply(self, image: np.ndarray, params: dict) -> np.ndarray:
         """Process an RGBA float32 image and return a new RGBA float32 image."""
 
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return False
+
+    def region_padding(self, params: dict | None = None) -> int:
+        return 0
+
+    def expands_bounds(self, params: dict | None = None) -> bool:
+        return False
+
     def get_defaults(self) -> dict:
         return dict(self.default_params)
 

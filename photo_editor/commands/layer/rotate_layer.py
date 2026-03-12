@@ -50,6 +50,7 @@ class RotateLayerCommand(Command):
         layer = document.layers.get(self.layer_id)
         if layer is None or layer.locked:
             return
+        before = document.layer_visual_bounds(layer.id)
 
         if layer.layer_type == LayerType.RASTER:
             if self.absolute:
@@ -64,6 +65,8 @@ class RotateLayerCommand(Command):
             )
             self._rotate_vector_layer(document, layer, delta,
                                       self.pivot[0], self.pivot[1])
+
+        document.mark_region_pair_dirty(before, document.layer_visual_bounds(layer.id))
 
         # NOTE: snapshot / mark_dirty are the caller's responsibility so
         # that interactive use doesn't deep-copy all layers on every frame.

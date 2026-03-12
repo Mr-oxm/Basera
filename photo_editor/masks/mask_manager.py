@@ -100,14 +100,16 @@ class MaskManager:
     def invert_mask_layer(layer: Layer) -> None:
         """Invert a MASK layer's pixel data (white ↔ black)."""
         if layer.layer_type == LayerType.MASK:
-            layer._pixels[..., :3] = 1.0 - layer._pixels[..., :3]
+            pixels = layer.ensure_pixels_float()
+            pixels[..., :3] = 1.0 - pixels[..., :3]
 
     @staticmethod
     def fill_mask_layer(layer: Layer, value: float = 1.0) -> None:
         """Fill a MASK layer with a uniform gray value."""
         if layer.layer_type == LayerType.MASK:
-            layer._pixels[..., :3] = value
-            layer._pixels[..., 3] = 1.0
+            pixels = layer.ensure_pixels_float()
+            pixels[..., :3] = value
+            pixels[..., 3] = 1.0
 
     @staticmethod
     def get_combined_mask(layer: Layer, stack) -> np.ndarray | None:
@@ -119,7 +121,11 @@ class MaskManager:
         """
         import cv2
 
-        target_h, target_w = layer.pixels.shape[:2]
+        if (layer.mask is None or not layer.mask_enabled) and not layer.mask_layers:
+            return None
+
+        target_h = int(layer.height)
+        target_w = int(layer.width)
         masks: list[np.ndarray] = []
 
         # Legacy single mask

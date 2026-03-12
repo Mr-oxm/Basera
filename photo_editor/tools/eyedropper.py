@@ -25,9 +25,11 @@ class EyedropperTool(Tool):
             return
         lx, ly = layer.position
         px, py = x - lx, y - ly
-        h, w = layer.pixels.shape[:2]
+        h, w = int(layer.height), int(layer.width)
         if 0 <= px < w and 0 <= py < h:
-            color = layer.pixels[py, px].copy()
+            color = layer.read_display_pixel_float(px, py)
+            if color is None:
+                return
             if self._color_callback is not None:
                 self._color_callback(color)
 

@@ -24,6 +24,8 @@ class Document:
         self.history = HistoryManager()
         self.selection = Selection(width, height)
         self._dirty = False
+        self._active_tile_patch: dict | None = None
+        self._pending_dirty_region: tuple[int, int, int, int] | None = None
 
         bg = Layer(name="Background", width=width, height=height)
         bg.pixels[:] = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
@@ -420,6 +422,11 @@ class Document:
             self._dirty = True
 
     def undo(self) -> None:
+        current = self.history.current()
+        if current is not None and self._is_tile_patch_state(current):
+            self._restore(current, tile_patch_mode="before")
+            self.history._index -= 1
+            return
         if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
             self._save_live_state()
         state = self.history.undo()
@@ -427,6 +434,13 @@ class Document:
             self._restore(state)
 
     def redo(self) -> None:
+        next_index = self.history._index + 1
+        if 0 <= next_index < len(self.history.states):
+            next_state = self.history.states[next_index]
+            if self._is_tile_patch_state(next_state):
+                self.history._index = next_index
+                self._restore(next_state, tile_patch_mode="after")
+                return
         # Redo doesn't need to save live, because if we can redo, we are NOT at the end
         state = self.history.redo()
         if state:
@@ -435,30 +449,288 @@ class Document:
     def navigate_history(self, target_index: int) -> None:
         """Jump to a specific history state by index."""
         if self.history.current_index == len(self.history.states) and getattr(self, "history").states[-1].name != "__Live__":
-            self._save_live_state()
-            
+            last_state = self.history.states[-1]
+            if not self._is_tile_patch_state(last_state):
+                self._save_live_state()
+
         while self.history.current_index > target_index and self.history.can_undo:
-            self.history.undo()
+            self.undo()
         while self.history.current_index < target_index and self.history.can_redo:
-            self.history.redo()
+            self.redo()
         current = self.history.current()
         if current:
-            self._restore(current)
+            restore_mode = "after" if self._is_tile_patch_state(current) else "before"
+            self._restore(current, tile_patch_mode=restore_mode)
 
     def save_snapshot(self, action: str) -> None:
         self._snapshot(action)
 
-    def _snapshot(self, action: str) -> None:
+    @staticmethod
+    def _rect_from_bounds(
+        bounds: tuple[float, float, float, float] | None,
+    ) -> tuple[int, int, int, int] | None:
+        if bounds is None:
+            return None
+        x0, y0, x1, y1 = bounds
+        ix0 = int(np.floor(x0))
+        iy0 = int(np.floor(y0))
+        ix1 = int(np.ceil(x1))
+        iy1 = int(np.ceil(y1))
+        if ix1 <= ix0 or iy1 <= iy0:
+            return None
+        return (ix0, iy0, ix1 - ix0, iy1 - iy0)
+
+    def _layer_local_bounds(self, layer: Layer) -> tuple[int, int, int, int] | None:
+        try:
+            lx, ly = layer.position
+            lh, lw = layer.pixels.shape[:2]
+        except (AttributeError, IndexError, ValueError):
+            return None
+        if lw <= 0 or lh <= 0:
+            return None
+        return (int(lx), int(ly), int(lw), int(lh))
+
+    def _related_layer_ids(self, layer_id: str, out: set[str]) -> None:
+        if layer_id in out:
+            return
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return
+        out.add(layer_id)
+        for child_id in getattr(layer, "children", []):
+            self._related_layer_ids(child_id, out)
+        for mask_id in getattr(layer, "mask_layers", []):
+            self._related_layer_ids(mask_id, out)
+
+    def layer_visual_bounds(self, layer_id: str, include_related: bool = True) -> tuple[int, int, int, int] | None:
+        from .layer_stack import LayerStack
+
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return None
+
+        rect = self._rect_from_bounds(LayerStack._content_bounds(layer, self.layers))
+        if not include_related:
+            return rect or self._layer_local_bounds(layer)
+
+        related_ids: set[str] = set()
+        self._related_layer_ids(layer_id, related_ids)
+        merged = rect or self._layer_local_bounds(layer)
+        for related_id in related_ids:
+            related = self.layers.get(related_id)
+            if related is None or related_id == layer_id:
+                continue
+            merged = self._merge_rects(merged, self._layer_local_bounds(related))
+        return merged
+
+    def layers_visual_bounds(self, layer_ids: list[str] | set[str], include_related: bool = True) -> tuple[int, int, int, int] | None:
+        merged: tuple[int, int, int, int] | None = None
+        for layer_id in layer_ids:
+            merged = self._merge_rects(
+                merged,
+                self.layer_visual_bounds(layer_id, include_related=include_related),
+            )
+        return merged
+
+    def mark_region_pair_dirty(
+        self,
+        before: tuple[int, int, int, int] | None,
+        after: tuple[int, int, int, int] | None,
+    ) -> None:
+        merged = self._merge_rects(before, after)
+        if merged is not None:
+            self.mark_dirty_region(*merged)
+
+    @staticmethod
+    def _merge_rects(
+        first: tuple[int, int, int, int] | None,
+        second: tuple[int, int, int, int] | None,
+    ) -> tuple[int, int, int, int] | None:
+        if first is None:
+            return second
+        if second is None:
+            return first
+        x0 = min(first[0], second[0])
+        y0 = min(first[1], second[1])
+        x1 = max(first[0] + first[2], second[0] + second[2])
+        y1 = max(first[1] + first[3], second[1] + second[3])
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def begin_layer_tile_patch(self, action: str, layer_id: str, tile_size: int = 256) -> None:
+        self._active_tile_patch = {
+            "action": action,
+            "layer_id": layer_id,
+            "tile_size": max(1, int(tile_size)),
+            "before_tiles": {},
+            "after_tiles": {},
+            "dirty_region": None,
+        }
+
+    def discard_layer_tile_patch(self) -> None:
+        self._active_tile_patch = None
+
+    def capture_layer_tile_region(
+        self,
+        layer: Layer,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> None:
+        patch = self._active_tile_patch
+        if patch is None or patch.get("layer_id") != layer.id:
+            return
+        if width <= 0 or height <= 0:
+            return
+
+        lh, lw = int(layer.height), int(layer.width)
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(lw, x + width)
+        y1 = min(lh, y + height)
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        tile_size = patch["tile_size"]
+        before_tiles: dict[tuple[int, int], np.ndarray] = patch["before_tiles"]
+        for ty in range((y0 // tile_size) * tile_size, y1, tile_size):
+            for tx in range((x0 // tile_size) * tile_size, x1, tile_size):
+                tw = min(tile_size, lw - tx)
+                th = min(tile_size, lh - ty)
+                key = (tx, ty)
+                if key not in before_tiles:
+                    region = layer.read_display_region_float(tx, ty, tw, th)
+                    if region is None:
+                        continue
+                    before_tiles[key] = region[0].copy()
+
+        local_rect = (x0, y0, x1 - x0, y1 - y0)
+        patch["dirty_region"] = self._merge_rects(patch["dirty_region"], local_rect)
+        self.mark_dirty_region(layer.position[0] + x0, layer.position[1] + y0, x1 - x0, y1 - y0)
+
+    def capture_layer_tile_pixels(
+        self,
+        layer: Layer,
+        source_pixels: np.ndarray,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        compare_pixels: np.ndarray | None = None,
+    ) -> None:
+        patch = self._active_tile_patch
+        if patch is None or patch.get("layer_id") != layer.id:
+            return
+        if width <= 0 or height <= 0:
+            return
+
+        lh, lw = source_pixels.shape[:2]
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(lw, x + width)
+        y1 = min(lh, y + height)
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        tile_size = patch["tile_size"]
+        before_tiles: dict[tuple[int, int], np.ndarray] = patch["before_tiles"]
+        dirty_local: tuple[int, int, int, int] | None = None
+        for ty in range((y0 // tile_size) * tile_size, y1, tile_size):
+            for tx in range((x0 // tile_size) * tile_size, x1, tile_size):
+                tw = min(tile_size, lw - tx)
+                th = min(tile_size, lh - ty)
+                if compare_pixels is not None:
+                    before_tile = source_pixels[ty:ty + th, tx:tx + tw]
+                    after_tile = compare_pixels[ty:ty + th, tx:tx + tw]
+                    if np.array_equal(before_tile, after_tile):
+                        continue
+                key = (tx, ty)
+                if key not in before_tiles:
+                    before_tiles[key] = source_pixels[ty:ty + th, tx:tx + tw].copy()
+                dirty_local = self._merge_rects(dirty_local, (tx, ty, tw, th))
+
+        if dirty_local is None:
+            return
+        patch["dirty_region"] = self._merge_rects(patch["dirty_region"], dirty_local)
+        self.mark_dirty_region(
+            layer.position[0] + dirty_local[0],
+            layer.position[1] + dirty_local[1],
+            dirty_local[2],
+            dirty_local[3],
+        )
+
+    def commit_layer_tile_patch(self) -> bool:
+        patch = self._active_tile_patch
+        self._active_tile_patch = None
+        if patch is None:
+            return False
+
+        before_tiles: dict[tuple[int, int], np.ndarray] = patch["before_tiles"]
+        if not before_tiles:
+            return False
+
+        state = HistoryState(name=patch["action"])
+        layer_id = patch["layer_id"]
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return False
+        after_tiles: dict[tuple[int, int], np.ndarray] = patch["after_tiles"]
+        tile_entries: list[tuple[int, int, int, int]] = []
+        for (tx, ty), data in sorted(before_tiles.items()):
+            th, tw = data.shape[:2]
+            tile_entries.append((tx, ty, tw, th))
+            state.layer_data[f"_tile_before_{layer_id}_{tx}_{ty}"] = data
+            if (tx, ty) not in after_tiles:
+                region = layer.read_display_region_float(tx, ty, tw, th)
+                if region is None:
+                    continue
+                after_tiles[(tx, ty)] = region[0].copy()
+            state.layer_data[f"_tile_after_{layer_id}_{tx}_{ty}"] = after_tiles[(tx, ty)]
+        state.metadata["_tile_patch"] = {
+            "layer_id": layer_id,
+            "tile_size": patch["tile_size"],
+            "tiles": tile_entries,
+        }
+        state.metadata["_active_index"] = self.layers.active_index
+        state.metadata["_selected_indices"] = sorted(self.layers.selected_indices)
+        self.history.push(state)
+        self._dirty = True
+        return True
+
+    def mark_dirty_region(self, x: int, y: int, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            return
+        self._pending_dirty_region = self._merge_rects(
+            self._pending_dirty_region,
+            (x, y, width, height),
+        )
+
+    def consume_dirty_region(self) -> tuple[int, int, int, int] | None:
+        region = self._pending_dirty_region
+        self._pending_dirty_region = None
+        return region
+
+    def save_metadata_snapshot(self, action: str) -> None:
+        """Save a lightweight history state for metadata-only edits.
+
+        This is used for operations like layer translation where pixel data
+        is unchanged and a full-image snapshot would waste large amounts of
+        memory.
+        """
+        self._snapshot(action, include_pixels=False)
+
+    def _snapshot(self, action: str, include_pixels: bool = True) -> None:
         state = HistoryState(name=action)
         # Save pixel data and mask data for every layer
-        for layer in self.layers:
-            state.layer_data[layer.id] = layer.pixels.copy()
-            if layer._source_pixels is not None:
-                state.layer_data[f"_src_{layer.id}"] = layer._source_pixels.copy()
-            if layer._source_mask is not None:
-                state.layer_data[f"_srcmask_{layer.id}"] = layer._source_mask.copy()
-            if layer._mask is not None:
-                state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
+        if include_pixels:
+            for layer in self.layers:
+                state.layer_data[layer.id] = layer.pixels.copy()
+                if layer._source_pixels is not None:
+                    state.layer_data[f"_src_{layer.id}"] = layer._source_pixels.copy()
+                if layer._source_mask is not None:
+                    state.layer_data[f"_srcmask_{layer.id}"] = layer._source_mask.copy()
+                if layer._mask is not None:
+                    state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
         # Save the full layer structure so add/remove can be undone
         layer_metas = []
         for layer in self.layers:
@@ -501,16 +773,59 @@ class Document:
         state.metadata["_layer_order"] = [l.id for l in self.layers]
         state.metadata["_layer_meta"] = {m["id"]: m for m in layer_metas}
         state.metadata["_active_index"] = self.layers.active_index
+        state.metadata["_selected_indices"] = sorted(self.layers.selected_indices)
         state.metadata["_doc_width"] = self.width
         state.metadata["_doc_height"] = self.height
+        state.metadata["_pixel_snapshot"] = include_pixels
         # Save selection mask
-        if self.selection._mask is not None:
+        if include_pixels and self.selection._mask is not None:
             state.layer_data["__selection_mask__"] = self.selection._mask.copy()
         self.history.push(state)
 
-    def _restore(self, state: HistoryState) -> None:
+    @staticmethod
+    def _is_tile_patch_state(state: HistoryState | None) -> bool:
+        return state is not None and state.metadata.get("_tile_patch") is not None
+
+    def _restore(self, state: HistoryState, tile_patch_mode: str = "before") -> None:
+        tile_patch = state.metadata.get("_tile_patch")
+        if tile_patch is not None:
+            layer = self.layers.get(tile_patch.get("layer_id"))
+            if layer is not None:
+                dirty_region: tuple[int, int, int, int] | None = None
+                for tx, ty, tw, th in tile_patch.get("tiles", []):
+                    key = f"_tile_{tile_patch_mode}_{layer.id}_{tx}_{ty}"
+                    data = state.layer_data.get(key)
+                    if data is None:
+                        continue
+                    layer.pixels[ty:ty + th, tx:tx + tw] = data
+                    dirty_region = self._merge_rects(dirty_region, (tx, ty, tw, th))
+                self.layers.active_index = state.metadata.get("_active_index", self.layers.active_index)
+                selected_indices = {
+                    int(index) for index in state.metadata.get("_selected_indices", [])
+                    if 0 <= int(index) < len(self.layers.layers)
+                }
+                if selected_indices:
+                    self.layers._selected_indices = selected_indices
+                    if self.layers.active_index not in selected_indices:
+                        self.layers._active_index = max(selected_indices)
+                elif self.layers.active_index >= 0:
+                    self.layers._selected_indices = {self.layers.active_index}
+                else:
+                    self.layers._selected_indices = set()
+                if dirty_region is not None:
+                    self.mark_dirty_region(
+                        layer.position[0] + dirty_region[0],
+                        layer.position[1] + dirty_region[1],
+                        dirty_region[2],
+                        dirty_region[3],
+                    )
+                self._dirty = True
+            return
+
         order: list[str] | None = state.metadata.get("_layer_order")
         meta_map: dict | None = state.metadata.get("_layer_meta")
+        include_pixels = state.metadata.get("_pixel_snapshot", True)
+        existing_layers = {layer.id: layer for layer in self.layers}
 
         if order is not None and meta_map is not None:
             # Rebuild the layer stack from the snapshot
@@ -545,16 +860,25 @@ class Document:
                 # Restore pixel data
                 if lid in state.layer_data:
                     layer.pixels = state.layer_data[lid].copy()
+                elif not include_pixels and lid in existing_layers:
+                    existing = existing_layers[lid]
+                    layer.pixels = existing.pixels.copy()
                 src_key = f"_src_{lid}"
                 if src_key in state.layer_data:
                     layer._source_pixels = state.layer_data[src_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._source_pixels is not None:
+                    layer._source_pixels = existing_layers[lid]._source_pixels.copy()
                 srcmask_key = f"_srcmask_{lid}"
                 if srcmask_key in state.layer_data:
                     layer._source_mask = state.layer_data[srcmask_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._source_mask is not None:
+                    layer._source_mask = existing_layers[lid]._source_mask.copy()
                 # Restore mask data
                 mask_key = f"_mask_{lid}"
                 if mask_key in state.layer_data:
                     layer._mask = state.layer_data[mask_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._mask is not None:
+                    layer._mask = existing_layers[lid]._mask.copy()
                 # Restore text layer data
                 td_dict = meta.get("_text_data")
                 if td_dict is not None:
@@ -582,6 +906,14 @@ class Document:
                         pass
                 new_stack.add(layer)
             new_stack.active_index = state.metadata.get("_active_index", 0)
+            selected_indices = {
+                int(index) for index in state.metadata.get("_selected_indices", [])
+                if 0 <= int(index) < len(new_stack.layers)
+            }
+            if selected_indices:
+                new_stack._selected_indices = selected_indices
+                if new_stack.active_index not in selected_indices:
+                    new_stack._active_index = max(selected_indices)
             self.layers = new_stack
         else:
             # Legacy fallback: only pixel data & positions stored
@@ -591,6 +923,20 @@ class Document:
                 pos_key = f"pos_{layer.id}"
                 if pos_key in state.metadata:
                     layer.position = state.metadata[pos_key]
+            selected_indices = {
+                int(index) for index in state.metadata.get("_selected_indices", [])
+                if 0 <= int(index) < len(self.layers.layers)
+            }
+            if selected_indices:
+                self.layers._selected_indices = selected_indices
+                active_index = state.metadata.get("_active_index", self.layers.active_index)
+                if active_index in selected_indices:
+                    self.layers._active_index = active_index
+                else:
+                    self.layers._active_index = max(selected_indices)
+            else:
+                self.layers._selected_indices = set()
+                self.layers._active_index = state.metadata.get("_active_index", self.layers.active_index)
         # Restore document dimensions (canvas crop undo)
         saved_w = state.metadata.get("_doc_width")
         saved_h = state.metadata.get("_doc_height")
@@ -602,6 +948,8 @@ class Document:
         sel_key = "__selection_mask__"
         if sel_key in state.layer_data:
             self.selection._mask = state.layer_data[sel_key].copy()
+        elif not include_pixels:
+            pass
         else:
             self.selection._mask = None
         self._dirty = True

@@ -91,7 +91,8 @@ class ControllerContext:
         )
 
     def invalidate(self, layer_id: str | None = None) -> None:
-        self._main_window._pipeline.invalidate(layer_id)
+        self._main_window._interactive_pipeline.invalidate(layer_id)
+        self._main_window._final_pipeline.invalidate(layer_id)
 
     def execute_command(self, command: Command):
         return self._main_window.execute_command(command)

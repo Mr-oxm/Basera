@@ -152,9 +152,43 @@ class HealingBrushTool(Tool):
         radius = max(1, self.size // 2)
         step = max(1.0, radius * 0.5)
         sel_mask = self._get_sel_mask(doc)
+        self._capture_patch_stroke(doc, x0, y0, x1, y1, radius)
+        dest_left = min(x0, x1) - lx - radius
+        dest_top = min(y0, y1) - ly - radius
+        dest_right = max(x0, x1) - lx + radius + 1
+        dest_bottom = max(y0, y1) - ly + radius + 1
+        src_left = dest_left + self._offset_x
+        src_top = dest_top + self._offset_y
+        src_right = dest_right + self._offset_x
+        src_bottom = dest_bottom + self._offset_y
+        local_left = min(dest_left, src_left)
+        local_top = min(dest_top, src_top)
+        local_right = max(dest_right, src_right)
+        local_bottom = max(dest_bottom, src_bottom)
+
+        def mutate(target: np.ndarray, offset_x: int, offset_y: int) -> None:
+            local_sel = None
+            if sel_mask is not None:
+                local_sel = sel_mask[offset_y:offset_y + target.shape[0], offset_x:offset_x + target.shape[1]]
+            for px, py in self._stroke_points(x0, y0, x1, y1, step):
+                self._heal_patch(target, px - lx - offset_x, py - ly - offset_y, radius, sel_mask=local_sel)
+
+        if self._mutate_active_layer_local_region(
+            doc,
+            local_left,
+            local_top,
+            local_right,
+            local_bottom,
+            mutate,
+            write_left=dest_left,
+            write_top=dest_top,
+            write_right=dest_right,
+            write_bottom=dest_bottom,
+        ):
+            return
+
         for px, py in self._stroke_points(x0, y0, x1, y1, step):
-            self._heal_patch(layer.pixels, px - lx, py - ly, radius,
-                             sel_mask=sel_mask)
+            self._heal_patch(layer.pixels, px - lx, py - ly, radius, sel_mask=sel_mask)
 
     # ------------------------------------------------------------------
     # Tool interface
@@ -164,7 +198,7 @@ class HealingBrushTool(Tool):
         if not self.source_set:
             return
         self._rasterize_if_needed(doc)
-        doc.save_snapshot("Healing Brush")
+        self._begin_destructive_patch(doc, "Healing Brush")
         if not self._offset_locked:
             self._offset_x = self.source_x - x
             self._offset_y = self.source_y - y
@@ -181,3 +215,4 @@ class HealingBrushTool(Tool):
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         self._drawing = False
+        self._commit_destructive_patch(doc)

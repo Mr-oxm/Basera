@@ -471,7 +471,7 @@ class TestTransformPropagation:
         layer.invalidate_transform()
         # Source pixels should still exist
         assert layer.source_pixels is not None
-        np.testing.assert_array_equal(layer.source_pixels, pix)
+        np.testing.assert_allclose(layer.source_pixels, pix, atol=1 / 255.0)
 
 
 # ═══════════════════════════════════════════════════════════════════

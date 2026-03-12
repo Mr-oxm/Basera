@@ -48,6 +48,7 @@ class ResizeLayerCommand(Command):
         layer = document.layers.get(self.layer_id)
         if layer is None or layer.locked:
             return
+        before = document.layer_visual_bounds(layer.id)
 
         lx, ly = layer.position
         lw, lh = layer.width, layer.height
@@ -75,6 +76,8 @@ class ResizeLayerCommand(Command):
             scale_y = self.new_h / lh if lh > 0 else 1
             self._scale_vector_layer(document, layer, scale_x, scale_y,
                                      pivot_x, pivot_y)
+
+        document.mark_region_pair_dirty(before, document.layer_visual_bounds(layer.id))
 
         # NOTE: snapshot / mark_dirty are the caller's responsibility so
         # that interactive use (e.g. drag-resize) doesn't pay the cost of

@@ -56,6 +56,8 @@ class SurfaceBlur(Filter):
         ksize = int(np.ceil(radius * 3)) | 1
         ksize = max(3, ksize)
         blurred_a = cv2.GaussianBlur(pm_u8[..., 3:4], (ksize, ksize), sigma_space)
+        if blurred_a.ndim == 2:
+            blurred_a = blurred_a[..., np.newaxis]
 
         blurred = np.concatenate(
             [blurred_rgb.astype(np.float32) / 255.0,
@@ -64,3 +66,16 @@ class SurfaceBlur(Filter):
         )
 
         return self._unpremultiply(blurred, orig_alpha, preserve)
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return True
+
+    def region_padding(self, params: dict | None = None) -> int:
+        params = params or {}
+        radius = int(params.get("radius", self.default_params["radius"]))
+        radius = max(1, min(radius, 100))
+        return radius * 2 + 2
+
+    def expands_bounds(self, params: dict | None = None) -> bool:
+        params = params or {}
+        return not bool(params.get("preserve_alpha", self.default_params["preserve_alpha"]))

@@ -9,3 +9,6 @@ class Adjustment(ImageProcessor):
     Each subclass implements ``apply`` which receives an RGBA float32
     image and a params dict, returning the adjusted image.
     """
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return True

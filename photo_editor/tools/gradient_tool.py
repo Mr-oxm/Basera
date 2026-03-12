@@ -45,6 +45,7 @@ class GradientTool(Tool):
         # ---- handle-editing state -------------------------------------------
         self._editing: bool = False
         self._dragging_handle: str | None = None   # "start" / "end" / None
+        self._handle_drag_origin: tuple[int, int, int, int] | None = None
         self._saved_pixels: np.ndarray | None = None
         self._target_layer = None
         self._layer_pos: tuple[int, int] = (0, 0)
@@ -180,13 +181,160 @@ class GradientTool(Tool):
     # ------------------------------------------------------------------
 
     def _apply_gradient(self, base: np.ndarray, gradient: np.ndarray) -> np.ndarray:
-        """Blend *gradient* onto *base* with current opacity."""
+        """Blend *gradient* onto *base* while preserving existing shape alpha."""
+        base_alpha = base[..., 3:4]
+        gradient_alpha = gradient[..., 3:4]
+        result = base.copy()
         if self.opacity < 1.0:
-            result = base * (1.0 - self.opacity) + gradient * self.opacity
+            result[..., :3] = base[..., :3] * (1.0 - self.opacity) + gradient[..., :3] * self.opacity
+            result[..., 3:4] = base_alpha * ((1.0 - self.opacity) + gradient_alpha * self.opacity)
         else:
-            result = gradient.copy()
+            result[..., :3] = gradient[..., :3]
+            result[..., 3:4] = base_alpha * gradient_alpha
         np.clip(result, 0.0, 1.0, out=result)
         return result
+
+    @staticmethod
+    def _content_bounds(base: np.ndarray) -> tuple[int, int, int, int] | None:
+        alpha = base[..., 3]
+        rows = np.any(alpha > 1e-4, axis=1)
+        cols = np.any(alpha > 1e-4, axis=0)
+        if not np.any(rows) or not np.any(cols):
+            return None
+        y0 = int(np.where(rows)[0][0])
+        y1 = int(np.where(rows)[0][-1]) + 1
+        x0 = int(np.where(cols)[0][0])
+        x1 = int(np.where(cols)[0][-1]) + 1
+        return (x0, y0, x1, y1)
+
+    def _render_applied_gradient(
+        self,
+        base: np.ndarray,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+        *,
+        downsample: bool = False,
+    ) -> np.ndarray:
+        bounds = self._content_bounds(base)
+        if bounds is None:
+            return base.copy()
+        bx0, by0, bx1, by1 = bounds
+        roi_base = base[by0:by1, bx0:bx1]
+        grad = self._render_gradient(
+            by1 - by0,
+            bx1 - bx0,
+            x0 - bx0,
+            y0 - by0,
+            x1 - bx0,
+            y1 - by0,
+            downsample=downsample,
+        )
+        result = base.copy()
+        result[by0:by1, bx0:bx1] = self._apply_gradient(roi_base, grad)
+        return result
+
+    def _content_dirty_rect(self) -> tuple[int, int, int, int] | None:
+        if self._saved_pixels is None:
+            return None
+        bounds = self._content_bounds(self._saved_pixels)
+        if bounds is None:
+            return None
+        bx0, by0, bx1, by1 = bounds
+        lx, ly = self._layer_pos
+        return (lx + bx0, ly + by0, bx1 - bx0, by1 - by0)
+
+    @staticmethod
+    def _merge_bounds(
+        first: tuple[int, int, int, int] | None,
+        second: tuple[int, int, int, int] | None,
+    ) -> tuple[int, int, int, int] | None:
+        if first is None:
+            return second
+        if second is None:
+            return first
+        ax0, ay0, ax1, ay1 = first
+        bx0, by0, bx1, by1 = second
+        return (
+            min(ax0, bx0),
+            min(ay0, by0),
+            max(ax1, bx1),
+            max(ay1, by1),
+        )
+
+    def _gradient_support_bounds(
+        self,
+        bounds: tuple[int, int, int, int],
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+    ) -> tuple[int, int, int, int]:
+        bx0, by0, bx1, by1 = bounds
+        if self.gradient_type == "radial":
+            radius = int(math.ceil(max(1.0, math.hypot(float(x1 - x0), float(y1 - y0)))))
+        elif self.gradient_type == "diamond":
+            radius = max(1, int(abs(x1 - x0) + abs(y1 - y0)))
+        else:
+            return bounds
+        return (
+            max(bx0, x0 - radius),
+            max(by0, y0 - radius),
+            min(bx1, x0 + radius + 1),
+            min(by1, y0 + radius + 1),
+        )
+
+    def _preview_roi_bounds(
+        self,
+        base: np.ndarray,
+        previous_handles: tuple[int, int, int, int] | None,
+        next_handles: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int] | None:
+        content_bounds = self._content_bounds(base)
+        if content_bounds is None:
+            return None
+        if self.gradient_type not in {"radial", "diamond"}:
+            return content_bounds
+        next_bounds = self._gradient_support_bounds(content_bounds, *next_handles)
+        previous_bounds = None
+        if previous_handles is not None:
+            previous_bounds = self._gradient_support_bounds(content_bounds, *previous_handles)
+        merged = self._merge_bounds(previous_bounds, next_bounds)
+        if merged is None:
+            return None
+        x0, y0, x1, y1 = merged
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return merged
+
+    def _apply_preview_gradient(
+        self,
+        layer,
+        base: np.ndarray,
+        previous_handles: tuple[int, int, int, int] | None,
+        next_handles: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int] | None:
+        roi_bounds = self._preview_roi_bounds(base, previous_handles, next_handles)
+        if roi_bounds is None:
+            return None
+        bx0, by0, bx1, by1 = roi_bounds
+        layer.write_display_region_float(bx0, by0, base[by0:by1, bx0:bx1])
+        grad = self._render_gradient(
+            by1 - by0,
+            bx1 - bx0,
+            next_handles[0] - bx0,
+            next_handles[1] - by0,
+            next_handles[2] - bx0,
+            next_handles[3] - by0,
+            downsample=True,
+        )
+        layer.write_display_region_float(
+            bx0,
+            by0,
+            self._apply_gradient(base[by0:by1, bx0:bx1], grad),
+        )
+        return (bx0, by0, bx1, by1)
 
     def _reapply_gradient(self) -> None:
         """Re-render gradient from saved pixels (handle-editing path)."""
@@ -196,13 +344,15 @@ class GradientTool(Tool):
         if layer.locked:
             return
         lx, ly = self._layer_pos
-        h, w = self._saved_pixels.shape[:2]
-        grad = self._render_gradient(
-            h, w,
-            self._start_x - lx, self._start_y - ly,
-            self._end_x - lx, self._end_y - ly,
+        layer.write_display_region_float(
+            0,
+            0,
+            self._render_applied_gradient(
+                self._saved_pixels,
+                self._start_x - lx, self._start_y - ly,
+                self._end_x - lx, self._end_y - ly,
+            ),
         )
-        layer.pixels[:] = self._apply_gradient(self._saved_pixels, grad)
         self._emit_handles(True)
         if self._preview_cb:
             self._preview_cb()
@@ -240,6 +390,12 @@ class GradientTool(Tool):
             hit = self._hit_handle(x, y)
             if hit:
                 self._dragging_handle = hit
+                self._handle_drag_origin = (
+                    self._start_x,
+                    self._start_y,
+                    self._end_x,
+                    self._end_y,
+                )
                 return
             # Click away from handles → start a new gradient
             self._editing = False
@@ -248,50 +404,119 @@ class GradientTool(Tool):
             self._emit_handles(False)
 
         # Begin new gradient drag
-        doc.save_snapshot("Gradient")
         self._start_x, self._start_y = x, y
         self._end_x, self._end_y = x, y
         self._dragging = True
         self._target_layer = layer
         self._layer_pos = layer.position
-        self._saved_pixels = layer.pixels.copy()
+        self._saved_pixels = layer.read_display_region_float(0, 0, int(layer.width), int(layer.height))[0]
 
     def on_move(self, doc: Document, x: int, y: int,
                 pressure: float = 1.0) -> None:
         # Handle drag
         if self._dragging_handle:
+            previous_handles = (self._start_x, self._start_y, self._end_x, self._end_y)
             if self._dragging_handle == "start":
                 self._start_x, self._start_y = x, y
             else:
                 self._end_x, self._end_y = x, y
-            self._reapply_gradient()
+            next_handles = (self._start_x, self._start_y, self._end_x, self._end_y)
+            if self._saved_pixels is not None and self._target_layer is not None:
+                lx, ly = self._layer_pos
+                roi = self._apply_preview_gradient(
+                    self._target_layer,
+                    self._saved_pixels,
+                    (previous_handles[0] - lx, previous_handles[1] - ly, previous_handles[2] - lx, previous_handles[3] - ly),
+                    (next_handles[0] - lx, next_handles[1] - ly, next_handles[2] - lx, next_handles[3] - ly),
+                )
+                if roi is not None:
+                    rx0, ry0, rx1, ry1 = roi
+                    doc.mark_dirty_region(lx + rx0, ly + ry0, rx1 - rx0, ry1 - ry0)
+                else:
+                    dirty_rect = self._content_dirty_rect()
+                    if dirty_rect is not None:
+                        doc.mark_dirty_region(*dirty_rect)
+                self._emit_handles(True)
+                if self._preview_cb:
+                    self._preview_cb()
+            else:
+                self._reapply_gradient()
             return
 
         if not self._dragging:
             return
-
-        self._end_x, self._end_y = x, y
 
         # Live preview — render gradient on layer from saved state
         layer = self._target_layer
         if layer is None or self._saved_pixels is None:
             return
         lx, ly = self._layer_pos
-        h, w = self._saved_pixels.shape[:2]
-        grad = self._render_gradient(
-            h, w,
-            self._start_x - lx, self._start_y - ly,
-            x - lx, y - ly,
-            downsample=True,
+        previous_handles = (
+            self._start_x - lx,
+            self._start_y - ly,
+            self._end_x - lx,
+            self._end_y - ly,
         )
-        layer.pixels[:] = self._apply_gradient(self._saved_pixels, grad)
+        next_handles = (
+            self._start_x - lx,
+            self._start_y - ly,
+            x - lx,
+            y - ly,
+        )
+        self._end_x, self._end_y = x, y
+        roi = self._apply_preview_gradient(layer, self._saved_pixels, previous_handles, next_handles)
+        if roi is not None:
+            rx0, ry0, rx1, ry1 = roi
+            doc.mark_dirty_region(lx + rx0, ly + ry0, rx1 - rx0, ry1 - ry0)
+        else:
+            layer.write_display_region_float(
+                0,
+                0,
+                self._render_applied_gradient(
+                    self._saved_pixels,
+                    self._start_x - lx, self._start_y - ly,
+                    x - lx, y - ly,
+                    downsample=True,
+                ),
+            )
+            dirty_rect = self._content_dirty_rect()
+            if dirty_rect is not None:
+                doc.mark_dirty_region(*dirty_rect)
         self._emit_handles(True)
         if self._preview_cb:
             self._preview_cb()
 
     def on_release(self, doc: Document, x: int, y: int) -> None:
         if self._dragging_handle:
+            layer = self._target_layer
+            if layer is not None and self._saved_pixels is not None and self._handle_drag_origin is not None:
+                old_start_x, old_start_y, old_end_x, old_end_y = self._handle_drag_origin
+                lx, ly = self._layer_pos
+                previous = self._render_applied_gradient(
+                    self._saved_pixels,
+                    old_start_x - lx, old_start_y - ly,
+                    old_end_x - lx, old_end_y - ly,
+                )
+                current = self._render_applied_gradient(
+                    self._saved_pixels,
+                    self._start_x - lx, self._start_y - ly,
+                    self._end_x - lx, self._end_y - ly,
+                )
+                if not np.array_equal(previous, current):
+                    self._begin_destructive_patch(doc, "Gradient Handle Edit")
+                    doc.capture_layer_tile_pixels(
+                        layer,
+                        previous,
+                        0,
+                        0,
+                        previous.shape[1],
+                        previous.shape[0],
+                        compare_pixels=current,
+                    )
+                    layer.write_display_region_float(0, 0, current)
+                    self._commit_destructive_patch(doc)
             self._dragging_handle = None
+            self._handle_drag_origin = None
             return
 
         if not self._dragging:
@@ -305,7 +530,7 @@ class GradientTool(Tool):
 
         # No actual drag — cancel
         if self._start_x == x and self._start_y == y:
-            layer.pixels[:] = self._saved_pixels
+            layer.write_display_region_float(0, 0, self._saved_pixels)
             self._saved_pixels = None
             self._target_layer = None
             self._emit_handles(False)
@@ -313,13 +538,26 @@ class GradientTool(Tool):
 
         # Final render
         lx, ly = self._layer_pos
-        h, w = self._saved_pixels.shape[:2]
-        grad = self._render_gradient(
-            h, w,
+        final_pixels = self._render_applied_gradient(
+            self._saved_pixels,
             self._start_x - lx, self._start_y - ly,
             x - lx, y - ly,
         )
-        layer.pixels[:] = self._apply_gradient(self._saved_pixels, grad)
+        if not np.array_equal(self._saved_pixels, final_pixels):
+            self._begin_destructive_patch(doc, "Gradient")
+            doc.capture_layer_tile_pixels(
+                layer,
+                self._saved_pixels,
+                0,
+                0,
+                final_pixels.shape[1],
+                final_pixels.shape[0],
+                compare_pixels=final_pixels,
+            )
+            layer.write_display_region_float(0, 0, final_pixels)
+            self._commit_destructive_patch(doc)
+        else:
+            layer.write_display_region_float(0, 0, final_pixels)
 
         # Keep saved state for handle editing
         self._editing = True

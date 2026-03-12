@@ -63,16 +63,35 @@ class PaintBucketTool(Tool):
         # Convert document coords to layer-local pixel coords
         lx, ly = layer.position
         px, py = x - lx, y - ly
-        h, w = layer.pixels.shape[:2]
+        h, w = int(layer.height), int(layer.width)
         if px < 0 or px >= w or py < 0 or py >= h:
             return
 
-        doc.save_snapshot("Paint Bucket Fill")
+        if layer.can_mutate_display_region_locally():
+            working_pixels = layer.read_display_region_float(0, 0, w, h)[0]
+        else:
+            working_pixels = layer.pixels
 
         if self.contiguous:
-            fill_mask = self._flood_fill_mask(layer.pixels, px, py, self.tolerance)
+            fill_mask = self._flood_fill_mask(working_pixels, px, py, self.tolerance)
         else:
-            fill_mask = self._global_tolerance_mask(layer.pixels, px, py, self.tolerance)
+            fill_mask = self._global_tolerance_mask(working_pixels, px, py, self.tolerance)
+
+        ys, xs = np.nonzero(fill_mask)
+        if xs.size == 0 or ys.size == 0:
+            return
+        min_x = int(xs.min())
+        max_x = int(xs.max())
+        min_y = int(ys.min())
+        max_y = int(ys.max())
+        self._begin_destructive_patch(doc, "Paint Bucket Fill")
+        doc.capture_layer_tile_region(
+            layer,
+            min_x,
+            min_y,
+            max_x - min_x + 1,
+            max_y - min_y + 1,
+        )
 
         mask = fill_mask.astype(np.float32)
         # Clip to selection
@@ -80,8 +99,15 @@ class PaintBucketTool(Tool):
         if sel_mask is not None:
             mask *= sel_mask
         mask = mask[..., np.newaxis] * self.opacity
-        layer.pixels[:] = layer.pixels * (1 - mask) + self.color * mask
-        np.clip(layer.pixels, 0, 1, out=layer.pixels)
+        region = working_pixels[min_y:max_y + 1, min_x:max_x + 1].copy()
+        region_mask = mask[min_y:max_y + 1, min_x:max_x + 1]
+        region[:] = region * (1 - region_mask) + self.color * region_mask
+        np.clip(region, 0, 1, out=region)
+        if layer.can_mutate_display_region_locally():
+            layer.write_display_region_float(min_x, min_y, region)
+        else:
+            layer.pixels[min_y:max_y + 1, min_x:max_x + 1] = region
+        self._commit_destructive_patch(doc)
 
     def on_move(self, doc: Document, x: int, y: int, pressure: float = 1.0) -> None:
         pass  # No drag behaviour

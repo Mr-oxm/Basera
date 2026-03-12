@@ -56,3 +56,12 @@ class UnsharpMask(Filter):
 
         result = rgb + strength * diff
         return self._merge(result, alpha)
+
+    def supports_region_rendering(self, params: dict | None = None) -> bool:
+        return True
+
+    def region_padding(self, params: dict | None = None) -> int:
+        params = params or {}
+        radius = float(params.get("radius", self.default_params["radius"]))
+        radius = max(0.1, min(radius, 250.0))
+        return int(radius * 3.0) + 4

@@ -300,6 +300,7 @@ class TransformPanel(QWidget):
         # Apply transformation
         if field in ('x', 'y'):
             # Translation
+            before = self._doc.layer_visual_bounds(layer.id)
             target_x = self.spin_x.value()
             target_y = self.spin_y.value()
             
@@ -316,6 +317,7 @@ class TransformPanel(QWidget):
             else:
                 # Update layer position for Raster
                 layer.position = (int(new_lx), int(new_ly))
+            self._doc.mark_region_pair_dirty(before, self._doc.layer_visual_bounds(layer.id))
 
         elif field in ('w', 'h'):
             # Scaling — dispatch through the command system
@@ -376,7 +378,9 @@ class TransformPanel(QWidget):
             # Shear
             delta_shear = new_val - old_val
             if layer.layer_type == LayerType.SHAPE:
+                 before = self._doc.layer_visual_bounds(layer.id)
                  self._shear_vector_layer(layer, delta_shear, pivot_x, pivot_y)
+                 self._doc.mark_region_pair_dirty(before, self._doc.layer_visual_bounds(layer.id))
                  # Reset display
                  self.spin_s.blockSignals(True)
                  self.spin_s.setValue(0)
