@@ -104,12 +104,13 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         # Signature: (indices: list[int]) -> None
         self.on_marquee_select: callable | None = None
         self.supports_live_transform_preview: callable | None = None
-        # Deferred auto-select: when press lands on a MOVE zone we hold off
-        # switching until we know it's a click (not a drag).  Stores the
-        # topmost layer index found by find_layer_at, or None.
         self._pending_autoselect_idx: int | None = None
         self._move_snapshot_saved: bool = False
         self._use_live_transform_preview: bool = False
+        self._group_preview_center: tuple[float, float] | None = None
+        self._group_preview_sx: float = 1.0
+        self._group_preview_sy: float = 1.0
+        self._group_preview_angle: float = 0.0
 
     def deactivate(self) -> None:
         super().deactivate()
@@ -118,6 +119,25 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
     @property
     def using_live_transform_preview(self) -> bool:
         return self._use_live_transform_preview
+
+    @property
+    def is_group_or_multi_preview(self) -> bool:
+        """True when the preview session covers a group or multi-selection."""
+        if not self._use_live_transform_preview:
+            return False
+        return bool(self._group_children) or bool(getattr(self, "_multi_layers", []))
+
+    @property
+    def group_preview_center(self) -> tuple[float, float] | None:
+        return self._group_preview_center
+
+    @property
+    def group_preview_scale(self) -> tuple[float, float]:
+        return (self._group_preview_sx, self._group_preview_sy)
+
+    @property
+    def group_preview_angle(self) -> float:
+        return self._group_preview_angle
 
     # ------------------------------------------------------------------
     # Public query (used by MainWindow for bounding-box overlay)
@@ -163,6 +183,8 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             doc.save_metadata_snapshot(action)
 
     def _mark_transform_dirty(self, doc: Document, before_bounds) -> None:
+        if self._use_live_transform_preview:
+            return
         after_bounds = doc.layers_visual_bounds(self._dirty_layer_ids())
         doc.mark_region_pair_dirty(before_bounds, after_bounds)
 
@@ -444,13 +466,19 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 self._orig_width = layer.width
                 self._orig_height = layer.height
             self._orig_pixels = None
+            if self.supports_live_transform_preview is not None and self._mode in (_Mode.MOVE, _Mode.RESIZE, _Mode.ROTATE):
+                self._use_live_transform_preview = bool(self.supports_live_transform_preview(doc, layer))
+                if self._use_live_transform_preview:
+                    self._group_preview_center = (
+                        (bbox[0] + bbox[2] / 2.0, bbox[1] + bbox[3] / 2.0)
+                        if bbox else (layer.position[0] + layer.width / 2.0, layer.position[1] + layer.height / 2.0)
+                    )
+                    self._group_preview_sx = 1.0
+                    self._group_preview_sy = 1.0
+                    self._group_preview_angle = 0.0
             return  # skip single-layer setup below
 
         # -- Non-group parent with children (pseudo-group) -----------------
-        # Treat the parent + its regular children as a group so move /
-        # resize / rotate propagate to every child layer.  Mask children
-        # are handled separately via _mask_children + _sync_mask_transforms
-        # so they stay pixel-aligned with the parent.
         if layer.children:
             mask_child_ids = set(layer.mask_layers)
             if self._mode in (_Mode.RESIZE, _Mode.ROTATE):
@@ -503,6 +531,15 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._orig_width = layer.width if layer.width > 0 else 1
             self._orig_height = layer.height if layer.height > 0 else 1
             self._orig_pixels = None
+            if self.supports_live_transform_preview is not None and self._mode in (_Mode.MOVE, _Mode.RESIZE, _Mode.ROTATE):
+                self._use_live_transform_preview = bool(self.supports_live_transform_preview(doc, layer))
+                if self._use_live_transform_preview:
+                    self._group_preview_center = (
+                        lx + layer.width / 2.0, ly + layer.height / 2.0,
+                    )
+                    self._group_preview_sx = 1.0
+                    self._group_preview_sy = 1.0
+                    self._group_preview_angle = 0.0
             return  # skip single-layer setup below
 
         # -- Single-layer non-destructive setup ----------------------------
@@ -603,7 +640,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         if not self._dragging:
             return
 
-        dirty_before = doc.layers_visual_bounds(self._dirty_layer_ids())
+        dirty_before = None if self._use_live_transform_preview else doc.layers_visual_bounds(self._dirty_layer_ids())
 
         # Marquee drag-select update
         if self._marquee_start is not None:
@@ -639,44 +676,52 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
                 doc.save_metadata_snapshot("Move")
                 self._move_snapshot_saved = True
             if self._group_children:
-                # Pseudo-group or real group: move every member via the
-                # stored original positions (the active layer is already
-                # included in _group_children for pseudo-groups).
                 for child in self._group_children:
                     cox, coy = self._group_child_positions[child.id]
                     child.position = (cox + dx, coy + dy)
             else:
                 ox, oy = self._orig_position
                 layer.position = (ox + dx, oy + dy)
-            # Move mask children with the parent
             for mc in getattr(self, "_mask_children", []):
                 mcox, mcoy = self._mask_child_positions[mc.id]
                 mc.position = (mcox + dx, mcoy + dy)
-            # Move all multi-selected layers together
             for sl in getattr(self, "_multi_layers", []):
                 if sl.id != layer.id:
                     sox, soy = self._multi_positions.get(sl.id, sl.position)
                     sl.position = (sox + dx, soy + dy)
+            if self._use_live_transform_preview and self._group_preview_center is not None:
+                bbox = self._group_orig_bbox or self._multi_orig_bbox
+                if bbox is not None:
+                    self._group_preview_center = (
+                        bbox[0] + bbox[2] / 2.0 + dx,
+                        bbox[1] + bbox[3] / 2.0 + dy,
+                    )
+                else:
+                    ox, oy = self._orig_position
+                    self._group_preview_center = (
+                        ox + layer.width / 2.0 + dx,
+                        oy + layer.height / 2.0 + dy,
+                    )
 
         elif self._mode == _Mode.RESIZE:
             if is_multi:
-                self._apply_multi_resize(dx, dy)
+                self._apply_multi_resize(dx, dy, preview_only=self._use_live_transform_preview)
             elif is_group or self._group_children:
-                self._apply_group_resize(dx, dy)
-                self._sync_mask_transforms(layer)
+                self._apply_group_resize(dx, dy, preview_only=self._use_live_transform_preview)
+                self._sync_mask_transforms(layer, preview_only=self._use_live_transform_preview)
             else:
                 self._apply_resize(layer, dx, dy, preview_only=self._use_live_transform_preview)
-                self._sync_mask_transforms(layer)
+                self._sync_mask_transforms(layer, preview_only=self._use_live_transform_preview)
 
         elif self._mode == _Mode.ROTATE:
             if is_multi:
-                self._apply_multi_rotate(x, y)
+                self._apply_multi_rotate(x, y, preview_only=self._use_live_transform_preview)
             elif is_group or self._group_children:
-                self._apply_group_rotate(x, y)
-                self._sync_mask_transforms(layer)
+                self._apply_group_rotate(x, y, preview_only=self._use_live_transform_preview)
+                self._sync_mask_transforms(layer, preview_only=self._use_live_transform_preview)
             else:
                 self._apply_rotate(layer, x, y, preview_only=self._use_live_transform_preview)
-                self._sync_mask_transforms(layer)
+                self._sync_mask_transforms(layer, preview_only=self._use_live_transform_preview)
 
         self._mark_transform_dirty(doc, dirty_before)
 
@@ -719,20 +764,21 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
             self._handle = _Handle.NONE
             return
 
+        was_preview = self._use_live_transform_preview
+        self._use_live_transform_preview = False
+
         if self._mode in (_Mode.ROTATE, _Mode.RESIZE) and self._active_layer is not None:
             dirty_before = doc.layers_visual_bounds(self._dirty_layer_ids())
             if self._active_layer.layer_type == LayerType.GROUP or self._group_children:
                 for child in self._group_children:
                     if child.layer_type == LayerType.RASTER:
                         child.compute_display(fast=False)
-                # Finalise mask children aligned to the parent
                 for mc in getattr(self, "_mask_children", []):
                     mc.compute_display(fast=False)
             elif self._active_layer.layer_type == LayerType.RASTER:
                 self._active_layer.compute_display(fast=False)
                 for mc in getattr(self, "_mask_children", []):
                     mc.compute_display(fast=False)
-            # Multi-layer final quality pass
             for sl in getattr(self, "_multi_layers", []):
                 if sl.layer_type == LayerType.RASTER and sl._source_pixels is not None:
                     sl.compute_display(fast=False)
@@ -783,6 +829,10 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._multi_dims = {}
         self._move_snapshot_saved = False
         self._use_live_transform_preview = False
+        self._group_preview_center = None
+        self._group_preview_sx = 1.0
+        self._group_preview_sy = 1.0
+        self._group_preview_angle = 0.0
 
     # ------------------------------------------------------------------
     # Alignment helpers — delegate to align_ops module

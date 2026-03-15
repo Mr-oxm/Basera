@@ -94,7 +94,7 @@ class RotateMixin:
     # Group rotate
     # ------------------------------------------------------------------
 
-    def _apply_group_rotate(self, x: int, y: int) -> None:
+    def _apply_group_rotate(self, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive group rotate: rotate every child around the group centre."""
         bbox = self._group_orig_bbox
         if bbox is None:
@@ -107,10 +107,11 @@ class RotateMixin:
         a0 = math.atan2(self._start_y - gcy, self._start_x - gcx)
         a1 = math.atan2(y - gcy, x - gcx)
         angle_deg = -math.degrees(a1 - a0)
-        # The full angle is committed to each child's transform_angle below,
-        # so the mid-drag accumulator must stay at 0 — same as _apply_rotate.
-        # Otherwise rotation_info_for() double-counts the delta (BB at 2×).
         self._current_angle = 0.0
+
+        if preview_only:
+            self._group_preview_angle = angle_deg
+            self._group_preview_center = (gcx, gcy)
 
         rad = math.radians(angle_deg)
         cos_a = math.cos(rad)
@@ -124,9 +125,11 @@ class RotateMixin:
 
             base_angle = self._group_child_base_angle[child.id]
             child.transform_angle = base_angle + angle_deg
-            child.compute_display(fast=True)
+            if preview_only:
+                child.update_transform_preview_geometry()
+            else:
+                child.compute_display(fast=True)
 
-            # Rotate child centre around the group centre
             orig_cx, orig_cy = self._group_child_positions[child.id]
             orig_cw, orig_ch = self._group_child_dims[child.id]
 
@@ -146,7 +149,7 @@ class RotateMixin:
     # Multi-selection rotate (virtual group)
     # ------------------------------------------------------------------
 
-    def _apply_multi_rotate(self, x: int, y: int) -> None:
+    def _apply_multi_rotate(self, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive multi-layer rotate: rotate every selected layer
         around their combined bounding-box centre — same as group rotate."""
         bbox = getattr(self, "_multi_orig_bbox", None)
@@ -161,6 +164,10 @@ class RotateMixin:
         a1 = math.atan2(y - gcy, x - gcx)
         angle_deg = -math.degrees(a1 - a0)
         self._current_angle = angle_deg
+
+        if preview_only:
+            self._group_preview_angle = angle_deg
+            self._group_preview_center = (gcx, gcy)
 
         rad = math.radians(angle_deg)
         cos_a = math.cos(rad)
@@ -178,7 +185,10 @@ class RotateMixin:
 
             base_angle = multi_base_angle.get(child.id, 0.0)
             child.transform_angle = base_angle + angle_deg
-            child.compute_display(fast=True)
+            if preview_only:
+                child.update_transform_preview_geometry()
+            else:
+                child.compute_display(fast=True)
 
             orig_cx, orig_cy = multi_positions[child.id]
             orig_cw, orig_ch = multi_dims[child.id]
@@ -199,7 +209,7 @@ class RotateMixin:
     # Mask-children sync
     # ------------------------------------------------------------------
 
-    def _sync_mask_transforms(self, parent) -> None:
+    def _sync_mask_transforms(self, parent, *, preview_only: bool = False) -> None:
         """Mirror the parent layer's scale / angle onto all its mask children.
 
         Each mask child tracks the parent transform so it always aligns
@@ -211,6 +221,8 @@ class RotateMixin:
             mc.transform_scale_x = parent.transform_scale_x
             mc.transform_scale_y = parent.transform_scale_y
             mc.transform_angle = parent.transform_angle
-            mc.compute_display(fast=True)
-            # Keep the mask co-located with the parent
+            if preview_only:
+                mc.update_transform_preview_geometry()
+            else:
+                mc.compute_display(fast=True)
             mc.position = parent.position

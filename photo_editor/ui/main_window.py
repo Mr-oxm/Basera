@@ -413,7 +413,10 @@ class MainWindow(QMainWindow):
         )
 
     def _supports_move_tool_transform_preview(self, document: Document, layer) -> bool:
-        return self._gpu_backend_enabled and self._gpu_backend.can_render_transform_preview(document, layer)
+        supported = self._gpu_backend_enabled and self._gpu_backend.can_render_transform_preview(document, layer)
+        if supported:
+            self._gpu_backend.pre_capture_transform_source(document, layer)
+        return supported
 
     def _current_transform_preview_session(self):
         if not self._gpu_backend_enabled or self._doc is None or self._tools.active_type != ToolType.MOVE:
@@ -424,6 +427,14 @@ class MainWindow(QMainWindow):
         active_layer = getattr(move_tool, "_active_layer", None)
         if active_layer is None:
             return None
+        if getattr(move_tool, "is_group_or_multi_preview", False):
+            center = getattr(move_tool, "group_preview_center", None)
+            sx, sy = getattr(move_tool, "group_preview_scale", (1.0, 1.0))
+            angle = getattr(move_tool, "group_preview_angle", 0.0)
+            return self._gpu_backend.build_compound_transform_preview_session(
+                self._doc, active_layer, center=center,
+                scale_x=sx, scale_y=sy, angle=angle,
+            )
         return self._gpu_backend.build_transform_preview_session(self._doc, active_layer)
 
     def _sync_transform_preview_session(self) -> None:
@@ -432,8 +443,10 @@ class MainWindow(QMainWindow):
             return
         self._gpu_backend.set_transform_preview(self._current_transform_preview_session())
 
-    def _invalidate_gpu_backend(self, layer_id: str | None) -> None:
+    def _invalidate_gpu_backend(self, layer_id: str | None, *, force: bool = False) -> None:
         if not self._gpu_backend_enabled:
+            return
+        if not force and self._gpu_backend._transform_preview is not None:
             return
         if layer_id is None or self._doc is None:
             self._gpu_backend.invalidate_layer(layer_id)

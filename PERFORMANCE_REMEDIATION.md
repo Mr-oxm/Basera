@@ -1367,6 +1367,82 @@ Measured 4K / 5K results on this workspace:
 - 5K (`5120x2880`) rotate drag step: CPU live recompute about `548.79 ms`; GPU preview path about `0.16 ms` for the drag update plus about `41.80 ms` to render the preview frame; final CPU commit on release about `1302.35 ms`.
 - Additional move-only measurement on the same large raster documents showed near-identical full-frame render cost with and without the preview session (`4K`: about `199.40 ms` baseline vs about `207.53 ms` preview, `5K`: about `353.17 ms` baseline vs about `354.09 ms` preview), which indicates the remaining move heaviness is now dominated by background redraw/compositing cost rather than transform math itself.
 
+### 70. GPU transform preview now covers groups, pseudo-groups, masked layers, styled layers, and clipping chains
+
+Files:
+- `photo_editor/engine/gpu_backend.py`
+- `photo_editor/tools/move/move_tool.py`
+- `photo_editor/tools/move/resize_ops.py`
+- `photo_editor/tools/move/rotate_ops.py`
+- `photo_editor/ui/main_window.py`
+
+Problem:
+- The GPU transform preview only covered single top-level raster layers with no masks, styles, children, or clipping.
+- Groups, pseudo-groups (parent with children), clipping chains, and masked/styled layers all fell back to per-frame `compute_display(fast=True)` on every drag step.
+- On 4K/5K raster layers that meant every mouse move still paid full CPU source resample and rotation for every child in the group.
+
+Fix:
+- Extended `_TransformPreviewSession` with `source_kind` (single, group, chain, flattened) and `chain_layer_ids` for compound preview sources.
+- Extended `_supports_transform_preview_layer` to accept groups (`LayerType.GROUP`), layers with masks (legacy or child), layers with styles or child processors, and clipping chain base layers.
+- Added `_clipping_chain_for_base` to discover contiguous clipping runs from a base layer.
+- Added `_compute_preview_source` that routes to `_flatten_group_pixels`, `_composite_chain_tight`, or `_flatten_layer_pixels` based on source kind.
+- Added `build_compound_transform_preview_session` for groups/pseudo-groups where transform params come from the move tool rather than from the layer.
+- Updated `_draw_transform_preview` to handle compound sources where the blend position is not `(0, 0)`.
+- Added `preview_only` parameter to `_apply_group_resize`, `_apply_group_rotate`, `_apply_multi_resize`, `_apply_multi_rotate`, and `_sync_mask_transforms` so group transforms skip `compute_display(fast=True)` during drag and only update geometry.
+- Added group preview state tracking on the move tool (`_group_preview_center`, `_group_preview_sx`, `_group_preview_sy`, `_group_preview_angle`) so the GPU session builder can read the current group transform.
+- Updated `MainWindow._current_transform_preview_session` to build compound sessions for groups and pseudo-groups using the move tool's preview state.
+- Added first-frame preview cost reduction: compound preview sources reuse existing layer/group pixmaps from normal rendering when available, and all computed preview sources are cached with `rgba_u8` for later frames.
+
+Effect:
+- Groups, pseudo-groups, masked layers, styled layers, and clipping chain base layers now skip per-frame CPU pixel recompute during interactive drag.
+- CPU remains authoritative for the committed result on release.
+- Unsupported cases fall back automatically to the existing CPU live-transform path.
+
+Measured 4K / 5K group results on this workspace:
+- 4K (`3840x2160`) group resize drag step: CPU live recompute about `312.89 ms` per frame; GPU preview path about `0.08 ms` per frame; final CPU commit on release about `642.6 ms`.
+- 5K (`5120x2880`) group resize drag step: CPU live recompute about `550.98 ms` per frame; GPU preview path about `0.08 ms` per frame; final CPU commit on release about `1138.1 ms`.
+- 4K (`3840x2160`) group rotate drag step: CPU live recompute about `342.75 ms` per frame; GPU preview path about `0.15 ms` per frame; final CPU commit on release about `732.6 ms`.
+- 5K (`5120x2880`) group rotate drag step: CPU live recompute about `586.48 ms` per frame; GPU preview path about `0.09 ms` per frame; final CPU commit on release about `1232.8 ms`.
+- 4K (`3840x2160`) masked-layer resize drag step: CPU live recompute about `382.56 ms` per frame; GPU preview path about `0.03 ms` per frame; final CPU commit on release about `805.7 ms`.
+- 5K (`5120x2880`) masked-layer resize drag step: CPU live recompute about `664.03 ms` per frame; GPU preview path about `0.03 ms` per frame; final CPU commit on release about `1420.7 ms`.
+
+### 71. GPU preview session is now live-synced, cache-protected, and pre-captured for artifact-free 60fps drag
+
+Files:
+- `photo_editor/engine/gpu_backend.py`
+- `photo_editor/ui/main_window.py`
+- `photo_editor/ui/controllers/canvas_ctrl.py`
+- `photo_editor/tools/move/move_tool.py`
+
+Problem:
+- The compound preview drawing code had wrong coordinate math (manual offset/scale instead of QPainter transform chain), producing visual artifacts and mispositioned textures during group/chain transforms.
+- The preview source cache was invalidated every frame by `_invalidate_gpu_backend`, forcing expensive recomposition of the group composite from children whose positions/geometry had already been modified by the move tool — producing garbage output from inconsistent state.
+- The preview session was never synced during move-tool drag frames (`canvas_ctrl.on_move` only emitted `canvas_update_requested`, skipping `_sync_transform_preview_session`), so single-layer moves never activated GPU preview at all.
+- Dirty-region calculation (`layers_visual_bounds` + `mark_region_pair_dirty`) ran on every drag frame even during GPU preview, iterating all affected layers for no benefit.
+
+Fix:
+- Rewrote `_draw_transform_preview` to use a unified QPainter transform chain (translate → rotate → scale) for both single and compound sources, using document-space offset from session center to texture origin for compound sources.
+- Protected active preview source from cache invalidation: `invalidate_layer` and `invalidate_all` now preserve the entry keyed by the active session's `source_cache_key`.
+- Added `pre_capture_transform_source` to eagerly capture compound preview textures (group/chain/flattened) while children are in their original state, called from `_supports_move_tool_transform_preview` during `on_press`.
+- Skipped `_invalidate_gpu_backend` entirely during active preview sessions (background layers don't change during drag).
+- Added `mw._sync_transform_preview_session()` call in `canvas_ctrl.on_move` for the MOVE tool so the session updates every frame.
+- Skipped dirty-region computation (`layers_visual_bounds` and `mark_region_pair_dirty`) during active preview by early-returning from `_mark_transform_dirty`.
+- Cleared `_use_live_transform_preview` before `_mark_transform_dirty` in `on_release` so the final dirty region propagates correctly to the CPU pipeline.
+
+Effect:
+- No more visual artifacts during group/chain/masked-layer transforms.
+- Drag frames now run at ~3ms for 4K and ~5ms for 5K (well under the 16ms budget for 60fps).
+- Single-layer moves are now GPU-accelerated (previously fell back to full CPU re-render).
+- Background layers are rendered once at drag start and reused for all subsequent frames.
+
+Measured results:
+- 4K single-layer move: 210ms/frame (no preview) → 2.9ms/frame (preview) — **72x speedup**
+- 4K group (3L) move: 210ms first frame → 3.0ms/frame steady state — **72x speedup**
+- 5K single-layer move: 365ms/frame → 5.1ms/frame — **71x speedup**
+- 5K group (3L) move: 395ms first frame → 5.5ms/frame steady state — **72x speedup**
+- 5K resize: 365ms/frame → 4.9ms/frame — **75x speedup**
+- 5K rotate: 365ms/frame → 4.9ms/frame — **75x speedup**
+
 ### 38. Uint8 conversion is now hardened against NaN and infinity payloads
 
 Files:
@@ -1431,6 +1507,8 @@ Effect:
 - `tests/test_gpu_backend.py` extended with standalone-mask execution-edge graph coverage.
 - `tests/test_gpu_backend.py` extended with direct graph-derived render-schedule coverage.
 - `tests/test_main_window_smoke.py` re-run after the preview/final pipeline split.
+- `tests/test_gpu_backend.py` extended with group preview session building, compound session building, chain-aware preview, styled-layer preview, group composite caching, and existing-pixmap reuse coverage.
+- `tests/test_bb_move_tool.py` extended with group resize/rotate GPU preview skip, pseudo-group resize GPU preview skip, group move center tracking, and group preview state reset coverage.
 
 Focused validation run after the changes:
 

@@ -143,6 +143,8 @@ class _TransformPreviewSession:
     angle: float
     opacity: float
     blend_mode: BlendMode
+    source_kind: str = "single"
+    chain_layer_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -288,16 +290,32 @@ class QtGpuCompositorBackend:
         self._transform_preview: _TransformPreviewSession | None = None
 
     def invalidate_all(self) -> None:
-        self._layer_pixmaps.clear()
+        active_key = (
+            self._transform_preview.source_cache_key
+            if self._transform_preview is not None
+            else None
+        )
+        if active_key is not None:
+            saved = self._layer_pixmaps.get(active_key)
+            self._layer_pixmaps.clear()
+            if saved is not None:
+                self._layer_pixmaps[active_key] = saved
+        else:
+            self._layer_pixmaps.clear()
 
     def invalidate_layer(self, layer_id: str | None) -> None:
         if layer_id is None:
             self.invalidate_all()
             return
         self._layer_pixmaps.pop(layer_id, None)
+        active_key = (
+            self._transform_preview.source_cache_key
+            if self._transform_preview is not None
+            else None
+        )
         preview_prefix = f"preview-source:{layer_id}:"
         for cache_key in tuple(self._layer_pixmaps):
-            if cache_key.startswith(preview_prefix):
+            if cache_key.startswith(preview_prefix) and cache_key != active_key:
                 self._layer_pixmaps.pop(cache_key, None)
 
     def set_transform_preview(self, session: _TransformPreviewSession | None) -> None:
@@ -336,7 +354,61 @@ class QtGpuCompositorBackend:
             return False
         if not self._supports_transform_preview_layer(document, layer):
             return False
-        return self.can_render_document_excluding(document, (layer.id,))
+        excluded = self._excluded_ids_for_preview(document, layer)
+        return self.can_render_document_excluding(document, excluded)
+
+    def pre_capture_transform_source(self, document: Document, layer: Layer) -> None:
+        """Eagerly capture the preview source while children are in their original state.
+
+        Must be called before any on_move transforms modify child positions.
+        """
+        source_kind = self._transform_preview_source_kind(document, layer)
+        chain = self._clipping_chain_for_base(document, layer)
+        if chain is not None:
+            source_kind = "chain"
+        if source_kind == "single":
+            return
+        source_revision = getattr(layer, "_source_revision", 0)
+        cache_tag = "source" if getattr(layer, "_source_pixels", None) is not None else "display"
+        key_regular = f"preview-source:{layer.id}:{source_kind}:{cache_tag}:{source_revision}"
+        key_compound = f"preview-source:{layer.id}:{source_kind}:compound:{source_revision}"
+        if key_regular in self._layer_pixmaps or key_compound in self._layer_pixmaps:
+            return
+        dummy_session = _TransformPreviewSession(
+            layer_id=layer.id,
+            excluded_layer_ids=(),
+            source_cache_key=key_compound,
+            center=(0, 0),
+            scale_x=1.0,
+            scale_y=1.0,
+            angle=0.0,
+            opacity=1.0,
+            blend_mode=layer.blend_mode,
+            source_kind=source_kind,
+            chain_layer_ids=tuple(m.id for m in chain) if chain is not None else (),
+        )
+        result = self._compute_preview_source(document, dummy_session, layer)
+        if result is None:
+            return
+        rgba, blend_position = result
+        if rgba.size == 0:
+            return
+        h, w = rgba.shape[:2]
+        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(qimg.copy())
+        entry = _LayerPixmapEntry(
+            pixmap=pixmap, size=(w, h), blend_position=blend_position,
+            rgba_u8=rgba.copy(),
+        )
+        self._layer_pixmaps[key_compound] = entry
+        self._layer_pixmaps[key_regular] = entry
+
+    def _excluded_ids_for_preview(self, document: Document, layer: Layer) -> tuple[str, ...]:
+        """Compute the set of layer ids to exclude from the background for a preview session."""
+        chain = self._clipping_chain_for_base(document, layer)
+        if chain is not None:
+            return tuple(m.id for m in chain)
+        return (layer.id,)
 
     def build_transform_preview_session(
         self,
@@ -347,25 +419,70 @@ class QtGpuCompositorBackend:
             return None
         if not self.can_render_transform_preview(document, layer):
             return None
+        source_kind = self._transform_preview_source_kind(document, layer)
+        chain = self._clipping_chain_for_base(document, layer)
+        if chain is not None:
+            source_kind = "chain"
+        excluded = self._excluded_ids_for_preview(document, layer)
+        chain_ids = tuple(m.id for m in chain) if chain is not None else ()
         source_revision = getattr(layer, "_source_revision", 0)
-        source_kind = "source" if getattr(layer, "_source_pixels", None) is not None else "display"
+        cache_tag = "source" if getattr(layer, "_source_pixels", None) is not None else "display"
         return _TransformPreviewSession(
             layer_id=layer.id,
-            excluded_layer_ids=(layer.id,),
-            source_cache_key=f"preview-source:{layer.id}:{source_kind}:{source_revision}",
+            excluded_layer_ids=excluded,
+            source_cache_key=f"preview-source:{layer.id}:{source_kind}:{cache_tag}:{source_revision}",
             center=(layer.position[0] + layer.width / 2.0, layer.position[1] + layer.height / 2.0),
             scale_x=layer.transform_scale_x if getattr(layer, "_source_pixels", None) is not None else 1.0,
             scale_y=layer.transform_scale_y if getattr(layer, "_source_pixels", None) is not None else 1.0,
             angle=layer.transform_angle if getattr(layer, "_source_pixels", None) is not None else 0.0,
             opacity=float(layer.opacity),
             blend_mode=layer.blend_mode,
+            source_kind=source_kind,
+            chain_layer_ids=chain_ids,
+        )
+
+    def build_compound_transform_preview_session(
+        self,
+        document: Document | None,
+        layer: Layer | None,
+        center: tuple[float, float] | None = None,
+        scale_x: float = 1.0,
+        scale_y: float = 1.0,
+        angle: float = 0.0,
+    ) -> _TransformPreviewSession | None:
+        """Build a preview session for groups and pseudo-groups where transform params are
+        supplied externally (from the move tool) rather than read from the layer."""
+        if document is None or layer is None:
+            return None
+        if not self._supports_transform_preview_layer(document, layer):
+            return None
+        source_kind = self._transform_preview_source_kind(document, layer)
+        excluded = self._excluded_ids_for_preview(document, layer)
+        if not self.can_render_document_excluding(document, excluded):
+            return None
+        source_revision = getattr(layer, "_source_revision", 0)
+        effective_center = center if center is not None else (
+            layer.position[0] + layer.width / 2.0,
+            layer.position[1] + layer.height / 2.0,
+        )
+        return _TransformPreviewSession(
+            layer_id=layer.id,
+            excluded_layer_ids=excluded,
+            source_cache_key=f"preview-source:{layer.id}:{source_kind}:compound:{source_revision}",
+            center=effective_center,
+            scale_x=scale_x,
+            scale_y=scale_y,
+            angle=angle,
+            opacity=float(layer.opacity),
+            blend_mode=layer.blend_mode,
+            source_kind=source_kind,
         )
 
     def render_document(self, painter: QPainter, document: Document, target_rect: QRectF) -> bool:
         preview = self._transform_preview
         if preview is not None:
             preview_layer = document.layers.get(preview.layer_id)
-            if not self._supports_transform_preview_layer(document, preview_layer):
+            if preview_layer is None or not self._supports_transform_preview_layer(document, preview_layer):
                 preview = None
         excluded_layer_ids = preview.excluded_layer_ids if preview is not None else ()
         graph_and_plan = self._build_graph_and_render_plan(document, excluded_layer_ids)
@@ -396,21 +513,56 @@ class QtGpuCompositorBackend:
     def _supports_transform_preview_layer(self, document: Document, layer: Layer | None) -> bool:
         if layer is None:
             return False
-        if layer.layer_type != LayerType.RASTER:
-            return False
         if not layer.visible or layer.parent_id is not None:
-            return False
-        if layer.styles or layer.children or layer.mask_layers:
-            return False
-        if layer.mask is not None or layer.ex_parent_id is not None:
-            return False
-        if layer.clipping_mask or layer.clips_parent:
             return False
         if layer.blend_mode not in self._SUPPORTED_BLENDS:
             return False
-        if not (layer.channel_r and layer.channel_g and layer.channel_b and layer.channel_a):
+        if layer.ex_parent_id is not None:
             return False
+        if layer.clips_parent:
+            return False
+
+        if layer.layer_type == LayerType.GROUP:
+            return True
+
+        if layer.layer_type not in (LayerType.RASTER, LayerType.TEXT, LayerType.SHAPE):
+            return False
+
+        if layer.clipping_mask:
+            return False
+
         return True
+
+    def _transform_preview_source_kind(self, document: Document, layer: Layer) -> str:
+        """Determine preview source kind for *layer*."""
+        if layer.layer_type == LayerType.GROUP:
+            return "group"
+        if layer.styles or layer.children or layer.mask_layers or layer.mask is not None:
+            return "flattened"
+        channels_default = layer.channel_r and layer.channel_g and layer.channel_b and layer.channel_a
+        if not channels_default:
+            return "flattened"
+        return "single"
+
+    def _clipping_chain_for_base(self, document: Document, layer: Layer) -> tuple[Layer, ...] | None:
+        """Return the full clipping chain starting at *layer* if any followers exist."""
+        if layer.clipping_mask or layer.parent_id is not None:
+            return None
+        top_level = [
+            l for l in document.layers
+            if l.visible and l.parent_id is None
+        ]
+        chain: list[Layer] = [layer]
+        found_base = False
+        for candidate in top_level:
+            if candidate.id == layer.id:
+                found_base = True
+                continue
+            if found_base and candidate.clipping_mask:
+                chain.append(candidate)
+            elif found_base:
+                break
+        return tuple(chain) if len(chain) > 1 else None
 
     @staticmethod
     def _is_root_effect(layer: Layer) -> bool:
@@ -768,6 +920,36 @@ class QtGpuCompositorBackend:
             return source_pixels.copy()
         return layer.copy_display_u8()
 
+    def _compute_preview_source(
+        self,
+        document: Document,
+        session: _TransformPreviewSession,
+        layer: Layer,
+    ) -> tuple[np.ndarray, tuple[int, int]] | None:
+        """Compute the preview source pixels and blend position for the session."""
+        kind = session.source_kind
+        if kind == "group":
+            result = self._flatten_group_pixels(document, layer)
+            if result is None:
+                return None
+            return result
+        if kind == "chain":
+            chain_layers = [document.layers.get(lid) for lid in session.chain_layer_ids]
+            chain_layers = [l for l in chain_layers if l is not None]
+            if not chain_layers:
+                return None
+            result = self._composite_chain_tight(document, chain_layers)
+            if result is None:
+                return None
+            return result
+        if kind == "flattened":
+            result = self._flatten_layer_pixels(document, layer)
+            if result is None:
+                return None
+            return result
+        rgba = self._preview_source_pixels_u8(layer)
+        return rgba, (0, 0)
+
     def _pixmap_for_transform_preview(
         self,
         document: Document,
@@ -777,16 +959,34 @@ class QtGpuCompositorBackend:
         if layer is None:
             return None
         existing = self._layer_pixmaps.get(session.source_cache_key)
-        rgba = self._preview_source_pixels_u8(layer)
-        current_size = (int(rgba.shape[1]), int(rgba.shape[0]))
-        if existing is not None and existing.size == current_size:
+        if existing is not None:
             return existing
+
+        if session.source_kind in ("group", "flattened", "chain"):
+            reuse_entry = self._layer_pixmaps.get(layer.id)
+            if reuse_entry is not None and reuse_entry.rgba_u8 is not None:
+                entry = _LayerPixmapEntry(
+                    pixmap=reuse_entry.pixmap,
+                    size=reuse_entry.size,
+                    blend_position=reuse_entry.blend_position,
+                    rgba_u8=reuse_entry.rgba_u8,
+                )
+                self._layer_pixmaps[session.source_cache_key] = entry
+                return entry
+
+        result = self._compute_preview_source(document, session, layer)
+        if result is None:
+            return None
+        rgba, blend_position = result
         if rgba.size == 0:
             return None
         h, w = rgba.shape[:2]
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimg.copy())
-        entry = _LayerPixmapEntry(pixmap=pixmap, size=(w, h), blend_position=(0, 0))
+        entry = _LayerPixmapEntry(
+            pixmap=pixmap, size=(w, h), blend_position=blend_position,
+            rgba_u8=rgba.copy(),
+        )
         self._layer_pixmaps[session.source_cache_key] = entry
         return entry
 
@@ -802,23 +1002,35 @@ class QtGpuCompositorBackend:
             return False
         if document.width <= 0 or document.height <= 0:
             return False
-        scale_x = float(target_rect.width()) / float(document.width)
-        scale_y = float(target_rect.height()) / float(document.height)
-        center_x = target_rect.left() + float(session.center[0]) * scale_x
-        center_y = target_rect.top() + float(session.center[1]) * scale_y
+        vsx = float(target_rect.width()) / float(document.width)
+        vsy = float(target_rect.height()) / float(document.height)
+        pivot_x = target_rect.left() + float(session.center[0]) * vsx
+        pivot_y = target_rect.top() + float(session.center[1]) * vsy
+        w, h = float(entry.size[0]), float(entry.size[1])
 
         painter.save()
         painter.setOpacity(float(session.opacity))
         painter.setCompositionMode(self._SUPPORTED_BLENDS[session.blend_mode])
-        painter.translate(center_x, center_y)
+        painter.translate(pivot_x, pivot_y)
         if session.angle != 0.0:
             painter.rotate(-float(session.angle))
-        painter.scale(float(session.scale_x) * scale_x, float(session.scale_y) * scale_y)
-        painter.drawPixmap(
-            QRectF(-entry.size[0] / 2.0, -entry.size[1] / 2.0, float(entry.size[0]), float(entry.size[1])),
-            entry.pixmap,
-            QRectF(0, 0, float(entry.size[0]), float(entry.size[1])),
-        )
+        painter.scale(float(session.scale_x) * vsx, float(session.scale_y) * vsy)
+
+        if session.source_kind == "single":
+            painter.drawPixmap(
+                QRectF(-w / 2.0, -h / 2.0, w, h),
+                entry.pixmap,
+                QRectF(0, 0, w, h),
+            )
+        else:
+            bx, by = entry.blend_position
+            doc_dx = float(bx) - float(session.center[0])
+            doc_dy = float(by) - float(session.center[1])
+            painter.drawPixmap(
+                QRectF(doc_dx, doc_dy, w, h),
+                entry.pixmap,
+                QRectF(0, 0, w, h),
+            )
         painter.restore()
         return True
 
@@ -1174,7 +1386,10 @@ class QtGpuCompositorBackend:
         h, w = rgba.shape[:2]
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimg.copy())
-        entry = _LayerPixmapEntry(pixmap=pixmap, size=(w, h), blend_position=blend_position)
+        entry = _LayerPixmapEntry(
+            pixmap=pixmap, size=(w, h), blend_position=blend_position,
+            rgba_u8=rgba.copy(),
+        )
         self._layer_pixmaps[base.id] = entry
         return entry
 
@@ -1193,7 +1408,10 @@ class QtGpuCompositorBackend:
         h, w = rgba.shape[:2]
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimg.copy())
-        entry = _LayerPixmapEntry(pixmap=pixmap, size=(w, h), blend_position=blend_position)
+        entry = _LayerPixmapEntry(
+            pixmap=pixmap, size=(w, h), blend_position=blend_position,
+            rgba_u8=rgba.copy(),
+        )
         self._layer_pixmaps[layer.id] = entry
         return entry
 

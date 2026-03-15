@@ -292,15 +292,20 @@ def test_qt_gpu_backend_builds_transform_preview_session_for_supported_raster(ap
     assert session.angle == pytest.approx(18.0)
 
 
-def test_qt_gpu_backend_rejects_transform_preview_for_masked_raster(app) -> None:
-    doc = Document(128, 128, "GPU Transform Preview Unsupported")
+def test_qt_gpu_backend_supports_transform_preview_for_masked_raster(app) -> None:
+    doc = Document(128, 128, "GPU Transform Preview Masked")
     base = doc.layers[0]
+    base.pixels[:] = np.array([0.5, 0.3, 0.2, 1.0], dtype=np.float32)
     base.add_mask(fill_white=False)
+    base.mask[:] = 1.0
 
     backend = QtGpuCompositorBackend()
 
-    assert backend.can_render_transform_preview(doc, base) is False
-    assert backend.build_transform_preview_session(doc, base) is None
+    assert backend.can_render_transform_preview(doc, base) is True
+    session = backend.build_transform_preview_session(doc, base)
+    assert session is not None
+    assert session.source_kind == "flattened"
+    assert session.excluded_layer_ids == (base.id,)
 
 
 def test_qt_gpu_backend_tracks_clipping_chain_as_cache_bearing_graph_segment(app) -> None:
@@ -766,3 +771,172 @@ def test_qt_gpu_backend_rejects_orphan_clipping_mask_document(app) -> None:
 
     backend = QtGpuCompositorBackend()
     assert backend.can_render_document(doc) is False
+
+
+def test_qt_gpu_backend_builds_transform_preview_for_group(app) -> None:
+    doc = Document(128, 128, "GPU Group Preview")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+
+    group = Layer(name="Group", width=128, height=128, layer_type=LayerType.GROUP)
+    doc.layers.add(group)
+
+    child1 = Layer(name="Child1", width=40, height=40)
+    child1.pixels[:] = np.array([0.9, 0.2, 0.1, 1.0], dtype=np.float32)
+    child1.position = (10, 10)
+    child1.parent_id = group.id
+    group.children.append(child1.id)
+    doc.layers.add(child1)
+
+    child2 = Layer(name="Child2", width=30, height=30)
+    child2.pixels[:] = np.array([0.1, 0.9, 0.2, 0.8], dtype=np.float32)
+    child2.position = (50, 60)
+    child2.parent_id = group.id
+    group.children.append(child2.id)
+    doc.layers.add(child2)
+
+    backend = QtGpuCompositorBackend()
+
+    assert backend.can_render_transform_preview(doc, group) is True
+    session = backend.build_transform_preview_session(doc, group)
+    assert session is not None
+    assert session.source_kind == "group"
+    assert session.excluded_layer_ids == (group.id,)
+    assert session.layer_id == group.id
+
+
+def test_qt_gpu_backend_builds_compound_preview_for_group(app) -> None:
+    doc = Document(128, 128, "GPU Group Compound")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+
+    group = Layer(name="Group", width=128, height=128, layer_type=LayerType.GROUP)
+    doc.layers.add(group)
+
+    child = Layer(name="Child", width=40, height=40)
+    child.pixels[:] = np.array([0.9, 0.2, 0.1, 1.0], dtype=np.float32)
+    child.position = (10, 10)
+    child.parent_id = group.id
+    group.children.append(child.id)
+    doc.layers.add(child)
+
+    backend = QtGpuCompositorBackend()
+
+    session = backend.build_compound_transform_preview_session(
+        doc, group, center=(64.0, 64.0), scale_x=1.5, scale_y=0.8, angle=12.0,
+    )
+    assert session is not None
+    assert session.source_kind == "group"
+    assert session.scale_x == pytest.approx(1.5)
+    assert session.scale_y == pytest.approx(0.8)
+    assert session.angle == pytest.approx(12.0)
+    assert session.center == (64.0, 64.0)
+
+
+def test_qt_gpu_backend_builds_chain_aware_preview(app) -> None:
+    doc = Document(128, 128, "GPU Chain Preview")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.1, 0.2, 0.3, 1.0], dtype=np.float32)
+
+    chain_base = Layer(name="ChainBase", width=64, height=64)
+    chain_base.pixels[:] = np.array([0.8, 0.3, 0.1, 1.0], dtype=np.float32)
+    chain_base.position = (16, 16)
+    doc.layers.add(chain_base)
+
+    clip = Layer(name="Clip", width=64, height=64)
+    clip.pixels[:] = 0.0
+    clip.pixels[10:50, 10:50] = np.array([0.2, 0.9, 0.5, 0.7], dtype=np.float32)
+    clip.position = (16, 16)
+    clip.clipping_mask = True
+    doc.layers.add(clip)
+
+    backend = QtGpuCompositorBackend()
+
+    assert backend.can_render_transform_preview(doc, chain_base) is True
+    session = backend.build_transform_preview_session(doc, chain_base)
+    assert session is not None
+    assert session.source_kind == "chain"
+    assert set(session.excluded_layer_ids) == {chain_base.id, clip.id}
+    assert set(session.chain_layer_ids) == {chain_base.id, clip.id}
+
+
+def test_qt_gpu_backend_builds_preview_for_styled_layer(app) -> None:
+    doc = Document(128, 128, "GPU Styled Preview")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.2, 0.3, 0.4, 1.0], dtype=np.float32)
+
+    styled = Layer(name="Styled", width=64, height=64)
+    styled.pixels[:] = np.array([0.9, 0.1, 0.1, 1.0], dtype=np.float32)
+    styled.position = (20, 20)
+    styled.styles.append(OuterGlow())
+    doc.layers.add(styled)
+
+    backend = QtGpuCompositorBackend()
+
+    assert backend.can_render_transform_preview(doc, styled) is True
+    session = backend.build_transform_preview_session(doc, styled)
+    assert session is not None
+    assert session.source_kind == "flattened"
+
+
+def test_qt_gpu_backend_group_preview_caches_composite(app) -> None:
+    doc = Document(128, 128, "GPU Group Cache")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+
+    group = Layer(name="Group", width=128, height=128, layer_type=LayerType.GROUP)
+    doc.layers.add(group)
+
+    child = Layer(name="Child", width=40, height=40)
+    child.pixels[:] = np.array([0.7, 0.3, 0.2, 1.0], dtype=np.float32)
+    child.position = (20, 30)
+    child.parent_id = group.id
+    group.children.append(child.id)
+    doc.layers.add(child)
+
+    backend = QtGpuCompositorBackend()
+
+    session = backend.build_compound_transform_preview_session(
+        doc, group, center=(40.0, 50.0),
+    )
+    assert session is not None
+
+    entry1 = backend._pixmap_for_transform_preview(doc, session)
+    assert entry1 is not None
+    assert entry1.rgba_u8 is not None
+
+    entry2 = backend._pixmap_for_transform_preview(doc, session)
+    assert entry2 is entry1
+
+
+def test_qt_gpu_backend_reuses_existing_group_pixmap_for_preview(app) -> None:
+    doc = Document(128, 128, "GPU Group Reuse")
+    base = doc.layers[0]
+    base.pixels[:] = np.array([0.1, 0.1, 0.1, 1.0], dtype=np.float32)
+
+    group = Layer(name="Group", width=128, height=128, layer_type=LayerType.GROUP)
+    doc.layers.add(group)
+
+    child = Layer(name="Child", width=40, height=40)
+    child.pixels[:] = np.array([0.7, 0.3, 0.2, 1.0], dtype=np.float32)
+    child.position = (20, 30)
+    child.parent_id = group.id
+    group.children.append(child.id)
+    doc.layers.add(child)
+
+    backend = QtGpuCompositorBackend()
+    _render_with_backend(backend, doc)
+
+    assert group.id in backend._layer_pixmaps
+    normal_entry = backend._layer_pixmaps[group.id]
+    assert normal_entry.rgba_u8 is not None
+
+    session = backend.build_compound_transform_preview_session(
+        doc, group, center=(40.0, 50.0),
+    )
+    assert session is not None
+
+    entry = backend._pixmap_for_transform_preview(doc, session)
+    assert entry is not None
+    assert entry.rgba_u8 is not None
+    np.testing.assert_array_equal(entry.rgba_u8, normal_entry.rgba_u8)

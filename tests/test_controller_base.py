@@ -18,6 +18,8 @@ class FakeWindow:
     def __init__(self) -> None:
         self._doc = object()
         self._pipeline = FakePipeline()
+        self._interactive_pipeline = FakePipeline()
+        self._final_pipeline = FakePipeline()
         self._canvas = type("Canvas", (), {"zoom_to_fit": self._zoom_to_fit})()
         self._status = type(
             "Status",
@@ -132,7 +134,8 @@ def test_controller_context_proxies_main_window_operations() -> None:
     result = controller.ctx.execute_command("cmd")
     controller.ctx.execute_command_async("async-cmd")
 
-    assert window._pipeline.invalidated == ["layer-1"]
+    assert window._interactive_pipeline.invalidated == ["layer-1"]
+    assert window._final_pipeline.invalidated == ["layer-1"]
     assert window.refresh_calls == [(False, "layer-2")]
     assert window.canvas_only_calls == 1
     assert window.render_calls == 1

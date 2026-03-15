@@ -1288,3 +1288,177 @@ class TestCornerCases:
         rh_x, rh_y = mx, by - ROTATE_HANDLE_OFFSET
         mode, _ = hit_test_rect(bx, by, bw, bh, rh_x, rh_y)
         assert mode == _Mode.ROTATE
+
+
+# ======================================================================
+# Section: Group / Pseudo-group GPU Preview — BB-131 ..
+# ======================================================================
+
+
+class TestGroupGpuPreview:
+    """GPU preview for group, pseudo-group, and chain transforms."""
+
+    @staticmethod
+    def _setup_group_for_resize():
+        doc = _make_doc()
+        grp = _add_group(doc, "Group1")
+        c1 = _add_raster(doc, "C1", 50, 50, 80, 80,
+                         parent_id=grp.id, active=False)
+        c2 = _add_raster(doc, "C2", 200, 200, 60, 60,
+                         parent_id=grp.id, active=False)
+        grp.children.extend([c1.id, c2.id])
+        doc.layers.active_index = doc.layers.layers.index(grp)
+        return doc, grp, c1, c2
+
+    def test_bb131_group_resize_preview_skips_cpu_recompute(self, monkeypatch):
+        """GPU preview skips compute_display(fast=True) on group children during resize drag."""
+        doc, grp, c1, c2 = self._setup_group_for_resize()
+        tool = MoveTool()
+        tool.auto_select = False
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        c1.init_non_destructive()
+        c2.init_non_destructive()
+
+        original_cd_c1 = c1.compute_display
+        original_cd_c2 = c2.compute_display
+
+        def _guarded_c1(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("C1 fast CPU recompute during group preview")
+            return original_cd_c1(*args, **kwargs)
+
+        def _guarded_c2(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("C2 fast CPU recompute during group preview")
+            return original_cd_c2(*args, **kwargs)
+
+        tool.on_press(doc, 260, 260)
+        assert tool.using_live_transform_preview is True
+        assert tool.is_group_or_multi_preview is True
+
+        monkeypatch.setattr(c1, "compute_display", _guarded_c1)
+        monkeypatch.setattr(c2, "compute_display", _guarded_c2)
+
+        tool.on_move(doc, 280, 290)
+
+        monkeypatch.setattr(c1, "compute_display", original_cd_c1)
+        monkeypatch.setattr(c2, "compute_display", original_cd_c2)
+        tool.on_release(doc, 280, 290)
+
+    def test_bb132_group_rotate_preview_skips_cpu_recompute(self, monkeypatch):
+        """GPU preview skips compute_display(fast=True) on group children during rotate drag."""
+        doc, grp, c1, c2 = self._setup_group_for_resize()
+        tool = MoveTool()
+        tool.auto_select = False
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        c1.init_non_destructive()
+        c2.init_non_destructive()
+
+        original_cd_c1 = c1.compute_display
+        original_cd_c2 = c2.compute_display
+
+        def _guarded_c1(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("C1 fast CPU recompute during group rotate preview")
+            return original_cd_c1(*args, **kwargs)
+
+        def _guarded_c2(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("C2 fast CPU recompute during group rotate preview")
+            return original_cd_c2(*args, **kwargs)
+
+        gb = group_bbox(doc, grp)
+        assert gb is not None
+        rx = int(gb[0] + gb[2] / 2)
+        ry = int(gb[1] - ROTATE_HANDLE_OFFSET)
+
+        tool.on_press(doc, rx, ry)
+        assert tool.using_live_transform_preview is True
+
+        monkeypatch.setattr(c1, "compute_display", _guarded_c1)
+        monkeypatch.setattr(c2, "compute_display", _guarded_c2)
+
+        tool.on_move(doc, rx + 40, ry + 20)
+        assert tool.group_preview_angle != 0.0
+
+        monkeypatch.setattr(c1, "compute_display", original_cd_c1)
+        monkeypatch.setattr(c2, "compute_display", original_cd_c2)
+        tool.on_release(doc, rx + 40, ry + 20)
+
+    def test_bb133_group_move_preview_updates_center(self):
+        """GPU preview updates group_preview_center during move drag."""
+        doc, grp, c1, c2 = self._setup_group_for_resize()
+        tool = MoveTool()
+        tool.auto_select = False
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        tool.on_press(doc, 150, 150)
+        assert tool.using_live_transform_preview is True
+
+        initial_center = tool.group_preview_center
+        assert initial_center is not None
+
+        tool.on_move(doc, 170, 180)
+        updated_center = tool.group_preview_center
+        assert updated_center is not None
+        assert updated_center[0] > initial_center[0]
+        assert updated_center[1] > initial_center[1]
+
+        tool.on_release(doc, 170, 180)
+
+    def test_bb134_group_preview_state_resets_on_release(self):
+        """Group preview state is fully reset after release."""
+        doc, grp, c1, c2 = self._setup_group_for_resize()
+        tool = MoveTool()
+        tool.auto_select = False
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        tool.on_press(doc, 150, 150)
+        tool.on_move(doc, 170, 180)
+        tool.on_release(doc, 170, 180)
+
+        assert tool.using_live_transform_preview is False
+        assert tool.group_preview_center is None
+        assert tool.group_preview_scale == (1.0, 1.0)
+        assert tool.group_preview_angle == 0.0
+
+    def test_bb135_pseudo_group_resize_preview_skips_cpu(self, monkeypatch):
+        """Pseudo-group (parent with children) uses GPU preview during resize."""
+        doc = _make_doc()
+        parent = _add_raster(doc, "Parent", 50, 50, 100, 100)
+        child = _add_raster(doc, "Child", 60, 60, 40, 40,
+                            parent_id=parent.id, active=False)
+        parent.children.append(child.id)
+        doc.layers.active_index = doc.layers.layers.index(parent)
+
+        tool = MoveTool()
+        tool.auto_select = False
+        tool.supports_live_transform_preview = lambda *_args: True
+
+        tool.on_press(doc, 150, 150)
+        assert tool.using_live_transform_preview is True
+        assert tool.is_group_or_multi_preview is True
+
+        original_cd_parent = parent.compute_display
+        original_cd_child = child.compute_display
+
+        def _guard_parent(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("Parent fast CPU recompute during preview")
+            return original_cd_parent(*args, **kwargs)
+
+        def _guard_child(*args, **kwargs):
+            if kwargs.get("fast", False):
+                raise AssertionError("Child fast CPU recompute during preview")
+            return original_cd_child(*args, **kwargs)
+
+        monkeypatch.setattr(parent, "compute_display", _guard_parent)
+        monkeypatch.setattr(child, "compute_display", _guard_child)
+
+        tool.on_move(doc, 180, 170)
+
+        monkeypatch.setattr(parent, "compute_display", original_cd_parent)
+        monkeypatch.setattr(child, "compute_display", original_cd_child)
+        tool.on_release(doc, 180, 170)

@@ -157,7 +157,7 @@ class ResizeMixin:
     # Group resize
     # ------------------------------------------------------------------
 
-    def _apply_group_resize(self, dx: int, dy: int) -> None:
+    def _apply_group_resize(self, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive group resize: scale each child relative to the group bbox."""
         bbox = self._group_orig_bbox
         if bbox is None:
@@ -183,12 +183,16 @@ class ResizeMixin:
         sx = new_w / max(ow, 1)
         sy = new_h / max(oh, 1)
 
-        # Bbox origin shifts when resizing from top/left handles
         new_bx, new_by = float(bx), float(by)
         if h in (_Handle.TL, _Handle.L, _Handle.BL):
             new_bx = bx + (ow - new_w)
         if h in (_Handle.TL, _Handle.T, _Handle.TR):
             new_by = by + (oh - new_h)
+
+        if preview_only:
+            self._group_preview_sx = sx
+            self._group_preview_sy = sy
+            self._group_preview_center = (new_bx + new_w / 2.0, new_by + new_h / 2.0)
 
         for child in self._group_children:
             if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
@@ -201,7 +205,10 @@ class ResizeMixin:
 
             child.transform_scale_x = base_sx * sx
             child.transform_scale_y = base_sy * sy
-            child.compute_display(fast=True)
+            if preview_only:
+                child.update_transform_preview_geometry()
+            else:
+                child.compute_display(fast=True)
 
             orig_cx, orig_cy = self._group_child_positions[child.id]
             rel_x = orig_cx - bx
@@ -212,7 +219,7 @@ class ResizeMixin:
     # Multi-selection resize (virtual group)
     # ------------------------------------------------------------------
 
-    def _apply_multi_resize(self, dx: int, dy: int) -> None:
+    def _apply_multi_resize(self, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive multi-layer resize: scale each selected layer
         relative to their combined bounding box — same as group resize."""
         bbox = getattr(self, "_multi_orig_bbox", None)
@@ -245,6 +252,11 @@ class ResizeMixin:
         if h in (_Handle.TL, _Handle.T, _Handle.TR):
             new_by = by + (oh - new_h)
 
+        if preview_only:
+            self._group_preview_sx = sx
+            self._group_preview_sy = sy
+            self._group_preview_center = (new_bx + new_w / 2.0, new_by + new_h / 2.0)
+
         for child in getattr(self, "_multi_layers", []):
             if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
                 continue
@@ -256,7 +268,10 @@ class ResizeMixin:
 
             child.transform_scale_x = base_sx * sx
             child.transform_scale_y = base_sy * sy
-            child.compute_display(fast=True)
+            if preview_only:
+                child.update_transform_preview_geometry()
+            else:
+                child.compute_display(fast=True)
 
             orig_cx, orig_cy = self._multi_positions[child.id]
             rel_x = orig_cx - bx
