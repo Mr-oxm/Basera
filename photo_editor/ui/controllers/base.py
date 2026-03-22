@@ -93,6 +93,13 @@ class ControllerContext:
     def invalidate(self, layer_id: str | None = None) -> None:
         self._main_window._pipeline.invalidate(layer_id)
 
+    def composite_float_rgba(self):
+        """Latest composited document RGBA float32 [0,1], or None if no document."""
+        doc = self.document
+        if doc is None:
+            return None
+        return self._main_window._pipeline.execute(doc)
+
     def execute_command(self, command: Command):
         return self._main_window.execute_command(command)
 

@@ -1,8 +1,13 @@
-"""Curves non-destructive adjustment (simplified 3-slider interface)."""
+"""Curves non-destructive adjustment — RGB composite plus per-channel curves."""
+
+from __future__ import annotations
 
 import numpy as np
 
 from .adjustment_base import Adjustment
+
+_CHANNEL_SET = frozenset({"RGB", "Red", "Green", "Blue"})
+_IDENTITY_POINTS: list[list[int]] = [[0, 0], [255, 255]]
 
 
 def _monotonic_cubic_spline(xs: np.ndarray, ys: np.ndarray, x_eval: np.ndarray) -> np.ndarray:
@@ -59,42 +64,152 @@ def _monotonic_cubic_spline(xs: np.ndarray, ys: np.ndarray, x_eval: np.ndarray) 
     return result
 
 
-class Curves(Adjustment):
-    """Curves adjustment with intuitive shadow/midtone/highlight sliders.
+def _legacy_sliders_to_points(shadows: int, midtones: int, highlights: int) -> list[list[int]]:
+    shd = int(shadows)
+    mid = int(midtones)
+    hlt = int(highlights)
+    pts_x = [0, 64, 128, 192, 255]
+    pts_y = [
+        max(0, min(255, 0 + shd)),
+        max(0, min(255, 64 + int(shd * 0.5))),
+        max(0, min(255, 128 + mid)),
+        max(0, min(255, 192 + int(hlt * 0.5))),
+        max(0, min(255, 255 + hlt)),
+    ]
+    return [[pts_x[i], pts_y[i]] for i in range(5)]
 
-    Sliders range from -100 to +100.  Internally they are converted to
-    five control-point spline positions to match the classic Photoshop
-    behaviour.
+
+def sanitize_curve_points(raw: list | None) -> list[list[int]]:
+    """Return sorted control points with pinned ends at x=0 and x=255."""
+    if not raw:
+        return list(map(list, _IDENTITY_POINTS))
+    pts: list[list[int]] = []
+    for p in raw:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            continue
+        x = int(np.clip(float(p[0]), 0, 255))
+        y = int(np.clip(float(p[1]), 0, 255))
+        pts.append([x, y])
+    if len(pts) < 2:
+        return list(map(list, _IDENTITY_POINTS))
+    pts.sort(key=lambda t: t[0])
+    pts[0] = [0, pts[0][1]]
+    pts[-1] = [255, pts[-1][1]]
+    out: list[list[int]] = [list(pts[0])]
+    for p in pts[1:]:
+        if p[0] == out[-1][0]:
+            out[-1][1] = p[1]
+        else:
+            out.append(list(p))
+    return out
+
+
+def build_lut_y(points: list[list[int]]) -> np.ndarray:
+    """256-element float array mapping input 0–255 → output 0–1."""
+    pts = sanitize_curve_points(points)
+    xs = np.array([p[0] for p in pts], dtype=np.float64)
+    ys = np.array([p[1] for p in pts], dtype=np.float64)
+    lut_x = np.arange(256, dtype=np.float64)
+    lut_y = _monotonic_cubic_spline(xs, ys, lut_x)
+    return np.clip(lut_y, 0, 255) / 255.0
+
+
+def eval_curve_y(points: list[list[int]], x: float) -> float:
+    """Evaluate curve at scalar x in [0, 255]."""
+    pts = sanitize_curve_points(points)
+    xs = np.array([p[0] for p in pts], dtype=np.float64)
+    ys = np.array([p[1] for p in pts], dtype=np.float64)
+    xv = np.array([float(x)], dtype=np.float64)
+    y = _monotonic_cubic_spline(xs, ys, xv)[0]
+    return float(np.clip(y, 0, 255))
+
+
+def coerce_curve_bundle(params: dict | None) -> dict:
+    """Normalize to channel (UI) + four curves: RGB composite then R / G / B.
+
+    Order of application: RGB curve on each channel value, then Red / Green / Blue
+    curves on the respective outputs (Photoshop-style stacking).
     """
+    if params is None:
+        params = {}
+    identity = sanitize_curve_points(_IDENTITY_POINTS)
+    keys = ("points_rgb", "points_red", "points_green", "points_blue")
+
+    def _ch() -> str:
+        ch = params.get("channel", "RGB")
+        return ch if ch in _CHANNEL_SET else "RGB"
+
+    if all(isinstance(params.get(k), list) and len(params.get(k) or []) >= 2 for k in keys):
+        return {
+            "channel": _ch(),
+            "points_rgb": sanitize_curve_points(params["points_rgb"]),
+            "points_red": sanitize_curve_points(params["points_red"]),
+            "points_green": sanitize_curve_points(params["points_green"]),
+            "points_blue": sanitize_curve_points(params["points_blue"]),
+        }
+
+    if isinstance(params.get("points"), list) and len(params["points"]) >= 2:
+        ch = _ch()
+        pts = sanitize_curve_points(params["points"])
+        out = {k: list(map(list, identity)) for k in keys}
+        if ch == "RGB":
+            out["points_rgb"] = pts
+        elif ch == "Red":
+            out["points_red"] = pts
+        elif ch == "Green":
+            out["points_green"] = pts
+        else:
+            out["points_blue"] = pts
+        return {"channel": ch, **out}
+
+    shd = int(params.get("shadows", 0))
+    mid = int(params.get("midtones", 0))
+    hlt = int(params.get("highlights", 0))
+    return {
+        "channel": _ch(),
+        "points_rgb": _legacy_sliders_to_points(shd, mid, hlt),
+        "points_red": list(map(list, identity)),
+        "points_green": list(map(list, identity)),
+        "points_blue": list(map(list, identity)),
+    }
+
+
+class Curves(Adjustment):
+    """Tone curves: RGB composite plus independent R / G / B curves."""
 
     def __init__(self) -> None:
         super().__init__(
             "Curves",
-            {"shadows": 0, "midtones": 0, "highlights": 0},
+            {
+                "channel": "RGB",
+                "points_rgb": list(map(list, _IDENTITY_POINTS)),
+                "points_red": list(map(list, _IDENTITY_POINTS)),
+                "points_green": list(map(list, _IDENTITY_POINTS)),
+                "points_blue": list(map(list, _IDENTITY_POINTS)),
+            },
         )
 
     def apply(self, image: np.ndarray, params: dict) -> np.ndarray:
-        rgb = self._rgb(image)
+        rgb = self._rgb(image).copy()
         alpha = self._alpha(image)
+        b = coerce_curve_bundle(params)
 
-        shd = params.get("shadows", 0)
-        mid = params.get("midtones", 0)
-        hlt = params.get("highlights", 0)
+        idx0 = np.clip((rgb * 255.0).astype(np.int32), 0, 255)
+        lut_rgb = build_lut_y(b["points_rgb"])
+        lut_r = build_lut_y(b["points_red"])
+        lut_g = build_lut_y(b["points_green"])
+        lut_b = build_lut_y(b["points_blue"])
 
-        # Build 5-point curve from sliders
-        pts_x = np.array([0, 64, 128, 192, 255], dtype=np.float64)
-        pts_y = np.array([
-            max(0, min(255, 0 + shd)),
-            max(0, min(255, 64 + int(shd * 0.5))),
-            max(0, min(255, 128 + mid)),
-            max(0, min(255, 192 + int(hlt * 0.5))),
-            max(0, min(255, 255 + hlt)),
-        ], dtype=np.float64)
+        r1 = lut_rgb[idx0[..., 0]]
+        g1 = lut_rgb[idx0[..., 1]]
+        b1 = lut_rgb[idx0[..., 2]]
 
-        lut_x = np.arange(256, dtype=np.float64)
-        lut_y = _monotonic_cubic_spline(pts_x, pts_y, lut_x)
-        lut_y = np.clip(lut_y, 0, 255) / 255.0
+        idx_r = np.clip((r1 * 255.0).astype(np.int32), 0, 255)
+        idx_g = np.clip((g1 * 255.0).astype(np.int32), 0, 255)
+        idx_b = np.clip((b1 * 255.0).astype(np.int32), 0, 255)
 
-        idx = np.clip((rgb * 255).astype(np.int32), 0, 255)
-        result = lut_y[idx].astype(np.float32)
-        return self._merge(result, alpha)
+        rgb[..., 0] = lut_r[idx_r].astype(np.float32)
+        rgb[..., 1] = lut_g[idx_g].astype(np.float32)
+        rgb[..., 2] = lut_b[idx_b].astype(np.float32)
+
+        return self._merge(rgb, alpha)

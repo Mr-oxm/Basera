@@ -23,6 +23,10 @@ _ADJUSTMENT_SPECS: dict[str, tuple[str, str]] = {
     "Invert": ("photo_editor.adjustments.invert", "Invert"),
     "Posterize": ("photo_editor.adjustments.posterize", "Posterize"),
     "Threshold": ("photo_editor.adjustments.threshold", "Threshold"),
+    "White Balance": ("photo_editor.adjustments.white_balance", "WhiteBalance"),
+    "Recolor": ("photo_editor.adjustments.recolor", "Recolor"),
+    "Split Toning": ("photo_editor.adjustments.split_toning", "SplitToning"),
+    "Normals": ("photo_editor.adjustments.normals", "Normals"),
 }
 
 

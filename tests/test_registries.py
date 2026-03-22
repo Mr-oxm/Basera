@@ -11,6 +11,10 @@ def test_adjustment_registry_resolves_display_name() -> None:
     adjustment_map = get_adjustment_map()
     assert "Brightness/Contrast" in adjustment_map
     assert get_adjustment_class("Brightness/Contrast") is adjustment_map["Brightness/Contrast"]
+    assert "White Balance" in adjustment_map
+    assert "Recolor" in adjustment_map
+    assert "Split Toning" in adjustment_map
+    assert "Normals" in adjustment_map
 
 
 def test_filter_registry_resolves_internal_key() -> None:

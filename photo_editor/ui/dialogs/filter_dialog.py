@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
+
+from .adjustments.adjustment_preview_timing import PREVIEW_DEBOUNCE_MS
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
     QLabel, QScrollArea, QSlider, QVBoxLayout, QWidget,
@@ -55,9 +57,8 @@ class FilterDialog(QDialog):
         self._flat: dict[str, object] = {}  # flattened for UI
         self._widgets: dict[str, QWidget] = {}
 
-        # Debounce timer for live preview (50 ms)
         self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(50)
+        self._preview_timer.setInterval(PREVIEW_DEBOUNCE_MS)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._emit_params)
 

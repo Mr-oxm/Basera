@@ -21,7 +21,7 @@ from ..registries import (
     get_filter_map,
     get_filter_name_map,
 )
-from .dialogs.filter_dialog import FilterDialog
+from .dialogs.param_dialog import ParamDialogOptions, create_param_dialog
 
 
 # ---- Adjustment class registry ---------------------------------------------
@@ -110,7 +110,7 @@ def _run_dialog_with_preview(
     parent: QWidget | None,
     preview_fn: Callable[[], None] | None,
 ) -> bool:
-    """Show *FilterDialog*, live-preview on the canvas, commit or rollback."""
+    """Show parameter dialog, live-preview on the canvas, commit or rollback."""
     layer = doc.layers.active_layer
     if layer is None or layer.locked:
         return False
@@ -119,7 +119,24 @@ def _run_dialog_with_preview(
     # or re-apply cleanly on each param change.
     original_pixels = layer.pixels.copy()
 
-    dlg = FilterDialog(title, processor.default_params, parent=parent)
+    def _composite():
+        if parent is None or doc is None:
+            return None
+        pipeline = getattr(parent, "_pipeline", None)
+        if pipeline is None:
+            return None
+        try:
+            return pipeline.execute(doc)
+        except Exception:
+            return None
+
+    dlg = create_param_dialog(
+        title,
+        processor,
+        processor.default_params,
+        parent=parent,
+        options=ParamDialogOptions(composite_fn=_composite),
+    )
 
     # ---- live-preview callback -------------------------------------------
     def _on_params_changed(params: dict) -> None:

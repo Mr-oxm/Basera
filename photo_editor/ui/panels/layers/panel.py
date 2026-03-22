@@ -218,7 +218,8 @@ class LayersPanel(QWidget):
         
         _ADJ_NAMES = [
             "Brightness/Contrast", "Levels", "Curves", "Exposure",
-            "Vibrance", "Hue/Saturation", "Color Balance", "Black & White",
+            "Vibrance", "Hue/Saturation", "White Balance", "Color Balance", "Recolor",
+            "Split Toning", "Normals", "Black & White",
             "Photo Filter", "Gradient Map", "Selective Color", "Channel Mixer",
             "Invert", "Posterize", "Threshold",
         ]

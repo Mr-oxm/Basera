@@ -1,5 +1,7 @@
 """Color-space conversion utilities (vectorised NumPy)."""
 
+from __future__ import annotations
+
 import numpy as np
 
 
@@ -49,6 +51,21 @@ def rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
     h = np.where((mx == b) & (d > 0), (r - g) / safe + 4, h)
     h /= 6.0
     return np.stack([h, s, v], axis=-1).astype(np.float32)
+
+
+def hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
+    """Convert HSV [0,1] → RGB [0,1]."""
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    h6 = ((h % 1.0) * 6.0)
+    hi = np.floor(h6).astype(np.int32) % 6
+    f = h6 - np.floor(h6)
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    r = np.select([hi == 0, hi == 1, hi == 2, hi == 3, hi == 4, hi == 5], [v, q, p, p, t, v])
+    g = np.select([hi == 0, hi == 1, hi == 2, hi == 3, hi == 4, hi == 5], [t, v, v, q, p, p])
+    b = np.select([hi == 0, hi == 1, hi == 2, hi == 3, hi == 4, hi == 5], [p, p, t, v, v, q])
+    return np.clip(np.stack([r, g, b], axis=-1), 0, 1).astype(np.float32)
 
 
 def luminance(rgb: np.ndarray) -> np.ndarray:

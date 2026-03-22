@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...commands import UpdateEffectCommand
+from ...commands import RemoveLayerCommand, UpdateEffectCommand
 from ...core.enums import LayerType
 from ...processors import ImageProcessor
 from ...registries import get_adjustment_class, get_filter_class, get_filter_name_map
@@ -82,7 +82,7 @@ class FilterController(ControllerBase):
         self._attach_to_parent(layer.id, layer_type, prev_active)
         self.ctx.refresh()
         if processor.default_params:
-            self._edit_processor_layer(layer.id, layer_type)
+            self._edit_processor_layer(layer.id, layer_type, created_new=True)
 
     def _attach_to_parent(self, layer_id: str, layer_type: LayerType, prev_active) -> None:
         """Parent *layer_id* to the nearest suitable ancestor of *prev_active*.
@@ -114,7 +114,9 @@ class FilterController(ControllerBase):
             return
         self._attach_to_parent(layer_id, layer_type, doc.layers.active_layer)
 
-    def _edit_processor_layer(self, layer_id: str, layer_type: LayerType) -> None:
+    def _edit_processor_layer(
+        self, layer_id: str, layer_type: LayerType, *, created_new: bool = False
+    ) -> None:
         doc = self.doc
         if doc is None:
             return
@@ -125,10 +127,45 @@ class FilterController(ControllerBase):
         if processor is None or not processor.default_params:
             return
 
-        from ..dialogs.filter_dialog import FilterDialog
+        from ..dialogs.param_dialog import ParamDialogOptions, create_param_dialog
 
         current_params = dict(layer.adjustment_params) if layer.adjustment_params else dict(processor.default_params)
-        dlg = FilterDialog(self._dialog_title(layer_type, processor.name), current_params, parent=self.mw)
+
+        def _canvas_pick_connect(on_pick):
+            canvas = self.mw._canvas
+
+            def on_press(x: int, y: int, pressure: float = 1.0) -> None:
+                try:
+                    canvas.tool_pressed.disconnect(on_press)
+                except TypeError:
+                    pass
+                on_pick(x, y)
+
+            canvas.tool_pressed.connect(on_press)
+
+            def cancel() -> None:
+                try:
+                    canvas.tool_pressed.disconnect(on_press)
+                except TypeError:
+                    pass
+
+            return cancel
+
+        pick = (
+            _canvas_pick_connect
+            if processor.name in ("Hue/Saturation", "White Balance")
+            else None
+        )
+        dlg = create_param_dialog(
+            self._dialog_title(layer_type, processor.name),
+            processor,
+            current_params,
+            parent=self.mw,
+            options=ParamDialogOptions(
+                composite_fn=self.ctx.composite_float_rgba,
+                canvas_pick_connect=pick,
+            ),
+        )
 
         def _on_preview(params: dict) -> None:
             layer.adjustment_params = params
@@ -141,8 +178,11 @@ class FilterController(ControllerBase):
         if dlg.exec():
             self.ctx.execute_command(UpdateEffectCommand(layer.id, dlg.get_params()))
         else:
-            layer.adjustment_params = old_params
-            self.ctx.invalidate()
+            if created_new:
+                self.ctx.execute_command(RemoveLayerCommand(layer.id))
+            else:
+                layer.adjustment_params = old_params
+                self.ctx.invalidate()
             self.ctx.refresh()
 
     @staticmethod

@@ -1,0 +1,427 @@
+/* Adjustments dock + Curves dialog — matches base.qss tokens and layers/combo styling */
+
+AdjustmentsPanel {
+    background-color: [[surface_panel_alt]];
+    border-radius: 12px;
+}
+AdjustmentsPanel QLabel#adjustmentsTitle {
+    color: [[fg]];
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+    padding: 2px 2px 8px 2px;
+    letter-spacing: 0.02em;
+}
+AdjustmentsPanel QPushButton#adjustmentTile {
+    background-color: [[surface_card]];
+    border: 1px solid [[border_light]];
+    border-radius: 10px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 9px 8px;
+    min-height: 24px;
+}
+AdjustmentsPanel QPushButton#adjustmentTile:hover {
+    background-color: [[list_item_hover]];
+    border: 1px solid [[outline_strong]];
+}
+AdjustmentsPanel QPushButton#adjustmentTile:pressed {
+    background-color: [[surface_pressed]];
+    border: 1px solid [[accent_border]];
+}
+
+/* ---- Curves dialog (scoped by object name; avoids generic QDialog bleed) ---- */
+
+#CurvesDialog {
+    background-color: [[surface_panel_alt]];
+}
+
+#CurvesDialog QFrame#curvesBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+
+#CurvesDialog QFrame#curvesPlotSurface {
+    background-color: [[surface_card]];
+    border-radius: 12px;
+    border: 1px solid [[border_light]];
+}
+
+#CurvesDialog QLabel#curvesFieldLabel {
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    min-width: 88px;
+}
+
+#CurvesDialog QComboBox#curvesChannelCombo {
+    background-color: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    min-height: 26px;
+}
+#CurvesDialog QComboBox#curvesChannelCombo:hover {
+    border: 1px solid [[outline_strong]];
+    background-color: [[input_hover]];
+}
+#CurvesDialog QComboBox#curvesChannelCombo:focus {
+    border: 1px solid [[outline_focus]];
+    background-color: [[input_focus]];
+}
+#CurvesDialog QComboBox#curvesChannelCombo::drop-down {
+    border: none;
+    width: 16px;
+    background: transparent;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
+#CurvesDialog QComboBox#curvesChannelCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}
+#CurvesDialog QComboBox#curvesChannelCombo::down-arrow:hover {
+    border-top: 5px solid [[fg]];
+}
+#CurvesDialog QComboBox#curvesChannelCombo QAbstractItemView {
+    background-color: [[popup_bg]];
+    color: [[fg]];
+    selection-background-color: [[accent_soft]];
+    selection-color: [[fg]];
+    border: 1px solid [[popup_border]];
+    border-radius: 10px;
+    outline: none;
+    padding: 4px;
+}
+
+#CurvesDialog QPushButton#curvesSecondaryButton {
+    background-color: [[bg1_alt]];
+    border: 1px solid [[border_light]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 5px 12px;
+    min-height: 24px;
+}
+#CurvesDialog QPushButton#curvesSecondaryButton:hover {
+    background-color: [[surface_hover]];
+    border: 1px solid [[outline_strong]];
+}
+#CurvesDialog QPushButton#curvesSecondaryButton:pressed {
+    background-color: [[surface_pressed]];
+}
+
+#CurvesDialog QDialogButtonBox#curvesDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#CurvesDialog QDialogButtonBox#curvesDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+    border: 1px solid [[outline_strong]];
+}
+#CurvesDialog QDialogButtonBox#curvesDialogButtons QPushButton:pressed {
+    background-color: [[button_pressed]];
+}
+
+/* ---- Levels dialog ---- */
+#LevelsDialog QFrame#levelsBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#LevelsDialog QComboBox#levelsChannelCombo,
+#LevelsDialog QComboBox#levelsPresetCombo {
+    background-color: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    min-height: 26px;
+}
+#LevelsDialog QComboBox#levelsChannelCombo:hover,
+#LevelsDialog QComboBox#levelsPresetCombo:hover {
+    border: 1px solid [[outline_strong]];
+    background-color: [[input_hover]];
+}
+#LevelsDialog QComboBox::drop-down {
+    border: none;
+    width: 16px;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
+#LevelsDialog QComboBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}
+/* GradientSliderRow sets slider/spin styles inline */
+
+#LevelsDialog QDialogButtonBox#levelsDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#LevelsDialog QDialogButtonBox#levelsDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Hue / Saturation dialog ---- */
+#HueSatDialog QFrame#hueSatBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#HueSatDialog QCheckBox#hueSatHsvCheck {
+    color: [[fg]];
+    font-size: 11px;
+    spacing: 8px;
+    background-color: transparent;
+    background: transparent;
+}
+#HueSatDialog QCheckBox#hueSatHsvCheck::indicator {
+    width: 16px;
+    height: 16px;
+}
+#HueSatDialog QToolButton#hueSatTargetButton {
+    border: 1px solid [[border_light]];
+    border-radius: 8px;
+    padding: 4px 6px;
+    font-size: 10px;
+}
+#HueSatDialog QToolButton#hueSatTargetButton:checked {
+    border: 2px solid [[accent_border]];
+    background-color: [[accent_soft]];
+}
+#HueSatDialog QToolButton#hueSatPickerButton {
+    border: 1px solid [[border_light]];
+    border-radius: 8px;
+    color: [[fg_dim]];
+    padding: 4px 8px;
+}
+#HueSatDialog QPushButton#hueSatResetButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 10px;
+    font-weight: 500;
+    padding: 4px 12px;
+    min-height: 28px;
+}
+#HueSatDialog QPushButton#hueSatResetButton:hover {
+    background-color: [[button_hover]];
+}
+/* Hue sliders: GradientSliderRow */
+
+#HueSatDialog QDialogButtonBox#hueSatDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#HueSatDialog QDialogButtonBox#hueSatDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Color Balance dialog ---- */
+#ColorBalanceDialog QFrame#colorBalanceBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#ColorBalanceDialog QPushButton#colorBalanceModeButton {
+    background-color: [[bg1_alt]];
+    border: 1px solid [[border_light]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 8px 10px;
+    min-height: 28px;
+}
+#ColorBalanceDialog QPushButton#colorBalanceModeButton:checked {
+    background-color: [[accent_soft]];
+    border: 1px solid [[accent_border]];
+    color: [[fg]];
+}
+#ColorBalanceDialog QPushButton#colorBalanceModeButton:hover:!checked {
+    background-color: [[surface_hover]];
+}
+/* Color balance sliders: GradientSliderRow */
+
+#ColorBalanceDialog QDialogButtonBox#colorBalanceDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#ColorBalanceDialog QDialogButtonBox#colorBalanceDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Brightness / Contrast dialog ---- */
+#BrightnessContrastDialog QFrame#brightnessContrastBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#BrightnessContrastDialog QDialogButtonBox#brightnessContrastDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#BrightnessContrastDialog QDialogButtonBox#brightnessContrastDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Vibrance dialog ---- */
+#VibranceDialog QFrame#vibranceBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#VibranceDialog QDialogButtonBox#vibranceDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#VibranceDialog QDialogButtonBox#vibranceDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- White Balance dialog ---- */
+#WhiteBalanceDialog QFrame#whiteBalanceBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#WhiteBalanceDialog QToolButton#whiteBalancePickerButton {
+    border: 1px solid [[border_light]];
+    border-radius: 8px;
+    color: [[fg_dim]];
+    padding: 4px 12px;
+}
+#WhiteBalanceDialog QDialogButtonBox#whiteBalanceDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#WhiteBalanceDialog QDialogButtonBox#whiteBalanceDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Recolor dialog ---- */
+#RecolorDialog QFrame#recolorBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#RecolorDialog QDialogButtonBox#recolorDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#RecolorDialog QDialogButtonBox#recolorDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Split toning dialog ---- */
+#SplitToningDialog QFrame#splitToningBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#SplitToningDialog QDialogButtonBox#splitToningDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#SplitToningDialog QDialogButtonBox#splitToningDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
+
+/* ---- Normals dialog ---- */
+#NormalsDialog QFrame#normalsBody {
+    background-color: [[surface_panel]];
+    border-radius: 16px;
+    border: 1px solid [[outline_soft]];
+}
+#NormalsDialog QDialogButtonBox#normalsDialogButtons QPushButton {
+    background-color: [[button_bg]];
+    border: 1px solid [[button_border]];
+    border-radius: 8px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 500;
+    padding: 6px 18px;
+    min-height: 26px;
+    min-width: 88px;
+}
+#NormalsDialog QDialogButtonBox#normalsDialogButtons QPushButton:hover {
+    background-color: [[button_hover]];
+}
