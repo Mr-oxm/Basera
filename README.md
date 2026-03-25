@@ -3,7 +3,7 @@
 
 
 
-> **v0.4-alpha** — Performance optimizations, dynamic themes, full brush system, advanced vector booleans, UI overhaul, and multi-layer select.
+> **v0.4.5-alpha** — Performance optimizations, dynamic themes, full brush system, advanced vector booleans, UI overhaul, and multi-layer select.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
