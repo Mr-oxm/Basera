@@ -459,6 +459,8 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] Pen tablet pressure sensitivity
 
 ---
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mr-oxm/photoeditor)
+---
 
 ## License
 
