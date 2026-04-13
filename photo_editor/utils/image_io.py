@@ -64,9 +64,33 @@ def load_image(path: str | Path) -> np.ndarray:
 
 
 def save_image(
-    image: np.ndarray, path: str | Path, quality: int = 95,
+    image: np.ndarray,
+    path: str | Path,
+    quality: int = 95,
+    *,
+    target_size: tuple[int, int] | None = None,
+    jpeg_bg: tuple[int, int, int] = (255, 255, 255),
+    subsampling: int = 0,
 ) -> None:
-    """Save an RGBA float32 image to disk."""
+    """Save an RGBA float32 image to disk.
+
+    Parameters
+    ----------
+    image:
+        RGBA float32 array in [0, 1].
+    path:
+        Destination file path.
+    quality:
+        Lossy quality (1-100) for JPEG / WEBP / AVIF / HEIC.
+    target_size:
+        ``(width, height)`` to resize the image before saving.  When
+        ``None`` the original dimensions are kept.
+    jpeg_bg:
+        RGB background colour used when flattening transparent pixels for
+        formats that have no alpha channel (JPEG, BMP, PDF).
+    subsampling:
+        JPEG chroma sub-sampling: 0=4:4:4, 1=4:2:2, 2=4:2:0.
+    """
     path = Path(path)
     suffix = path.suffix.lower()
     if not can_save_extension(suffix):
@@ -78,20 +102,28 @@ def save_image(
     data = (data * 255).astype(np.uint8)
 
     pil = Image.fromarray(data, "RGBA")
+
+    if target_size is not None:
+        tw, th = int(target_size[0]), int(target_size[1])
+        if tw > 0 and th > 0 and (tw, th) != (pil.width, pil.height):
+            pil = pil.resize((tw, th), Image.Resampling.LANCZOS)
+
     if suffix in {".jpg", ".jpeg"}:
-        pil = pil.convert("RGB")
-        pil.save(path, quality=quality)
+        bg = Image.new("RGBA", pil.size, (*jpeg_bg, 255))
+        composite = Image.alpha_composite(bg, pil)
+        composite.convert("RGB").save(path, quality=quality, subsampling=subsampling)
     elif suffix == ".webp":
         pil.save(path, quality=quality)
     elif suffix == ".pdf":
-        pil.convert("RGB").save(path, format="PDF", resolution=300)
+        bg = Image.new("RGBA", pil.size, (*jpeg_bg, 255))
+        composite = Image.alpha_composite(bg, pil)
+        composite.convert("RGB").save(path, format="PDF", resolution=300)
     elif suffix == ".svg":
         # Export a self-contained raster-backed SVG for broad compatibility.
-        rgb = pil.convert("RGBA")
         buff = io.BytesIO()
-        rgb.save(buff, format="PNG")
+        pil.save(buff, format="PNG")
         encoded = base64.b64encode(buff.getvalue()).decode("ascii")
-        h, w = data.shape[:2]
+        h, w = pil.height, pil.width
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
             f'viewBox="0 0 {w} {h}">\n'

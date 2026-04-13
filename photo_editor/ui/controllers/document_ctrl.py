@@ -268,21 +268,39 @@ class DocumentController(ControllerBase):
         fmt = settings.get("format", "png")
         quality = settings.get("quality", 85)
 
+        # Target dimensions (may differ from document dims)
+        exp_w = settings.get("width")
+        exp_h = settings.get("height")
+        target_size: tuple[int, int] | None = None
+        if exp_w and exp_h:
+            tw, th = int(exp_w), int(exp_h)
+            if tw != self.doc.width or th != self.doc.height:
+                target_size = (tw, th)
+
+        # JPEG / PDF background colour for transparent areas
+        jpeg_bg: tuple[int, int, int] = settings.get("jpeg_bg", (255, 255, 255))
+
+        # JPEG chroma sub-sampling
+        _subsamp_map = {"4:4:4 (Best)": 0, "4:2:2": 1, "4:2:0 (Smallest)": 2}
+        subsampling: int = _subsamp_map.get(settings.get("subsampling", "4:4:4 (Best)"), 0)
+
         if settings.get("clipboard"):
             # Copy to clipboard
             try:
-                from PySide6.QtGui import QImage, QClipboard
+                from PySide6.QtGui import QImage
                 from PySide6.QtWidgets import QApplication
-                result = self.mw._pipeline.execute_to_uint8(self.doc)
                 import numpy as np
-                h, w = result.shape[:2]
-                channels = result.shape[2] if result.ndim == 3 else 1
-                if channels == 4:
-                    qimg = QImage(result.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
-                else:
-                    qimg = QImage(result.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
-                clipboard = QApplication.clipboard()
-                clipboard.setImage(qimg)
+                from PIL import Image
+
+                result_f = self.mw._pipeline.execute(self.doc)
+                data = (np.clip(result_f, 0, 1) * 255).astype(np.uint8)
+                pil = Image.fromarray(data, "RGBA")
+                if target_size:
+                    pil = pil.resize(target_size, Image.Resampling.LANCZOS)
+                arr = np.asarray(pil)
+                h, w = arr.shape[:2]
+                qimg = QImage(arr.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+                QApplication.clipboard().setImage(qimg)
                 self.ctx.show_status_message("Copied to clipboard", 2000)
             except Exception as exc:
                 QMessageBox.warning(self.mw, "Clipboard Error", str(exc))
@@ -305,7 +323,14 @@ class DocumentController(ControllerBase):
             QMessageBox.warning(mw, "Export Error", msg)
 
         self.ctx.execute_command_async(
-            SaveDocumentCommand(path, mw._pipeline, quality=quality),
+            SaveDocumentCommand(
+                path,
+                mw._pipeline,
+                quality=quality,
+                target_size=target_size,
+                jpeg_bg=jpeg_bg,
+                subsampling=subsampling,
+            ),
             on_success=on_success,
             on_error=on_error,
         )

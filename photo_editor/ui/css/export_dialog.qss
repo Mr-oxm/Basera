@@ -1,4 +1,4 @@
-/* Export dialog — premium design matching app language */
+/* Export dialog */
 
 #ExportDialog {
     background: [[surface_panel_alt]];
@@ -7,10 +7,18 @@
     font-size: 12px;
 }
 
+/* Make every plain QWidget inside the dialog transparent so the panel
+   background shows through section containers. */
+#ExportDialog QWidget {
+    background: transparent;
+}
+
 #ExportDialog QLabel {
     color: [[fg]];
     background: transparent;
 }
+
+/* ---------- Title ---------- */
 
 #ExportTitle {
     font-size: 18px;
@@ -18,19 +26,36 @@
     color: [[fg]];
     background: transparent;
     letter-spacing: 0.02em;
+    padding-bottom: 2px;
+}
+
+#ExportSectionHeader {
+    color: [[fg_dim]];
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    background: transparent;
+    padding-bottom: 2px;
 }
 
 /* ---------- Format list ---------- */
 
+#FormatScrollArea,
+#FormatScrollContainer {
+    background: transparent;
+    border: none;
+}
+
 #FormatCard {
     background: [[surface_card]];
     border: 1px solid [[outline_soft]];
-    border-radius: 10px;
-    padding: 8px 14px;
+    border-radius: 8px;
+    padding: 5px 12px;
     color: [[fg]];
     font-size: 11px;
     font-weight: 600;
-    min-height: 32px;
+    min-height: 26px;
+    text-align: left;
 }
 
 #FormatCard:hover {
@@ -41,16 +66,7 @@
 #FormatCard:checked {
     border-color: [[accent_border]];
     background: [[accent_soft]];
-}
-
-#FormatBadge {
-    color: [[fg_dim]];
-    font-size: 9px;
-    font-weight: 500;
-    background: [[bg1_alt]];
-    border: 1px solid [[outline_soft]];
-    border-radius: 6px;
-    padding: 2px 6px;
+    color: [[fg]];
 }
 
 /* ---------- Settings panel ---------- */
@@ -59,7 +75,12 @@
     background: [[surface_panel]];
     border: 1px solid [[outline_soft]];
     border-radius: 14px;
-    padding: 16px;
+}
+
+/* Restore specific backgrounds that were reset by the blanket QWidget rule */
+#ExportSettingsPanel QScrollArea,
+#ExportSettingsPanel QScrollBar {
+    background: transparent;
 }
 
 #ExportSettingLabel {
@@ -67,14 +88,37 @@
     font-size: 11px;
     font-weight: 600;
     background: transparent;
+    margin-bottom: 2px;
 }
 
-/* Quality slider */
+/* Small secondary labels (Units, Resolution, Scale:, hint text) */
+#ExportHint {
+    color: [[fg_dim]];
+    font-size: 10px;
+    background: transparent;
+}
+
+/* Horizontal divider */
+#ExportDivider {
+    color: [[outline_soft]];
+    background: [[outline_soft]];
+    border: none;
+    max-height: 1px;
+    margin: 2px 0;
+}
+
+/* ---------- Quality slider ---------- */
 
 #QualitySlider::groove:horizontal {
     background: [[slider_track]];
     height: 5px;
-    border-radius: 2px;
+    border-radius: 3px;
+}
+
+#QualitySlider::sub-page:horizontal {
+    background: [[accent]];
+    height: 5px;
+    border-radius: 3px;
 }
 
 #QualitySlider::handle:horizontal {
@@ -83,6 +127,7 @@
     height: 14px;
     margin: -5px 0;
     border-radius: 7px;
+    border: 1px solid [[outline_soft]];
 }
 
 #QualitySlider::handle:horizontal:hover {
@@ -90,23 +135,142 @@
 }
 
 #QualityValue {
-    color: [[fg]];
+    color: [[accent]];
     font-size: 13px;
     font-weight: 700;
     background: transparent;
     min-width: 36px;
 }
 
-/* Size preset combo */
+/* ---------- Dimension inputs  (QDoubleSpinBox, NoButtons) ---------- */
 
+#DimLabel {
+    color: [[fg_dim]];
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+}
+
+#DimInput {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 7px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 22px;
+}
+
+#DimInput:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#DimInput:focus {
+    background: [[input_focus]];
+    border-color: [[outline_focus]];
+}
+
+/* Aspect-ratio link button  (matches new_project_dialog LinkButton) */
+#LinkButton {
+    background: transparent;
+    border: 1px solid [[outline_soft]];
+    border-radius: 7px;
+    padding: 2px;
+    min-width: 24px;
+    min-height: 24px;
+    max-width: 28px;
+    max-height: 28px;
+    color: [[fg_dim]];
+    font-size: 12px;
+}
+
+#LinkButton:hover {
+    border-color: [[outline_strong]];
+    background: [[surface_hover]];
+}
+
+#LinkButton:checked {
+    border-color: [[accent_border]];
+    background: [[accent_soft]];
+    color: [[accent]];
+}
+
+/* Reset button */
+#ResetDimsBtn {
+    background: transparent;
+    color: [[fg_dim]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 7px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    min-height: 22px;
+}
+
+#ResetDimsBtn:hover {
+    background: [[surface_hover]];
+    color: [[fg]];
+    border-color: [[outline_strong]];
+}
+
+/* ---------- Combo boxes (units, resolution, scale, subsampling) ---------- */
+
+/* SettingCombo matches new_project_dialog's #SettingCombo exactly */
+#SettingCombo {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 7px;
+    padding: 3px 8px;
+    font-size: 11px;
+    min-height: 22px;
+}
+
+#SettingCombo:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#SettingCombo:focus {
+    background: [[input_focus]];
+    border-color: [[outline_focus]];
+}
+
+#SettingCombo::drop-down {
+    border: none;
+    width: 16px;
+}
+
+#SettingCombo::down-arrow {
+    image: none;
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}
+
+#SettingCombo QAbstractItemView {
+    background: [[popup_bg]];
+    color: [[fg]];
+    selection-background-color: [[accent_soft]];
+    selection-color: [[fg]];
+    border: 1px solid [[popup_border]];
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+}
+
+/* Scale preset combo keeps distinct style from settings combos */
 #SizePresetCombo {
     background: [[input_bg]];
     color: [[fg]];
     border: 1px solid [[input_border]];
-    border-radius: 8px;
-    padding: 5px 10px;
+    border-radius: 7px;
+    padding: 3px 8px;
     font-size: 11px;
-    min-height: 26px;
+    min-height: 22px;
 }
 
 #SizePresetCombo:hover {
@@ -116,13 +280,12 @@
 
 #SizePresetCombo::drop-down {
     border: none;
-    width: 16px;
+    width: 18px;
 }
 
 #SizePresetCombo::down-arrow {
     image: none;
-    width: 0;
-    height: 0;
+    width: 0; height: 0;
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
     border-top: 5px solid [[fg_dim]];
@@ -132,13 +295,41 @@
     background: [[popup_bg]];
     color: [[fg]];
     selection-background-color: [[accent_soft]];
+    selection-color: [[fg]];
     border: 1px solid [[popup_border]];
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 4px;
     outline: none;
 }
 
-/* Metadata toggles */
+/* ---------- Background colour picker ---------- */
+
+#BgColorSwatch {
+    border: 1px solid [[outline_strong]];
+    border-radius: 4px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+}
+
+#BgColorPickButton {
+    background: [[surface_card]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 10px;
+    min-height: 22px;
+}
+
+#BgColorPickButton:hover {
+    background: [[surface_hover]];
+    border-color: [[outline_strong]];
+}
+
+/* ---------- Metadata checkboxes ---------- */
 
 #MetadataCheck {
     color: [[fg]];
@@ -148,10 +339,10 @@
 }
 
 #MetadataCheck::indicator {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: 1px solid [[outline_strong]];
-    border-radius: 5px;
+    border-radius: 4px;
     background: [[input_bg]];
 }
 
@@ -164,20 +355,16 @@
     border-color: [[accent]];
 }
 
-/* Preview */
-#ExportPreview {
-    background: [[bg1_alt]];
-    border: 1px solid [[outline_soft]];
-    border-radius: 12px;
-}
+/* ---------- Size estimate ---------- */
 
 #ExportSizeEstimate {
     color: [[fg_dim]];
     font-size: 10px;
     background: transparent;
+    padding: 4px 0;
 }
 
-/* Bottom buttons */
+/* ---------- Bottom buttons ---------- */
 
 #ExportButton {
     background: [[accent]];
@@ -191,13 +378,8 @@
     min-width: 120px;
 }
 
-#ExportButton:hover {
-    background: [[accent_hover]];
-}
-
-#ExportButton:pressed {
-    background: [[accent_pressed]];
-}
+#ExportButton:hover    { background: [[accent_hover]]; }
+#ExportButton:pressed  { background: [[accent_pressed]]; }
 
 #ClipboardButton {
     background: [[button_bg]];
@@ -210,14 +392,12 @@
     min-height: 34px;
 }
 
-#ClipboardButton:hover {
-    background: [[button_hover]];
-}
+#ClipboardButton:hover { background: [[button_hover]]; }
 
 #ExportCancelButton {
-    background: [[button_bg]];
-    color: [[fg]];
-    border: 1px solid [[button_border]];
+    background: transparent;
+    color: [[fg_dim]];
+    border: 1px solid [[outline_soft]];
     border-radius: 10px;
     font-size: 12px;
     font-weight: 500;
@@ -227,35 +407,7 @@
 }
 
 #ExportCancelButton:hover {
-    background: [[button_hover]];
-}
-
-/* Subsampling combo */
-#SubsamplingCombo {
-    background: [[input_bg]];
+    background: [[surface_hover]];
     color: [[fg]];
-    border: 1px solid [[input_border]];
-    border-radius: 8px;
-    padding: 5px 10px;
-    font-size: 11px;
-    min-height: 26px;
-}
-
-#SubsamplingCombo:hover {
-    background: [[input_hover]];
     border-color: [[outline_strong]];
-}
-
-#SubsamplingCombo::drop-down {
-    border: none;
-    width: 16px;
-}
-
-#SubsamplingCombo::down-arrow {
-    image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid [[fg_dim]];
 }

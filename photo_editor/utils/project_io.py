@@ -442,14 +442,27 @@ def load_basera_payload(path: str | Path) -> dict:
 
     For v3 files this is the manifest.json; for legacy files it is the
     top-level payload dict.  Used by tests and diagnostic tools.
+
+    Raises ``ValueError`` (with a friendly message) when the file is
+    truncated or otherwise unreadable.
     """
     source = Path(path)
     if zipfile.is_zipfile(source):
-        with zipfile.ZipFile(source, "r") as zf:
-            return json.loads(zf.read(_MANIFEST))
+        try:
+            with zipfile.ZipFile(source, "r") as zf:
+                return json.loads(zf.read(_MANIFEST))
+        except (KeyError, json.JSONDecodeError, zipfile.BadZipFile, Exception) as exc:
+            raise ValueError(
+                f".basera file is incomplete or corrupted: {exc}"
+            ) from exc
 
-    # Legacy pickle path
+    # Legacy pickle path (v1/v2)
     import gzip
     import pickle
-    with gzip.open(source, "rb") as fh:
-        return pickle.load(fh)
+    try:
+        with gzip.open(source, "rb") as fh:
+            return pickle.load(fh)
+    except (EOFError, OSError, Exception) as exc:
+        raise ValueError(
+            f".basera file is incomplete or corrupted: {exc}"
+        ) from exc
