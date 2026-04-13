@@ -33,11 +33,11 @@ photo_editor/
 │   ├── canvas.py          Viewport state (zoom, pan, guides)
 │   ├── enums.py           BlendMode, LayerType, ToolType constants
 │   ├── color.py           Immutable RGBA + fill types
+│   ├── color_engine.py    Internal color math used by adjustments
 │   ├── text_layer.py      Rich-text data model
 │   ├── brush_engine.py    ABR brush file parser
-│   ├── color/             Color science (conversions, harmonies, gradients)
-│   ├── image/             Tile processing contracts
-│   └── services/          Extracted document-level operations
+│   ├── image/             Tile processing contracts (tile_processor.py)
+│   └── services/          Extracted document-level operations (document_resize.py)
 │
 ├── engine/                Render & compositing pipeline
 │   ├── compositor.py      Node-based layer compositing
@@ -45,11 +45,13 @@ photo_editor/
 │   ├── render_pipeline.py Orchestrator (uint8 cache + scheduling)
 │   ├── tile_cache.py      Incremental 256px tile dirty tracking
 │   ├── cache/             ImagePool (float32 buffer reuse)
-│   └── renderer/          RenderScheduler (async, ~30 fps)
+│   └── renderer/          RenderScheduler + RenderWorker (async, ~30 fps)
 │
 ├── commands/              Mutations with undo semantics
 │   ├── base.py            Command ABC
-│   ├── layer/             Add, Remove, Duplicate, Flatten, Reorder, Rename
+│   ├── layer/             Add, Remove, Duplicate, Flatten, MergeDown, Reorder,
+│   │                      Rename, AddGroup, MoveLayer, ClipLayer, DropAsMask,
+│   │                      ResizeLayer, RotateLayer
 │   ├── mask/              Add, Remove, Apply, Convert, Invert, Attach
 │   ├── effect/            AttachAdjustment, UpdateEffect
 │   └── document/          Save, PlaceImage
@@ -58,13 +60,93 @@ photo_editor/
 │   ├── main_window.py     Top-level window + controller wiring
 │   ├── app_signals.py     Cross-controller signal hub
 │   ├── document_session.py Open-doc & tab state
+│   ├── file_tab_bar.py    Document tab bar widget
 │   ├── filter_runner.py   Adjustment/filter dialog runner
+│   ├── menus.py           Menu bar construction
+│   ├── toolbar.py         Left-side tool toolbar
+│   ├── tool_manager.py    Tool instance registry & switching
+│   ├── shortcut_manager.py Keyboard shortcut binding table
+│   ├── status_bar.py      Bottom status bar
+│   ├── styles.py          Qt stylesheet helpers
+│   ├── theme.py           ThemeManager singleton (dark/light palettes)
+│   ├── welcome_screen.py  Startup splash / recent-projects screen
 │   ├── controllers/       Domain controllers (ControllerBase)
 │   ├── panels/            Dockable panels
+│   │   ├── layers_panel.py        Legacy shim / entry point
+│   │   ├── properties_panel.py    Legacy shim / entry point
+│   │   ├── adjustments_panel.py   Adjustment presets panel
+│   │   ├── brushes_panel.py       Brush preset browser
+│   │   ├── channels_panel.py      RGBA channel visibility
+│   │   ├── color_panel.py         Color picker panel
+│   │   ├── history_panel.py       Undo history panel
+│   │   ├── transform_panel.py     Numeric transform inputs
+│   │   ├── layers/                Refactored layers panel sub-package
+│   │   │   ├── panel.py           LayersPanel widget
+│   │   │   ├── layer_list.py      QListView subclass
+│   │   │   ├── layer_item.py      Per-row data model
+│   │   │   ├── layer_delegate.py  Custom item painter
+│   │   │   ├── blend_combo.py     Blend mode combo box
+│   │   │   ├── drag_manager.py    Drag-reorder logic
+│   │   │   ├── drag_overlay.py    Drop-indicator overlay
+│   │   │   ├── thumbnails.py      Async thumbnail generation
+│   │   │   ├── icons.py           Layer-type icon helpers
+│   │   │   └── base.py            PanelBase mixin
+│   │   └── properties/            Tool options bar sub-package
+│   │       ├── panel.py           PropertiesPanel (stacked widget)
+│   │       ├── brush_bar.py       Brush tool options
+│   │       ├── crop_bar.py        Crop tool options
+│   │       ├── gradient_bar.py    Gradient tool options
+│   │       ├── move_bar.py        Move tool options
+│   │       ├── selection_bar.py   Selection tool options
+│   │       ├── text_bar.py        Text tool options
+│   │       ├── vector_bar.py      Vector/pen tool options
+│   │       ├── zoom_bar.py        Zoom/view options
+│   │       └── base.py            BarBase mixin
 │   ├── dialogs/           Modal windows
+│   │   ├── filter_dialog.py       Generic filter parameter dialog
+│   │   ├── new_document.py        New document wizard
+│   │   ├── new_project_dialog.py  New project dialog
+│   │   ├── export_dialog.py       Export (flatten + format options)
+│   │   ├── layer_styles_dialog.py Layer styles editor
+│   │   ├── param_dialog.py        Generic parameter input dialog
+│   │   ├── shortcuts_dialog.py    Keyboard shortcuts editor
+│   │   ├── text_dialog.py         Rich-text editor dialog
+│   │   └── adjustments/           Per-adjustment parameter dialogs
+│   │       ├── brightness_contrast_dialog.py
+│   │       ├── color_balance_dialog.py
+│   │       ├── curves_dialog.py
+│   │       ├── hue_saturation_dialog.py
+│   │       ├── levels_dialog.py
+│   │       ├── normals_dialog.py
+│   │       ├── recolor_dialog.py
+│   │       ├── split_toning_dialog.py
+│   │       ├── vibrance_dialog.py
+│   │       ├── white_balance_dialog.py
+│   │       └── adjustment_preview_timing.py  Debounce helper
+│   ├── canvas/            Canvas overlays & input handling
+│   │   ├── canvas_input.py        Mouse/tablet event routing
+│   │   ├── canvas_overlays.py     Selection, transform & guide overlays
+│   │   └── canvas_cursors.py      Tool-aware cursor factory
 │   ├── widgets/           Reusable UI components
-│   ├── canvas/            Canvas overlays & components
+│   │   ├── color_wheel.py
+│   │   ├── color_sliders.py
+│   │   ├── color_dropdown.py
+│   │   ├── gradient_editor.py
+│   │   ├── gradient_slider_row.py
+│   │   ├── rulers.py
+│   │   └── swatch_grid.py
+│   ├── icons/             Icon factories (programmatic + asset-based)
+│   │   ├── assets.py      General app asset icons
+│   │   ├── layers.py      Layer-type icons
+│   │   ├── properties.py  Properties panel icons
+│   │   └── tool_icons.py  Toolbar tool icons
+│   ├── css/               Qt stylesheet fragments
 │   └── services/          Shared UI-state helpers
+│       ├── layer_panel_state.py
+│       ├── selection_ui_state.py
+│       ├── guide_ui_state.py
+│       ├── vector_ui_state.py
+│       └── rasterize_guard.py
 │
 ├── processors/            Shared processor interface
 │   └── image_processor.py ImageProcessor ABC
@@ -73,17 +155,46 @@ photo_editor/
 │   ├── adjustment_registry.py
 │   └── filter_registry.py
 │
-├── adjustments/           Non-destructive adjustment layer ops
-├── filters/               Destructive filter layer ops
+├── adjustments/           Non-destructive adjustment layer ops (19 total)
+├── filters/               Destructive filter layer ops (20+ total)
 ├── effects/               Runtime effects pipeline
 ├── styles/                Layer style effects (drop shadow, glow, etc.)
 ├── blending/              Blend mode functions + BlendingEngine
 ├── masks/                 Mask management (legacy + mask-layer API)
 ├── tools/                 Interactive canvas tools
+│   ├── move/              Move tool sub-package
+│   │   ├── move_tool.py   Multi-layer move with live preview
+│   │   ├── align_ops.py   Align / distribute operations
+│   │   ├── auto_select.py Click-to-select layer logic
+│   │   ├── float_selection.py  Float selection helpers
+│   │   ├── hit_test.py    Layer hit-testing
+│   │   ├── resize_ops.py  Handle-based resize helpers
+│   │   ├── rotate_ops.py  Handle-based rotation helpers
+│   │   ├── vector_commit.py    Vector transform commit
+│   │   └── _enums.py      Internal move-tool enums
+│   └── (tool_base.py, brush.py, eraser.py, clone_stamp.py, healing_brush.py,
+│        gradient_tool.py, paint_bucket.py, selection_tools.py, shape_tool.py,
+│        text_tool.py, transform_tool.py, crop_tool.py, pan_tool.py,
+│        zoom_tool.py, eyedropper.py)
 ├── transforms/            Geometric transform engine
-├── vector/                Vector graphics (paths, shapes, SVG, boolean)
+├── vector/                Vector graphics (paths, shapes, SVG, boolean, PDF)
+│   ├── scene.py, path.py, shapes.py, style.py, geometry.py
+│   ├── bezier.py          Bezier math helpers
+│   ├── boolean.py         Boolean path ops (entry point)
+│   ├── boolean_ops.py     Boolean op implementations
+│   ├── spatial.py         RTree / spatial index helpers
+│   ├── shape_tool.py      Interactive shape drawing tool
+│   ├── pick_segments.py   Segment-level selection helpers
+│   ├── svg.py, pdf.py     SVG and PDF import/export
+│   └── rasterizer.py, pen_tool.py, node_tool.py
 ├── color/                 Color management (distinct from core/color.py)
-└── utils/                 Misc helpers (IO, math, worker thread)
+└── utils/                 Misc helpers
+    ├── color_utils.py     Color math helpers
+    ├── image_io.py        Format-detecting imread/imwrite
+    ├── math_utils.py      Geometric and numeric utilities
+    ├── project_io.py      .basera project serialization (read/write)
+    ├── recent_projects.py Recent-files list persistence
+    └── worker.py          Worker QThread wrapper for async operations
 ```
 
 ---
@@ -124,10 +235,10 @@ Pure domain model. No Qt, no numpy rendering. All business rules and data struct
 | `canvas.py` | Viewport state: zoom, pan, rotation, grid pitch, guide list, snap flags |
 | `enums.py` | `BlendMode` (32 modes), `LayerType` (RASTER, GROUP, ADJUSTMENT, FILTER, MASK, SHAPE, TEXT, VECTOR), `ToolType` (25 tools) |
 | `color.py` | Immutable `Color` RGBA, `SolidFill`, `LinearGradient`, `RadialGradient`, `GradientStop` |
+| `color_engine.py` | Internal color math utilities used by adjustments (channel ops, blend helpers) |
 | `text_layer.py` | `TextRun`, `CharFormat`, `ParagraphFormat`, Arabic/RTL support |
 | `brush_engine.py` | `BrushPreset`, `BrushManager` (singleton), ABR v1/v2/v6+ parser |
-| `color/` | `ColorManager` (FG/BG singleton), color-space conversions (HSV/HSL/CMYK/Lab/Oklab), harmonies, gradients, swatch palette |
-| `image/` | Tile processing contracts |
+| `image/` | Tile processing contracts (`tile_processor.py`) |
 | `services/` | Extracted operations shared by controllers and not belonging in core data classes (e.g. `document_resize.py`) |
 
 ---
@@ -143,7 +254,8 @@ Rendering and compositing pipeline. Converts a `Document` into a flat `(H, W, 4)
 | `render_pipeline.py` | Orchestrates: calls `RenderEngine`, caches the `uint8` result, integrates `TileCache` and `ImagePool` |
 | `tile_cache.py` | Tracks 256 px dirty tiles for incremental rendering |
 | `cache/image_pool.py` | `ImagePool` — reusable `(H, W, 4) float32` buffer pool, avoids alloc/dealloc churn |
-| `renderer/scheduler.py` | `RenderScheduler` — off-UI thread at ~30 fps, configurable preview down-scale |
+| `renderer/render_scheduler.py` | `RenderScheduler` — off-UI thread at ~30 fps, configurable preview down-scale |
+| `renderer/render_worker.py` | `RenderWorker` — QThread that executes a single render pass |
 
 **Compositing order inside `Compositor.composite()`:**
 
@@ -161,7 +273,7 @@ Each command encapsulates one reversible document mutation. The `Command` ABC de
 
 | Sub-package | Commands |
 |-------------|---------|
-| `layer/` | AddLayer, RemoveLayer, DuplicateLayer, FlattenCommand, MergeDownCommand, MoveLayer, ReorderLayers, RenameLayer, AddGroup |
+| `layer/` | AddLayer, RemoveLayer, DuplicateLayer, FlattenCommand, MergeDownCommand, MoveLayer, ReorderLayers, RenameLayer, AddGroup, ClipLayer, DropAsMask, ResizeLayer, RotateLayer |
 | `mask/` | AddMaskLayer, RemoveMaskLayer, ApplyMaskLayer, ConvertToMask, InvertMaskLayer, AttachAdjustmentToLayer, AttachMaskToLayer |
 | `effect/` | AttachAdjustmentToLayer, UpdateEffectCommand |
 | `document/` | SaveDocument, PlaceImage |
@@ -214,6 +326,43 @@ All PySide6 code. Only layer that imports Qt. Calls into `commands/` and `core/`
 | `vector_ui_state.py` | Vector panel/mode state |
 | `rasterize_guard.py` | Rasterize active text/vector layer before destructive ops |
 
+**Top-level `ui/` modules** added since initial design:
+
+| Module | Responsibility |
+|--------|---------------|
+| `file_tab_bar.py` | Document tab bar widget (open-doc tabs) |
+| `menus.py` | Menu bar construction and wiring |
+| `toolbar.py` | Left-side tool toolbar |
+| `tool_manager.py` | Tool instance registry and active-tool switching |
+| `shortcut_manager.py` | Keyboard shortcut binding table (singleton) |
+| `status_bar.py` | Bottom status bar (cursor coords, zoom level, doc info) |
+| `styles.py` | Qt stylesheet helpers and global style application |
+| `theme.py` | `ThemeManager` singleton (dark/light palette management) |
+| `welcome_screen.py` | Startup splash / recent-projects screen |
+
+**`ui/canvas/`** — Canvas input and overlay sub-package:
+
+| Module | Responsibility |
+|--------|---------------|
+| `canvas_input.py` | Mouse/tablet event routing to active tool |
+| `canvas_overlays.py` | Selection march, transform handles, guide overlays |
+| `canvas_cursors.py` | Tool-aware cursor factory |
+
+**`ui/icons/`** — Programmatic icon factories:
+
+| Module | Responsibility |
+|--------|---------------|
+| `assets.py` | General app asset icons |
+| `layers.py` | Layer-type icons (raster, group, text, vector, etc.) |
+| `properties.py` | Properties panel icons |
+| `tool_icons.py` | Toolbar tool icons |
+
+**`ui/dialogs/adjustments/`** — Per-adjustment parameter dialogs (one per adjustment type): Brightness/Contrast, Color Balance, Curves, Hue/Saturation, Levels, Normals, Recolor, Split Toning, Vibrance, White Balance. Each shares `adjustment_preview_timing.py` for debounced live preview.
+
+**`ui/panels/layers/`** — Refactored layers panel sub-package: `panel.py` (widget), `layer_list.py` (view), `layer_item.py` (model), `layer_delegate.py` (painter), `blend_combo.py`, `drag_manager.py`, `drag_overlay.py`, `thumbnails.py`, `icons.py`, `base.py`.
+
+**`ui/panels/properties/`** — Tool options bar sub-package: `panel.py` (stacked widget), per-tool bars (`brush_bar`, `crop_bar`, `gradient_bar`, `move_bar`, `selection_bar`, `text_bar`, `vector_bar`, `zoom_bar`), `base.py`.
+
 ---
 
 ### `processors/`
@@ -245,9 +394,9 @@ Lazy importlib-based registries. Return processor classes on demand without the 
 
 ### `adjustments/`
 
-15 non-destructive adjustments, each a concrete `Adjustment(ImageProcessor)`:
+19 non-destructive adjustments, each a concrete `Adjustment(ImageProcessor)`:
 
-Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturation · Color Balance · Black & White · Photo Filter · Gradient Map · Selective Color · Channel Mixer · Invert · Posterize · Threshold
+Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturation · Color Balance · Black & White · Photo Filter · Gradient Map · Selective Color · Channel Mixer · Invert · Posterize · Threshold · Normals · Recolor · Split Toning · White Balance
 
 All implement `apply(image, params) → image` where both input and output are `(H, W, 4) float32` RGBA.
 
@@ -260,11 +409,11 @@ All implement `apply(image, params) → image` where both input and output are `
 | Category | Filters |
 |----------|---------|
 | `blur/` | Gaussian Blur, Motion Blur, Radial Blur, Lens Blur, Surface Blur |
-| `distort/` | Warp, Twist, Bulge, Pinch, Perspective |
-| `noise/` | Gaussian, Poisson, Salt-and-Pepper |
-| `sharpen/` | Unsharp Mask, High Pass |
-| `stylize/` | Pixelate, Oil Paint, Cartoon, Emboss |
-| `render/` | Clouds, Plasma, Noise |
+| `distort/` | Twirl, Pinch, Perspective, Ripple, Wave |
+| `noise/` | Add Noise, Dust & Scratches, Median, Reduce Noise |
+| `sharpen/` | Sharpen, Smart Sharpen, Unsharp Mask |
+| `stylize/` | Emboss, Find Edges, Oil Paint, Solarize |
+| `render/` | Clouds, Difference Clouds, Lighting Effects |
 
 Blur filters include premultiplied-alpha helpers (`_premultiply`, `_unpremultiply`) to prevent dark fringing on transparent edges. The compositor adds padding around layers when blur filters are in use so the blur can extend beyond the original layer boundary.
 
@@ -314,21 +463,36 @@ Applied by `StyleEngine.apply_styles(pixels, styles)` during compositing.
 
 15+ interactive canvas tools, all subclasses of `Tool(ABC)` with `on_press(event, doc, canvas)`, `on_move(…)`, `on_release(…)`:
 
-| Tool | Description |
-|------|-------------|
-| Brush / Eraser | Dab-based painting with pressure, size, hardness, opacity |
-| Clone Stamp | Sample-then-paint from an offset source |
-| Healing Brush | Content-aware blending at paint site |
-| Gradient | Linear/radial/conical/diamond gradient fill |
-| Paint Bucket | Flood fill with tolerance |
-| Selection tools | Rect, Ellipse, Lasso, Magic Wand |
-| Move | Translate layers (multi-select aware) |
-| Transform | Non-destructive scale/rotate/skew via handle drag |
-| Crop | Interactive canvas crop with aspect-ratio lock |
-| Text | In-canvas rich-text editor |
-| Shape / Pen / Node | Vector drawing and path editing |
-| Pan / Zoom | Viewport navigation |
-| Eyedropper | Sample canvas color → FG/BG |
+| Tool | File(s) | Description |
+|------|---------|-------------|
+| Brush | `brush.py` | Dab-based painting with pressure, size, hardness, opacity |
+| Eraser | `eraser.py` | Alpha-erasing dab tool |
+| Clone Stamp | `clone_stamp.py` | Sample-then-paint from an offset source |
+| Healing Brush | `healing_brush.py` | Content-aware blending at paint site |
+| Gradient | `gradient_tool.py` | Linear/radial/conical/diamond gradient fill |
+| Paint Bucket | `paint_bucket.py` | Flood fill with tolerance |
+| Selection tools | `selection_tools.py` | Rect, Ellipse, Lasso, Magic Wand |
+| Move | `move_tool.py` + `move/` | Translate layers (multi-select, align, auto-select, float) |
+| Transform | `transform_tool.py` | Non-destructive scale/rotate/skew via handle drag |
+| Crop | `crop_tool.py` | Interactive canvas crop with aspect-ratio lock |
+| Text | `text_tool.py` | In-canvas rich-text editor |
+| Shape | `shape_tool.py` | Parametric shape drawing (rect, circle, polygon, star) |
+| Pen / Node | `vector/pen_tool.py`, `vector/node_tool.py` | Bezier path drawing and node editing |
+| Pan / Zoom | `pan_tool.py`, `zoom_tool.py` | Viewport navigation |
+| Eyedropper | `eyedropper.py` | Sample canvas color → FG/BG |
+
+**`move/` sub-package** — Move tool helpers extracted for clarity:
+
+| Module | Responsibility |
+|--------|---------------|
+| `align_ops.py` | Align and distribute selected layers |
+| `auto_select.py` | Click-to-auto-select topmost layer under cursor |
+| `float_selection.py` | Float (detach) active selection to a new layer |
+| `hit_test.py` | Per-pixel layer hit testing |
+| `resize_ops.py` | Handle-based layer resize during move |
+| `rotate_ops.py` | Handle-based layer rotation during move |
+| `vector_commit.py` | Commit in-progress vector transform |
+| `_enums.py` | Internal move-tool enums (handle type, drag state) |
 
 Shared helpers on `Tool`: `_rasterize_if_needed()` (bakes ND-transforms before destructive edits), `_get_sel_mask()` (selection in layer coords), `_stamp_circle()` (region-optimized circular dab).
 
@@ -363,8 +527,14 @@ Full vector graphics subsystem:
 | `shapes.py` | `ShapePrimitive` — rectangle, circle, polygon, star with live parameters; `to_path()` converts to `VectorPath` |
 | `style.py` | `VectorStyle` — stroke + fill, color, width, dash pattern, line cap/join |
 | `geometry.py` | `Vec2`, `BBox`, `AffineTransform`, geometric primitives |
-| `boolean.py` | Union, intersection, subtract, XOR path operations |
+| `bezier.py` | Bezier math helpers (evaluate, split, intersect, offset) |
+| `boolean.py` | Boolean path op entry point (union, intersect, subtract, XOR) |
+| `boolean_ops.py` | Boolean op implementations |
+| `spatial.py` | RTree spatial index helpers for fast hit-testing |
+| `shape_tool.py` | Interactive parametric shape drawing tool |
+| `pick_segments.py` | Segment-level selection helpers for node tool |
 | `svg.py` | SVG import and export |
+| `pdf.py` | PDF vector import |
 | `rasterizer.py` | Vector → raster conversion for compositing |
 | `pen_tool.py` | Interactive Bezier path drawing |
 | `node_tool.py` | Node editing (select, move, add, delete control points) |
@@ -394,6 +564,8 @@ Color management separate from `core/color.py`. Provides a richer API used by th
 | `color_utils.py` | Color math helpers (blend, clamp, etc.) |
 | `image_io.py` | Format-detecting imread/imwrite |
 | `math_utils.py` | Geometric and numeric utilities |
+| `project_io.py` | `.basera` project serialization — read/write full document to disk |
+| `recent_projects.py` | Recent-files list persistence (JSON) |
 | `worker.py` | `Worker` QThread wrapper for async operations |
 
 ---
