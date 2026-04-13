@@ -24,6 +24,7 @@ class FakeWindow:
             (),
             {
                 "showMessage": self._show_message,
+                "show_activity": self._show_message,
                 "set_document_info": self._set_document_info,
             },
         )()

@@ -53,7 +53,7 @@ class ControllerContext:
         self._main_window.setWindowTitle(title)
 
     def show_status_message(self, message: str, timeout_ms: int = 0) -> None:
-        self._main_window._status.showMessage(message, timeout_ms)
+        self._main_window._status.show_activity(message, timeout_ms)
 
     def set_document(self, document) -> None:
         self._main_window._doc = document

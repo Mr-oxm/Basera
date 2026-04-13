@@ -1,11 +1,13 @@
 """Status bar showing document info, zoom level, cursor position.
 
 Modern pill-based layout with subtle depth cues and clean typography.
+Transient messages (saving, exporting…) appear in a dedicated pill
+*beside* the document info — they never hide it.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QStatusBar, QWidget
 
 from .styles import render_qss
@@ -56,11 +58,24 @@ class EditorStatusBar(QStatusBar):
         self._size_pill = _pill("")
         self._tool_pill = _pill("")
 
+        # Transient message pill — sits after the tool pill, hidden by default
+        self._msg_dot = _dot_sep()
+        self._msg_pill = _pill("")
+        self._msg_dot.setVisible(False)
+        self._msg_pill.setVisible(False)
+
+        # Auto-clear timer for transient messages
+        self._msg_timer = QTimer(self)
+        self._msg_timer.setSingleShot(True)
+        self._msg_timer.timeout.connect(self._clear_message)
+
         hl.addWidget(self._doc_pill)
         hl.addWidget(_dot_sep())
         hl.addWidget(self._size_pill)
         hl.addWidget(_dot_sep())
         hl.addWidget(self._tool_pill)
+        hl.addWidget(self._msg_dot)
+        hl.addWidget(self._msg_pill)
         hl.addStretch()
 
         # ── right cluster ───────────────────────────────────────────────
@@ -95,7 +110,7 @@ class EditorStatusBar(QStatusBar):
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
         self._apply_theme(ThemeManager.instance().active_palette)
 
-    # ── public API (unchanged signatures) ───────────────────────────────
+    # ── public API ──────────────────────────────────────────────────────
 
     def set_document_info(self, name: str, width: int, height: int) -> None:
         self._doc_pill.setText(name)
@@ -110,6 +125,24 @@ class EditorStatusBar(QStatusBar):
     def set_tool(self, name: str) -> None:
         self._tool_pill.setText(name)
 
+    def show_activity(self, message: str, timeout_ms: int = 0) -> None:
+        """Show a transient message *next to* the document info pills.
+
+        Unlike ``QStatusBar.showMessage()`` this never hides the permanent
+        pills.  If *timeout_ms* is 0, the message stays until explicitly
+        cleared with ``clear_activity()`` or replaced by the next call.
+        """
+        self._msg_pill.setText(message)
+        self._msg_dot.setVisible(True)
+        self._msg_pill.setVisible(True)
+        self._msg_timer.stop()
+        if timeout_ms > 0:
+            self._msg_timer.start(timeout_ms)
+
+    def clear_activity(self) -> None:
+        """Immediately clear the transient message pill."""
+        self._clear_message()
+
     @property
     def zoom_to_mouse(self) -> bool:
         """Whether zoom operations anchor to the mouse position."""
@@ -119,9 +152,17 @@ class EditorStatusBar(QStatusBar):
     def zoom_to_mouse(self, value: bool) -> None:
         self._zoom_to_mouse_cb.setChecked(value)
 
+    # ── internals ───────────────────────────────────────────────────────
+
+    def _clear_message(self) -> None:
+        self._msg_timer.stop()
+        self._msg_pill.setText("")
+        self._msg_dot.setVisible(False)
+        self._msg_pill.setVisible(False)
+
     def _apply_theme(self, palette: dict) -> None:
         self.setStyleSheet(render_qss("status_bar.qss", palette))
-        
+
         accent_pill = render_qss(
             "status_bar_pill.qss",
             bg=palette['accent'],
@@ -134,11 +175,18 @@ class EditorStatusBar(QStatusBar):
             fg=palette['fg_dim'],
             weight=400,
         )
-        
+        msg_pill = render_qss(
+            "status_bar_pill.qss",
+            bg="transparent",
+            fg=palette.get('warning', palette.get('accent', '#e8a427')),
+            weight=600,
+        )
+
         self._doc_pill.setStyleSheet(accent_pill)
         self._size_pill.setStyleSheet(dim_pill)
         self._tool_pill.setStyleSheet(dim_pill)
         self._pos_pill.setStyleSheet(dim_pill)
         self._zoom_pill.setStyleSheet(dim_pill)
-        
+        self._msg_pill.setStyleSheet(msg_pill)
+
         self._zoom_to_mouse_cb.setStyleSheet(render_qss("status_bar_checkbox.qss", palette))

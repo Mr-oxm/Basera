@@ -236,6 +236,7 @@ class MainWindow(QMainWindow):
         self._welcome.new_project_requested.connect(self._on_welcome_new)
         self._welcome.open_image_requested.connect(self._on_welcome_open_image)
         self._welcome.open_basera_requested.connect(self._on_welcome_open_basera)
+        self._welcome.recent_project_selected.connect(self._on_welcome_recent_selected)
 
         self._stacked.addWidget(self._welcome)   # index 0
         self._stacked.addWidget(central)          # index 1
@@ -527,7 +528,7 @@ class MainWindow(QMainWindow):
             result = self._pipeline.execute_to_uint8(self._doc)
             self._canvas.set_image(result, force=True)
             self._sync_canvas_scrollbars()
-        self._status.showMessage(f"Render error: {message}", 3000)
+        self._status.show_activity(f"Render error: {message}", 3000)
 
     def execute_command(self, command: Command):
         """Execute a command and refresh. Decouples UI from engine.
@@ -550,26 +551,35 @@ class MainWindow(QMainWindow):
         """Run a heavy command off the UI thread. Callbacks run on main thread."""
         if not self._doc:
             return
-        from PySide6.QtCore import QThreadPool
         from ..utils.worker import Worker
 
         doc = self._doc
-        pipeline = self._pipeline
 
         def run() -> object:
             return command.execute(doc)
 
         def on_result(result: object) -> None:
-            if on_success:
-                on_success(result)
-            else:
-                self._pipeline.invalidate()
-                self._refresh()
+            try:
+                if on_success:
+                    on_success(result)
+                else:
+                    self._pipeline.invalidate()
+                    self._refresh()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                self._status.show_activity(f"Callback error: {exc}", 5000)
 
         def on_err(msg: str) -> None:
-            self._status.showMessage(f"Error: {msg}", 5000)
-            if on_error:
-                on_error(msg)
+            try:
+                if on_error:
+                    on_error(msg)
+                else:
+                    self._status.show_activity(f"Error: {msg}", 5000)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                self._status.show_activity(f"Error: {msg}", 5000)
 
         Worker.run_async(run, on_result=on_result, on_error=on_err)
 
@@ -645,6 +655,7 @@ class MainWindow(QMainWindow):
         """Switch the stacked widget to the welcome screen."""
         self._stacked.setCurrentIndex(0)
         self._set_editor_visible(False)
+        self._refresh_recent_projects()
 
     def _show_editor(self) -> None:
         """Switch the stacked widget to the editor view."""
@@ -690,16 +701,89 @@ class MainWindow(QMainWindow):
 
     def _on_welcome_open_basera(self) -> None:
         """Handle 'Open .basera' from welcome screen."""
-        from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Basera Project", "", "Basera Projects (*.basera)"
-        )
-        if path:
-            # TODO: implement .basera project loading
-            self._status.showMessage(f"Basera project loading not yet implemented: {path}", 5000)
+        self._document_ctrl.on_open_basera()
+
+    def _on_welcome_recent_selected(self, path: str) -> None:
+        """Handle a click on a recent project entry."""
+        from pathlib import Path
+        if not Path(path).exists():
+            from PySide6.QtWidgets import QMessageBox
+            from ..utils.recent_projects import remove_recent_project
+            QMessageBox.warning(
+                self, "File Not Found",
+                f"The project file could not be found:\n{path}\n\n"
+                "It will be removed from your recent projects list.",
+            )
+            remove_recent_project(path)
+            self._refresh_recent_projects()
+            return
+        self._document_ctrl.on_open_basera(path)
+
+    def _refresh_recent_projects(self) -> None:
+        """Reload recent projects from disk and push them to the welcome screen."""
+        from ..utils.recent_projects import load_recent_projects, format_file_size
+        entries = load_recent_projects()
+        projects = [
+            {
+                "name": e["name"],
+                "path": e["path"],
+                "size": format_file_size(e["path"]),
+            }
+            for e in entries
+        ]
+        self._welcome.set_recent_projects(projects)
 
     def _on_last_tab_closed(self) -> None:
         """Called when the last tab is closed — return to welcome screen."""
         self._doc = None
         if not self._dev_mode:
             self._show_welcome_screen()
+
+    # ---- Application close --------------------------------------------------
+
+    def closeEvent(self, event) -> None:
+        """Check every open document for unsaved changes before quitting.
+
+        Wrapped in a try/except so that any unexpected error never silently
+        swallows the dialog and closes the window without asking the user.
+        """
+        try:
+            ctrl = getattr(self, "_document_ctrl", None)
+            session = getattr(self, "_document_session", None)
+
+            if ctrl is not None and session is not None:
+                for i in range(len(session)):
+                    entry = session.entry_at(i)
+                    if entry is None:
+                        continue
+                    doc = entry.document
+                    if not doc.dirty:
+                        continue
+
+                    result = ctrl._confirm_unsaved(doc)
+                    if result == "cancel":
+                        event.ignore()
+                        return
+                    if result == "save":
+                        saved = ctrl._save_basera_sync(doc)
+                        if not saved:
+                            # User cancelled the Save As dialog — stay open.
+                            event.ignore()
+                            return
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            # Do NOT silently close when an error occurs — ask the user.
+            from PySide6.QtWidgets import QMessageBox
+            resp = QMessageBox.question(
+                self,
+                "Close Basera",
+                "An error occurred while checking for unsaved changes.\n"
+                "Close anyway and risk losing unsaved work?",
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+
+        event.accept()

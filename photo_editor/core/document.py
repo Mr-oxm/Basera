@@ -527,6 +527,13 @@ class Document:
     def _snapshot(self, action: str) -> None:
         state = self._build_history_state(action)
         self.history.push(state)
+        # Every snapshot represents an edit — mark document dirty so the
+        # unsaved-changes guard in closeEvent / tab-close picks it up.
+        # (Structural ops like add_layer set _dirty explicitly too, but tool
+        # strokes only call save_snapshot() → _snapshot(), so we must set it
+        # here to cover that path.)
+        if action != "__Live__":
+            self._dirty = True
 
     def _restore(self, state: HistoryState) -> None:
         order: list[str] | None = state.metadata.get("_layer_order")

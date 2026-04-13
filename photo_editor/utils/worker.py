@@ -1,4 +1,12 @@
-"""Off-main-thread worker for heavy image operations."""
+"""Off-main-thread worker for heavy image operations.
+
+Important: ``setAutoDelete`` is **False**.  The worker ref is held by the
+class-level ``_alive`` set until ``finished`` fires, which guarantees
+the ``_WorkerSignals`` QObject survives long enough for cross-thread
+queued signals to be delivered.  Without this, PySide6 silently drops
+the ``result`` / ``error`` signals when the QRunnable is garbage-collected
+before the main-thread event loop processes them.
+"""
 
 from __future__ import annotations
 
@@ -17,13 +25,15 @@ class _WorkerSignals(QObject):
 class Worker(QRunnable):
     """Generic worker that runs a callable in the Qt thread pool."""
 
+    _alive: set[Worker] = set()
+
     def __init__(self, fn: Callable, *args: Any, **kwargs: Any) -> None:
         super().__init__()
         self.fn = fn
         self.args = args
         self.kwargs = kwargs
         self.signals = _WorkerSignals()
-        self.setAutoDelete(True)
+        self.setAutoDelete(False)
 
     @Slot()
     def run(self) -> None:
@@ -34,6 +44,10 @@ class Worker(QRunnable):
             self.signals.error.emit(str(exc))
         finally:
             self.signals.finished.emit()
+
+    def _release(self) -> None:
+        """Remove self from the keep-alive set so GC can collect us."""
+        Worker._alive.discard(self)
 
     @staticmethod
     def pool() -> QThreadPool:
@@ -57,5 +71,8 @@ class Worker(QRunnable):
             worker.signals.error.connect(on_error)
         if on_done:
             worker.signals.finished.connect(on_done)
+        # Release the ref *after* all queued signals have been delivered.
+        worker.signals.finished.connect(worker._release)
+        cls._alive.add(worker)
         cls.pool().start(worker)
         return worker

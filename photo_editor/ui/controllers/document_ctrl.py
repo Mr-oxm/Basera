@@ -165,17 +165,19 @@ class DocumentController(ControllerBase):
                 return
         try:
             from ...utils.project_io import load_basera_project
+            from ...utils.recent_projects import add_recent_project
 
             document = load_basera_project(path)
             self._add_document_to_session(document, path, title=Path(path).name)
             self._set_active_document(document, path)
             if hasattr(self.mw, '_activate_project'):
                 self.mw._activate_project()
+            add_recent_project(path)
+            if hasattr(self.mw, '_refresh_recent_projects'):
+                self.mw._refresh_recent_projects()
             self.ctx.show_status_message(f"Opened {Path(path).name}", 2000)
         except Exception as exc:
             msg = str(exc)
-            if "incomplete or corrupted" in msg.lower():
-                msg += "\n\nTip: avoid closing the app until the save success message appears."
             QMessageBox.warning(self.mw, "Open Basera Error", msg)
 
     def on_place_image(self) -> None:
@@ -213,33 +215,39 @@ class DocumentController(ControllerBase):
             self._save_basera(path)
 
     def _save_basera(self, path: str) -> None:
-        """Save the full project state as a .basera file."""
+        """Save the project to *path* synchronously.
+
+        The v3 ZIP format is fast enough to run on the main thread —
+        no background worker, no signal race conditions, no callbacks.
+        """
         if not self.doc:
             return
-        from ...commands import SaveDocumentCommand
-        mw = self.mw
+        from ...utils.project_io import save_basera_project
+        from ...utils.recent_projects import add_recent_project
 
-        self.ctx.show_status_message(f"Saving {Path(path).name}...", 0)
+        self.ctx.show_status_message(f"Saving {Path(path).name}…", 0)
+        try:
+            save_basera_project(self.doc, path)
 
-        def on_success(_result: object) -> None:
+            self.doc.file_path = path
             self.doc.mark_clean()
             self.ctx.set_window_title(f"Basera — {Path(path).name}")
             idx = self._session.current_index()
             if idx >= 0:
                 self._session.update_path(idx, path)
-                self._session.update_tab_metadata(idx, title=Path(path).name, tooltip=path)
+                self._session.update_tab_metadata(
+                    idx, title=Path(path).name, tooltip=path,
+                )
+            try:
+                add_recent_project(path)
+                if hasattr(self.mw, '_refresh_recent_projects'):
+                    self.mw._refresh_recent_projects()
+            except Exception:
+                pass
             self.ctx.show_status_message(f"Saved {Path(path).name}", 2000)
-
-        def on_error(msg: str) -> None:
+        except Exception as exc:
             self.ctx.show_status_message("Save failed", 3000)
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(mw, "Save Error", msg)
-
-        self.ctx.execute_command_async(
-            SaveDocumentCommand(path, mw._pipeline),
-            on_success=on_success,
-            on_error=on_error,
-        )
+            QMessageBox.warning(self.mw, "Save Error", str(exc))
 
     def on_export(self) -> None:
         """Open the export dialog."""
@@ -287,7 +295,7 @@ class DocumentController(ControllerBase):
         from ...commands import SaveDocumentCommand
         mw = self.mw
 
-        self.ctx.show_status_message(f"Exporting {Path(path).name}...", 0)
+        self.ctx.show_status_message(f"Exporting {Path(path).name}…", 60_000)
 
         def on_success(_result: object) -> None:
             self.ctx.show_status_message(f"Exported to {Path(path).name}", 2000)
@@ -486,8 +494,19 @@ class DocumentController(ControllerBase):
         self._set_active_document(entry.document, entry.path)
 
     def on_tab_close(self, index: int) -> None:
-        if self._session.entry_at(index) is None:
+        entry = self._session.entry_at(index)
+        if entry is None:
             return
+        doc = entry.document
+        if doc.dirty:
+            result = self._confirm_unsaved(doc)
+            if result == "cancel":
+                return
+            if result == "save":
+                saved = self._save_basera_sync(doc)
+                if not saved:
+                    return  # user cancelled the save-as dialog
+
         # Allow closing the last tab — return to welcome screen
         self._session.close(index)
         if len(self._session) == 0:
@@ -498,6 +517,61 @@ class DocumentController(ControllerBase):
         new_idx = self._session.current_index()
         if self._session.entry_at(new_idx) is not None:
             self.on_tab_selected(new_idx)
+
+    # ---- Unsaved changes helpers --------------------------------------------
+
+    def _confirm_unsaved(self, doc) -> str:
+        """Show the 'unsaved changes' dialog.
+
+        Returns
+        -------
+        'save'    – user wants to save before closing
+        'discard' – user wants to close without saving
+        'cancel'  – user changed their mind; do not close
+        """
+        from PySide6.QtWidgets import QMessageBox
+        msg = QMessageBox(self.mw)
+        msg.setWindowTitle("Unsaved Changes")
+        msg.setText(f'"{doc.name}" has unsaved changes.')
+        msg.setInformativeText(
+            "Do you want to save your changes before closing?"
+        )
+        msg.setIcon(QMessageBox.Icon.Warning)
+        save_btn = msg.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = msg.addButton("Don't Save", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(save_btn)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def _save_basera_sync(self, doc) -> bool:
+        """Resolve a save path for *doc* and write it.
+
+        Uses the document's existing file_path when it is a .basera path;
+        otherwise opens a Save As dialog.  Returns True on success,
+        False if the user cancelled or save failed.
+        """
+        path = doc.file_path if (doc.file_path and doc.file_path.endswith(".basera")) else None
+        if not path:
+            path, _ = QFileDialog.getSaveFileName(
+                self.mw, f"Save \"{doc.name}\"", "", _BASERA_FLT
+            )
+            if not path:
+                return False
+            if not path.endswith(".basera"):
+                path += ".basera"
+
+        try:
+            self._save_basera(path)
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self.mw, "Save Error", str(exc))
+            return False
 
     def on_undo(self) -> None:
         if self.doc:

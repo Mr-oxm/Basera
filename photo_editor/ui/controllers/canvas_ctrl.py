@@ -81,7 +81,7 @@ class CanvasController(ControllerBase):
                 if tool is not None:
                     tool.set_source(x, y)
                     mw._canvas.set_source_position((x, y))
-                    mw._status.showMessage(f"Source set at ({x}, {y})", 2000)
+                    mw._status.show_activity(f"Source set at ({x}, {y})", 2000)
                 self._dragging = False
                 return
 
