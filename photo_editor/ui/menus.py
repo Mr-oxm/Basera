@@ -81,6 +81,8 @@ class EditorMenuBar(QMenuBar):
         self._add(m, "delete_sel", "&Delete")
         self._add(m, "fill_fg", "Fill with &Foreground Color")
         self._add(m, "fill_bg", "Fill with &Background Color")
+        m.addSeparator()
+        self._add(m, "edit_document_settings", "&Document Settings…")
 
     def _image_menu(self) -> None:
         m = self.addMenu("&Image")

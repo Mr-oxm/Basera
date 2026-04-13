@@ -674,7 +674,12 @@ class MainWindow(QMainWindow):
         dlg = NewProjectDialog(self)
         if dlg.exec():
             w, h, dpi = dlg.get_values()
-            self._document_ctrl.new_document(w, h, dpi)
+            self._document_ctrl.new_document(
+                w, h, dpi,
+                color_mode=dlg.get_color_mode(),
+                color_profile=dlg.get_color_profile(),
+                unit=dlg.get_unit(),
+            )
             self._activate_project()
 
     def _on_welcome_open_image(self) -> None:

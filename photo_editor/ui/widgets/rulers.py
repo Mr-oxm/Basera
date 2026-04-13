@@ -2,14 +2,16 @@
 
 Provides horizontal and vertical rulers that sit along the edges of the canvas,
 showing tick marks and numbers that update in real time as the user zooms and pans.
-Dragging from a ruler creates a guide line that can be repositioned or deleted.
+Rulers are unit-aware: they display values in px, in, cm, mm, or pt depending on
+the active document's unit setting.  Dragging from a ruler creates a guide line
+that can be repositioned or deleted.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QPointF, QRectF, QLineF
+from PySide6.QtCore import Qt, Signal, QPointF, QRectF
 from PySide6.QtGui import (
-    QColor, QFont, QMouseEvent, QPainter, QPen, QWheelEvent,
+    QColor, QFont, QMouseEvent, QPainter, QPen,
 )
 from PySide6.QtWidgets import QWidget
 
@@ -27,6 +29,38 @@ _FONT = QFont("Segoe UI", 8)
 _FONT.setStyleHint(QFont.StyleHint.SansSerif)
 
 _SNAP_PX = 6  # pixel distance to snap when dragging a guide
+
+
+# ---------------------------------------------------------------------------
+# Unit helpers  (mirrors new_project_dialog.px_per_unit — no circular import)
+# ---------------------------------------------------------------------------
+
+def _px_per_unit(unit: str, dpi: int) -> float:
+    """Return how many document pixels equal one display unit."""
+    if unit == "in":
+        return float(dpi)
+    if unit == "cm":
+        return dpi / 2.54
+    if unit == "mm":
+        return dpi / 25.4
+    if unit == "pt":
+        return dpi / 72.0
+    return 1.0  # "px" default
+
+
+def _label_for(value_px: float, unit: str, dpi: int) -> str:
+    """Convert a pixel coordinate to a human-readable label in *unit*."""
+    ppu = _px_per_unit(unit, dpi)
+    v = value_px / ppu
+    if unit == "px":
+        return str(int(v))
+    if unit in ("in", "cm"):
+        return f"{v:.2f}"
+    if unit == "mm":
+        return f"{v:.1f}"
+    if unit == "pt":
+        return f"{v:.0f}"
+    return str(int(v))
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +106,9 @@ class _RulerBase(QWidget):
         # Layer bounds in doc coords  (start, end)
         self._layer_start: float | None = None
         self._layer_end: float | None = None
+        # Unit / DPI state
+        self._unit: str = "px"
+        self._dpi: int = 72
 
         if orientation == Qt.Orientation.Horizontal:
             self.setFixedHeight(_RULER_SIZE)
@@ -111,6 +148,13 @@ class _RulerBase(QWidget):
         self._layer_end = end
         self.update()
 
+    def set_unit(self, unit: str, dpi: int) -> None:
+        """Set the display unit and DPI for tick labels (e.g. 'cm', 300)."""
+        if unit != self._unit or dpi != self._dpi:
+            self._unit = unit
+            self._dpi = dpi
+            self.update()
+
     # ---- Coordinate helpers ------------------------------------------------
 
     def _doc_to_widget(self, doc_coord: float) -> float:
@@ -145,7 +189,7 @@ class _RulerBase(QWidget):
             return magnitude * 5
         return magnitude * 10
 
-    # ---- Paint (horizontal) ------------------------------------------------
+    # ---- Paint --------------------------------------------------------------
 
     def paintEvent(self, _event) -> None:
         from ..theme import ThemeManager
@@ -167,12 +211,19 @@ class _RulerBase(QWidget):
         horiz = self._orientation == Qt.Orientation.Horizontal
         length = self.width() if horiz else self.height()
 
-        # Compute nice tick spacing so labels don't overlap
+        # Unit conversion factor: doc pixels per display unit
+        ppu = _px_per_unit(self._unit, self._dpi)
+
+        # Compute nice tick spacing in *display-unit* space so labels never overlap.
+        # zoom_unit = widget pixels per display unit
+        zoom_unit = self._zoom * ppu
         min_label_px = 60
-        rough_step_doc = min_label_px / max(self._zoom, 0.001)
-        step = self._nice_step(rough_step_doc)
-        sub_divs = 5 if step >= 10 else 4
-        sub_step = step / sub_divs
+        rough_step_unit = min_label_px / max(zoom_unit, 0.001)
+        step_unit = self._nice_step(rough_step_unit)
+        step_doc = step_unit * ppu          # step in document pixels
+
+        sub_divs = 5 if step_unit >= 10 else 4
+        sub_step_doc = step_doc / sub_divs
 
         # Range of doc coords visible
         doc_start = self._widget_to_doc(0)
@@ -180,35 +231,36 @@ class _RulerBase(QWidget):
         if doc_start > doc_end:
             doc_start, doc_end = doc_end, doc_start
 
-        first_tick = int(doc_start / step) * step - step
-        last_tick = doc_end + step
+        first_tick_doc = (int(doc_start / step_doc) - 1) * step_doc
+        last_tick_doc = doc_end + step_doc
 
         p.setFont(_FONT)
 
         # Draw sub-ticks
         p.setPen(QPen(subtick_color, 1))
-        st = first_tick
-        while st <= last_tick:
+        st = first_tick_doc
+        while st <= last_tick_doc:
             for i in range(1, sub_divs):
-                sub_doc = st + i * sub_step
+                sub_doc = st + i * sub_step_doc
                 wp = self._doc_to_widget(sub_doc)
                 if 0 <= wp <= length:
                     if horiz:
                         p.drawLine(int(wp), _RULER_SIZE - 4, int(wp), _RULER_SIZE)
                     else:
                         p.drawLine(_RULER_SIZE - 4, int(wp), _RULER_SIZE, int(wp))
-            st += step
+            st += step_doc
 
         # Draw major ticks + labels
         p.setPen(QPen(tick_color, 1))
-        tick = first_tick
-        while tick <= last_tick:
+        tick = first_tick_doc
+        while tick <= last_tick_doc:
             wp = self._doc_to_widget(tick)
             if 0 <= wp <= length:
+                label = _label_for(tick, self._unit, self._dpi)
                 if horiz:
                     p.drawLine(int(wp), _RULER_SIZE - 8, int(wp), _RULER_SIZE)
                     p.setPen(QPen(text_color, 1))
-                    p.drawText(int(wp) + 2, _RULER_SIZE - 9, str(int(tick)))
+                    p.drawText(int(wp) + 2, _RULER_SIZE - 9, label)
                     p.setPen(QPen(tick_color, 1))
                 else:
                     p.drawLine(_RULER_SIZE - 8, int(wp), _RULER_SIZE, int(wp))
@@ -216,10 +268,10 @@ class _RulerBase(QWidget):
                     p.setPen(QPen(text_color, 1))
                     p.translate(int(_RULER_SIZE - 10), int(wp) + 2)
                     p.rotate(-90)
-                    p.drawText(0, 0, str(int(tick)))
+                    p.drawText(0, 0, label)
                     p.restore()
                     p.setPen(QPen(tick_color, 1))
-            tick += step
+            tick += step_doc
 
         # Draw layer bounds indicators
         if self._layer_start is not None and self._layer_end is not None:

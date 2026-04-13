@@ -40,6 +40,9 @@ class DocumentController(ControllerBase):
         a["export_pdf"].triggered.connect(self.on_export_pdf)
         a["quit"].triggered.connect(mw.close)
 
+        # Edit → Document Settings
+        a["edit_document_settings"].triggered.connect(self.on_edit_document_settings)
+
         # History
         a["undo"].triggered.connect(self.on_undo)
         a["redo"].triggered.connect(self.on_redo)
@@ -55,8 +58,12 @@ class DocumentController(ControllerBase):
         dlg = NewProjectDialog(self.mw)
         if dlg.exec():
             w, h, dpi = dlg.get_values()
-            self.new_document(w, h, dpi)
-            # Make sure the editor is visible
+            self.new_document(
+                w, h, dpi,
+                color_mode=dlg.get_color_mode(),
+                color_profile=dlg.get_color_profile(),
+                unit=dlg.get_unit(),
+            )
             if hasattr(self.mw, '_activate_project'):
                 self.mw._activate_project()
 
@@ -75,12 +82,54 @@ class DocumentController(ControllerBase):
     def _add_document_to_session(self, document: Document, path: str | None = None, *, title: str | None = None) -> int:
         return self._session.add(document, path, title=title)
 
-    def new_document(self, w: int, h: int, dpi: int = 72) -> None:
+    def new_document(
+        self,
+        w: int,
+        h: int,
+        dpi: int = 72,
+        *,
+        color_mode: str = "RGB",
+        color_profile: str = "sRGB IEC61966-2.1",
+        unit: str = "px",
+    ) -> None:
         """Create a new blank document and switch to it."""
-        document = Document(w, h)
+        document = Document(w, h, color_mode=color_mode, color_profile=color_profile, unit=unit)
         document.dpi = dpi
         self._add_document_to_session(document, None, title=document.name)
         self._set_active_document(document)
+
+    def on_edit_document_settings(self) -> None:
+        """Open the Document Settings dialog to edit the current document."""
+        if not self.doc:
+            return
+        dlg = NewProjectDialog(self.mw)
+        dlg.setWindowTitle("Document Settings")
+        dlg._create_btn.setText("Apply Changes")
+        dlg.set_from_document(self.doc)
+        if not dlg.exec():
+            return
+
+        new_w, new_h, new_dpi = dlg.get_values()
+        doc = self.doc
+
+        # Resize canvas only when dimensions actually changed
+        if new_w != doc.width or new_h != doc.height:
+            from ...core.services.document_resize import resize_canvas
+            resize_canvas(doc, new_w, new_h)
+
+        # Update metadata
+        doc.dpi = new_dpi
+        doc.unit = dlg.get_unit()
+        doc.color_mode = dlg.get_color_mode()
+        doc.color_profile = dlg.get_color_profile()
+        doc.mark_dirty()
+
+        # Refresh status bar and rulers
+        name = doc.name
+        self.mw._status.set_document_info(name, doc.width, doc.height)
+        self.ctx.refresh()
+        self.ctx.zoom_to_fit()
+        self.ctx.show_status_message("Document settings updated", 2000)
 
     def on_open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

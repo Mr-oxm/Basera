@@ -1,47 +1,59 @@
-"""New Document dialog."""
+"""New Document / Canvas Size dialog — compact dimension editor with unit conversion."""
+
+from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QSpinBox,
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QDoubleSpinBox,
 )
+
+from .new_project_dialog import UNITS, px_per_unit, _spinbox_config
 
 
 class NewDocumentDialog(QDialog):
-    """Dialog for creating a new document with specified dimensions."""
+    """Compact dialog for specifying a canvas size with unit conversion.
+
+    Public attributes kept for backward compatibility with ``layer_ctrl.py``:
+        ``_width``, ``_height`` — QDoubleSpinBox displaying values in the
+        currently selected unit.  ``get_values()`` always returns pixels.
+    """
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("New Document")
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(340)
+
+        self._current_unit = "px"
+        self._current_dpi = 72
 
         layout = QFormLayout(self)
 
-        self._width = QSpinBox()
+        # Width / height — named _width/_height for backward compatibility
+        self._width = QDoubleSpinBox()
+        self._width.setDecimals(0)
         self._width.setRange(1, 30000)
         self._width.setValue(1920)
+        self._width.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
         layout.addRow("Width:", self._width)
 
-        self._height = QSpinBox()
+        self._height = QDoubleSpinBox()
+        self._height.setDecimals(0)
         self._height.setRange(1, 30000)
         self._height.setValue(1080)
+        self._height.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
         layout.addRow("Height:", self._height)
 
-        self._dpi = QSpinBox()
+        self._dpi = QDoubleSpinBox()
+        self._dpi.setDecimals(0)
         self._dpi.setRange(1, 1200)
         self._dpi.setValue(72)
+        self._dpi.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
+        self._dpi.valueChanged.connect(self._on_dpi_changed)
         layout.addRow("DPI:", self._dpi)
 
-        self._preset = QComboBox()
-        presets = [
-            ("Custom", 0, 0),
-            ("1920 × 1080 (Full HD)", 1920, 1080),
-            ("3840 × 2160 (4K)", 3840, 2160),
-            ("1080 × 1080 (Instagram)", 1080, 1080),
-            ("2480 × 3508 (A4 @ 300 dpi)", 2480, 3508),
-        ]
-        for label, w, h in presets:
-            self._preset.addItem(label, (w, h))
-        self._preset.currentIndexChanged.connect(self._on_preset)
-        layout.addRow("Preset:", self._preset)
+        self._units_combo = QComboBox()
+        self._units_combo.addItems(UNITS)
+        self._units_combo.currentIndexChanged.connect(self._on_unit_changed)
+        layout.addRow("Units:", self._units_combo)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -50,11 +62,46 @@ class NewDocumentDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
-    def _on_preset(self, idx: int) -> None:
-        w, h = self._preset.itemData(idx)
-        if w and h:
-            self._width.setValue(w)
-            self._height.setValue(h)
+        self._suppress = False
+
+    # ---- Unit / DPI handling ------------------------------------------------
+
+    def _on_unit_changed(self, idx: int) -> None:
+        new_unit = UNITS[idx]
+        if new_unit == self._current_unit:
+            return
+        dpi = int(self._dpi.value())
+        old_ppu = px_per_unit(self._current_unit, dpi)
+        new_ppu = px_per_unit(new_unit, dpi)
+        w_px = self._width.value() * old_ppu
+        h_px = self._height.value() * old_ppu
+
+        self._current_unit = new_unit
+        mn, mx, dec, step = _spinbox_config(new_unit)
+        self._suppress = True
+        for spin in (self._width, self._height):
+            spin.setDecimals(dec)
+            spin.setSingleStep(step)
+            spin.setRange(mn, mx)
+        self._width.setValue(w_px / new_ppu)
+        self._height.setValue(h_px / new_ppu)
+        self._suppress = False
+
+    def _on_dpi_changed(self, _val: float) -> None:
+        if self._suppress or self._current_unit == "px":
+            return
+        new_dpi = max(1, int(self._dpi.value()))
+        if new_dpi == self._current_dpi:
+            return
+        # Physical size is preserved; pixel count changes automatically via get_values()
+        self._current_dpi = new_dpi
+
+    # ---- Public API ---------------------------------------------------------
 
     def get_values(self) -> tuple[int, int, int]:
-        return self._width.value(), self._height.value(), self._dpi.value()
+        """Return (width_px, height_px, dpi)."""
+        dpi = max(1, int(self._dpi.value()))
+        ppu = px_per_unit(self._current_unit, dpi)
+        w = max(1, round(self._width.value() * ppu))
+        h = max(1, round(self._height.value() * ppu))
+        return w, h, dpi

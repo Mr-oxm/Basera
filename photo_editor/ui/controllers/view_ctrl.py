@@ -159,7 +159,7 @@ class ViewController(ControllerBase):
         apply_guides(mw._canvas, mw._h_ruler, mw._v_ruler, mw._guides)
 
     def update_rulers(self) -> None:
-        """Sync rulers with current canvas zoom/pan state."""
+        """Sync rulers with current canvas zoom/pan state and document unit."""
         mw = self.mw
         if not hasattr(mw, '_h_ruler') or not mw._rulers_visible:
             return
@@ -178,6 +178,13 @@ class ViewController(ControllerBase):
         from ..widgets.rulers import RULER_SIZE
         mw._h_ruler.set_perp_view_params(v_zoom, v_origin + RULER_SIZE, dh)
         mw._v_ruler.set_perp_view_params(h_zoom, h_origin + RULER_SIZE, dw)
+
+        # Pass the active document's unit and DPI so rulers show the right unit
+        if mw._doc is not None:
+            unit = getattr(mw._doc, "unit", "px")
+            dpi = getattr(mw._doc, "dpi", 72)
+            mw._h_ruler.set_unit(unit, dpi)
+            mw._v_ruler.set_unit(unit, dpi)
 
         from ...core.enums import LayerType
         layer = mw._doc.layers.active_layer if mw._doc else None

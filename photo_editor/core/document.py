@@ -14,12 +14,27 @@ from .selection import Selection
 class Document:
     """Top-level container for an editing session."""
 
-    def __init__(self, width: int, height: int, name: str = "Untitled") -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        name: str = "Untitled",
+        *,
+        color_mode: str = "RGB",
+        color_profile: str = "sRGB IEC61966-2.1",
+        unit: str = "px",
+    ) -> None:
         self.name = name
         self.width = width
         self.height = height
         self.file_path: str | None = None
         self.dpi: int = 72
+
+        # Color and unit metadata
+        self.color_mode: str = color_mode
+        self.color_profile: str = color_profile
+        self.unit: str = unit  # display unit used in rulers / dialogs
+
         self.layers = LayerStack()
         self.history = HistoryManager()
         self.selection = Selection(width, height)
