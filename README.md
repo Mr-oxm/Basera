@@ -1,6 +1,5 @@
 # Basera - بصيرة
-![splash](https://github.com/user-attachments/assets/c00cfe66-a38b-4bf6-99df-6dcc78d992d8)
-
+<img width="1920" height="1080" alt="splash_2" src="https://github.com/user-attachments/assets/625dfc5a-cdcd-471a-8047-3b2c2413a2f6" />
 
 
 > **v0.5.0-alpha** — Native `.basera` project format, full project creation & export workflows, completely reworked UI with centralized theming, new adjustment layers, clipping/child layers, and zoom-to-cursor.
@@ -9,13 +8,15 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 > [!WARNING]
 > This is a **pre-1.0 early version**. The editor is under active development and many features are incomplete, unstable, or not yet functional. Use at your own risk — contributions and bug reports are welcome.
+### v0.5.0
+<img width="1920" height="1010" alt="1" src="https://github.com/user-attachments/assets/bf076e6b-6173-492c-8a69-e25507e7f866" />
 
 ### v0.4.0
-<img width="1919" height="992" alt="Screenshot 2026-03-03 173450" src="https://github.com/user-attachments/assets/117edfc0-33bd-4099-b474-c23a7984a5b8" />
-<img width="1919" height="984" alt="Screenshot 2026-03-03 175004" src="https://github.com/user-attachments/assets/84e2f4a3-3430-4eb4-bc12-0262acc14cab" />
+<img width="1919" height="992" alt="v 0.4 pic 1" src="https://github.com/user-attachments/assets/117edfc0-33bd-4099-b474-c23a7984a5b8" />
+<img width="1919" height="984" alt="v 0.4 pic 2" src="https://github.com/user-attachments/assets/84e2f4a3-3430-4eb4-bc12-0262acc14cab" />
 
 ### v0.3.0
-<img width="1919" height="990" alt="Screenshot 2026-02-16 221017" src="https://github.com/user-attachments/assets/ff11c565-47d9-4877-b1bc-538bf4efb923" />
+<img width="1919" height="990" alt="v 0.3 pic" src="https://github.com/user-attachments/assets/ff11c565-47d9-4877-b1bc-538bf4efb923" />
 
 ### v0.2.0
 <img width="1919" height="992" alt="v0.2.0 Screenshot" src="https://github.com/user-attachments/assets/e960e2ad-8b13-46a6-afc2-e2f562e7426f" />
