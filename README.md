@@ -31,7 +31,7 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ### Native `.basera` Project Format
 - **Save & Share Projects**: Projects are now saved as `.basera` files — open, continue, and share your work at any time with nothing lost.
-- **Full Fidelity**: All layers, adjustments, masks, history, and settings are preserved across sessions.
+- **Full Fidelity**: All layers, adjustments, masks, and settings are preserved across sessions.
 
 ### Project Creation Window
 - **Templates Library**: Dozens of built-in templates covering common print, web, and social media sizes.
