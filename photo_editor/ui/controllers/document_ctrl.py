@@ -9,10 +9,11 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from ...core.document import Document
 from ...core.enums import LayerType
 from .base import ControllerBase
-from ..dialogs.new_document import NewDocumentDialog
+from ..dialogs.new_project_dialog import NewProjectDialog
 from ...utils.image_io import load_image
 
 _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
+_BASERA_FLT = "Basera Projects (*.basera)"
 
 
 class DocumentController(ControllerBase):
@@ -33,7 +34,7 @@ class DocumentController(ControllerBase):
         a["place_image"].triggered.connect(self.on_place_image)
         a["save"].triggered.connect(self.on_save)
         a["save_as"].triggered.connect(self.on_save_as)
-        a["export"].triggered.connect(self.on_save_as)
+        a["export"].triggered.connect(self.on_export)
         a["import_svg"].triggered.connect(self.on_import_svg)
         a["export_svg"].triggered.connect(self.on_export_svg)
         a["export_pdf"].triggered.connect(self.on_export_pdf)
@@ -51,9 +52,13 @@ class DocumentController(ControllerBase):
         mw._history_panel.state_selected.connect(self.on_history_jump)
 
     def on_new(self) -> None:
-        dlg = NewDocumentDialog(self.mw)
+        dlg = NewProjectDialog(self.mw)
         if dlg.exec():
-            self.new_document(*dlg.get_values())
+            w, h, dpi = dlg.get_values()
+            self.new_document(w, h, dpi)
+            # Make sure the editor is visible
+            if hasattr(self.mw, '_activate_project'):
+                self.mw._activate_project()
 
     @property
     def _session(self):
@@ -78,8 +83,16 @@ class DocumentController(ControllerBase):
         self._set_active_document(document)
 
     def on_open(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self.mw, "Open Image", "", _IMG_FLT)
+        path, _ = QFileDialog.getOpenFileName(
+            self.mw,
+            "Open File",
+            "",
+            f"{_IMG_FLT};;{_BASERA_FLT}",
+        )
         if not path:
+            return
+        if path.lower().endswith(".basera"):
+            self.on_open_basera(path)
             return
         img = load_image(path)
         h, w = img.shape[:2]
@@ -89,6 +102,32 @@ class DocumentController(ControllerBase):
         document.save_snapshot("Open Image")
         self._add_document_to_session(document, path, title=Path(path).name)
         self._set_active_document(document, path)
+        # Make sure the editor is visible
+        if hasattr(self.mw, '_activate_project'):
+            self.mw._activate_project()
+
+    def on_open_basera(self, path: str | None = None) -> None:
+        """Open and restore a .basera project file."""
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self.mw, "Open Basera Project", "", _BASERA_FLT
+            )
+            if not path:
+                return
+        try:
+            from ...utils.project_io import load_basera_project
+
+            document = load_basera_project(path)
+            self._add_document_to_session(document, path, title=Path(path).name)
+            self._set_active_document(document, path)
+            if hasattr(self.mw, '_activate_project'):
+                self.mw._activate_project()
+            self.ctx.show_status_message(f"Opened {Path(path).name}", 2000)
+        except Exception as exc:
+            msg = str(exc)
+            if "incomplete or corrupted" in msg.lower():
+                msg += "\n\nTip: avoid closing the app until the save success message appears."
+            QMessageBox.warning(self.mw, "Open Basera Error", msg)
 
     def on_place_image(self) -> None:
         if not self.doc:
@@ -102,24 +141,36 @@ class DocumentController(ControllerBase):
             self.ctx.execute_command(PlaceImageCommand(img, name=Path(path).stem))
 
     def on_save(self) -> None:
-        if self.doc and self.doc.file_path:
-            self._save_to(self.doc.file_path)
+        """Save project snapshot as .basera file."""
+        if not self.doc:
+            return
+        # If we have an existing .basera path, save there
+        if self.doc.file_path and self.doc.file_path.endswith(".basera"):
+            self._save_basera(self.doc.file_path)
         else:
             self.on_save_as()
 
     def on_save_as(self) -> None:
+        """Save/Save As — saves as .basera project snapshot."""
         if not self.doc:
             return
-        path, _ = QFileDialog.getSaveFileName(self.mw, "Save As", "", _IMG_FLT)
+        path, _ = QFileDialog.getSaveFileName(
+            self.mw, "Save Project As", "", _BASERA_FLT
+        )
         if path:
+            if not path.endswith(".basera"):
+                path += ".basera"
             self.doc.file_path = path
-            self._save_to(path)
+            self._save_basera(path)
 
-    def _save_to(self, path: str) -> None:
+    def _save_basera(self, path: str) -> None:
+        """Save the full project state as a .basera file."""
         if not self.doc:
             return
         from ...commands import SaveDocumentCommand
         mw = self.mw
+
+        self.ctx.show_status_message(f"Saving {Path(path).name}...", 0)
 
         def on_success(_result: object) -> None:
             self.doc.mark_clean()
@@ -131,11 +182,73 @@ class DocumentController(ControllerBase):
             self.ctx.show_status_message(f"Saved {Path(path).name}", 2000)
 
         def on_error(msg: str) -> None:
+            self.ctx.show_status_message("Save failed", 3000)
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(mw, "Save Error", msg)
 
         self.ctx.execute_command_async(
             SaveDocumentCommand(path, mw._pipeline),
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    def on_export(self) -> None:
+        """Open the export dialog."""
+        if not self.doc:
+            return
+        from ..dialogs.export_dialog import ExportDialog
+        dlg = ExportDialog(self.mw, document=self.doc)
+        if dlg.exec():
+            settings = dlg.get_export_settings()
+            self._do_export(settings)
+
+    def _do_export(self, settings: dict) -> None:
+        """Perform the actual export based on dialog settings."""
+        if not self.doc:
+            return
+
+        path = settings.get("path")
+        fmt = settings.get("format", "png")
+        quality = settings.get("quality", 85)
+
+        if settings.get("clipboard"):
+            # Copy to clipboard
+            try:
+                from PySide6.QtGui import QImage, QClipboard
+                from PySide6.QtWidgets import QApplication
+                result = self.mw._pipeline.execute_to_uint8(self.doc)
+                import numpy as np
+                h, w = result.shape[:2]
+                channels = result.shape[2] if result.ndim == 3 else 1
+                if channels == 4:
+                    qimg = QImage(result.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+                else:
+                    qimg = QImage(result.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+                clipboard = QApplication.clipboard()
+                clipboard.setImage(qimg)
+                self.ctx.show_status_message("Copied to clipboard", 2000)
+            except Exception as exc:
+                QMessageBox.warning(self.mw, "Clipboard Error", str(exc))
+            return
+
+        if not path:
+            return
+
+        # Standard file export
+        from ...commands import SaveDocumentCommand
+        mw = self.mw
+
+        self.ctx.show_status_message(f"Exporting {Path(path).name}...", 0)
+
+        def on_success(_result: object) -> None:
+            self.ctx.show_status_message(f"Exported to {Path(path).name}", 2000)
+
+        def on_error(msg: str) -> None:
+            self.ctx.show_status_message("Export failed", 3000)
+            QMessageBox.warning(mw, "Export Error", msg)
+
+        self.ctx.execute_command_async(
+            SaveDocumentCommand(path, mw._pipeline, quality=quality),
             on_success=on_success,
             on_error=on_error,
         )
@@ -243,6 +356,8 @@ class DocumentController(ControllerBase):
 
             if created_document:
                 self._set_active_document(mw._doc, path)
+                if hasattr(mw, '_activate_project'):
+                    mw._activate_project()
             else:
                 self.ctx.refresh()
                 self.ctx.zoom_to_fit()
@@ -324,9 +439,13 @@ class DocumentController(ControllerBase):
     def on_tab_close(self, index: int) -> None:
         if self._session.entry_at(index) is None:
             return
-        if self.mw._file_tabs.count() <= 1:
-            return
+        # Allow closing the last tab — return to welcome screen
         self._session.close(index)
+        if len(self._session) == 0:
+            # No more documents — return to welcome screen
+            if hasattr(self.mw, '_on_last_tab_closed'):
+                self.mw._on_last_tab_closed()
+            return
         new_idx = self._session.current_index()
         if self._session.entry_at(new_idx) is not None:
             self.on_tab_selected(new_idx)

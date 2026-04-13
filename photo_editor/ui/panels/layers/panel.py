@@ -111,8 +111,33 @@ class LayersPanel(QWidget):
         self._adj_menu.setStyleSheet(menu_qss)
         self._filt_btn.setStyleSheet(menu_button_qss)
         self._filt_menu.setStyleSheet(menu_qss)
+        btn_qss = render_qss("layers_panel_bottom_btn.qss", palette)
+        for btn in [
+            self._settings_btn, self._lock_btn,
+            self._btn_new_layer, self._btn_styles, self._btn_mask,
+            self._btn_group, self._btn_duplicate, self._btn_flatten, self._btn_delete
+        ]:
+            btn.setStyleSheet(btn_qss)
+
+        sep_qss = render_qss("layers_panel_separator_line.qss", border=palette.get("border", "#444444"))
+        self._sep1.setStyleSheet(sep_qss)
+        self._sep2.setStyleSheet(sep_qss)
+
+        self._settings_btn.setIcon(ico_settings())
+        self._lock_btn.setIcon(icon_lock(False))  # will be overridden by _sync_active if doc is open
+        self._adj_btn.setIcon(ico_adjustment())
+        self._filt_btn.setIcon(ico_filter())
+        self._btn_new_layer.setIcon(ico_new_layer())
+        self._btn_styles.setIcon(ico_fx())
+        self._btn_mask.setIcon(ico_mask())
+        self._btn_group.setIcon(ico_folder())
+        self._btn_duplicate.setIcon(ico_duplicate())
+        self._btn_flatten.setIcon(ico_grid())
+        self._btn_delete.setIcon(ico_trash())
+
         # Trigger item rebuild on theme change if document is valid
         if self._doc and hasattr(self, '_list'):
+            self._row_structure = []  # Force full rebuild for layer items
             self.refresh(self._doc, thumbnails=True)
             self._sync_active(self._doc)
 
@@ -178,7 +203,8 @@ class LayersPanel(QWidget):
         header_layout.addWidget(self._opacity_slider)
 
         root.addWidget(self._header)
-        root.addWidget(h_separator())
+        self._sep1 = h_separator()
+        root.addWidget(self._sep1)
 
         self._list = LayerListWidget()
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -196,16 +222,20 @@ class LayersPanel(QWidget):
         self._list.delete_key_pressed.connect(self.delete_requested.emit)
         root.addWidget(self._list, 1)
 
-        root.addWidget(h_separator())
+        self._sep2 = h_separator()
+        root.addWidget(self._sep2)
 
         self._toolbar = QWidget()
         tb_layout = QHBoxLayout(self._toolbar)
         tb_layout.setContentsMargins(4, 3, 4, 3)
         tb_layout.setSpacing(1)
 
-        tb_layout.addWidget(toolbar_btn(ico_new_layer(), "New layer", self.add_requested))
-        tb_layout.addWidget(toolbar_btn(ico_fx(), "Layer styles", self.styles_requested))
-        tb_layout.addWidget(toolbar_btn(ico_mask(), "Add mask", self.mask_requested))
+        self._btn_new_layer = toolbar_btn(ico_new_layer(), "New layer", self.add_requested)
+        tb_layout.addWidget(self._btn_new_layer)
+        self._btn_styles = toolbar_btn(ico_fx(), "Layer styles", self.styles_requested)
+        tb_layout.addWidget(self._btn_styles)
+        self._btn_mask = toolbar_btn(ico_mask(), "Add mask", self.mask_requested)
+        tb_layout.addWidget(self._btn_mask)
 
         self._adj_btn = QPushButton()
         self._adj_btn.setIcon(ico_adjustment())
@@ -261,10 +291,14 @@ class LayersPanel(QWidget):
 
         tb_layout.addStretch()
 
-        tb_layout.addWidget(toolbar_btn(ico_folder(), "New group", self.group_requested))
-        tb_layout.addWidget(toolbar_btn(ico_duplicate(), "Duplicate layer", self.duplicate_requested))
-        tb_layout.addWidget(toolbar_btn(ico_grid(), "Flatten image", self.flatten_requested))
-        tb_layout.addWidget(toolbar_btn(ico_trash(), "Delete layer", self.delete_requested))
+        self._btn_group = toolbar_btn(ico_folder(), "New group", self.group_requested)
+        tb_layout.addWidget(self._btn_group)
+        self._btn_duplicate = toolbar_btn(ico_duplicate(), "Duplicate layer", self.duplicate_requested)
+        tb_layout.addWidget(self._btn_duplicate)
+        self._btn_flatten = toolbar_btn(ico_grid(), "Flatten image", self.flatten_requested)
+        tb_layout.addWidget(self._btn_flatten)
+        self._btn_delete = toolbar_btn(ico_trash(), "Delete layer", self.delete_requested)
+        tb_layout.addWidget(self._btn_delete)
 
         root.addWidget(self._toolbar)
 

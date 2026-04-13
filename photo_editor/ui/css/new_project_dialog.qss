@@ -1,0 +1,308 @@
+/* New Project dialog — premium design matching app language */
+
+#NewProjectDialog {
+    background: [[surface_panel_alt]];
+    color: [[fg]];
+    font-family: "Segoe UI Variable Text", "Aptos", "Inter", sans-serif;
+    font-size: 12px;
+}
+
+#NewProjectDialog QLabel {
+    color: [[fg]];
+    background: transparent;
+}
+
+#DialogTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: [[fg]];
+    background: transparent;
+    letter-spacing: 0.02em;
+}
+
+#DialogSubtitle {
+    font-size: 11px;
+    color: [[fg_dim]];
+    background: transparent;
+}
+
+/* ---------- Category tabs ---------- */
+
+#CategoryTab {
+    background: [[bg1_alt]];
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 600;
+    padding: 8px 14px;
+    min-height: 32px;
+}
+
+#CategoryTab:hover {
+    background: [[surface_hover]];
+    color: [[fg]];
+    border-color: [[outline_soft]];
+}
+
+#CategoryTab:checked {
+    background: [[accent_soft]];
+    color: [[fg]];
+    border-color: [[accent_border]];
+}
+
+/* ---------- Preset grid cards ---------- */
+
+#PresetCard {
+    background: [[surface_card]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 12px;
+    padding: 8px;
+    color: [[fg]];
+    font-size: 10px;
+}
+
+#PresetCard:hover {
+    border-color: [[outline_strong]];
+    background: [[surface_hover]];
+}
+
+#PresetCard:checked {
+    border-color: [[accent_border]];
+    background: [[accent_soft]];
+}
+
+#PresetPreview {
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 8px;
+}
+
+#PresetName {
+    color: [[fg]];
+    font-size: 10px;
+    font-weight: 600;
+    background: transparent;
+}
+
+#PresetSize {
+    color: [[fg_dim]];
+    font-size: 9px;
+    background: transparent;
+}
+
+/* ---------- Settings panel ---------- */
+
+#SettingsPanel {
+    background: [[surface_panel]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 14px;
+    padding: 16px;
+}
+
+#SettingLabel {
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+    min-width: 70px;
+}
+
+#SettingValue {
+    color: [[fg]];
+    font-size: 11px;
+    background: transparent;
+}
+
+/* Dimension inputs */
+
+#DimInput {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    min-height: 30px;
+}
+
+#DimInput:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#DimInput:focus {
+    background: [[input_focus]];
+    border-color: [[outline_focus]];
+}
+
+#DimLabel {
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}
+
+#LinkButton {
+    background: transparent;
+    border: 1px solid [[outline_soft]];
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 28px;
+    min-height: 28px;
+    color: [[fg_dim]];
+    font-size: 14px;
+}
+
+#LinkButton:hover {
+    border-color: [[outline_strong]];
+    background: [[surface_hover]];
+}
+
+#LinkButton:checked {
+    border-color: [[accent_border]];
+    background: [[accent_soft]];
+    color: [[accent]];
+}
+
+#OrientationButton {
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 8px;
+    padding: 6px 14px;
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 500;
+    min-height: 28px;
+}
+
+#OrientationButton:hover {
+    background: [[surface_hover]];
+    color: [[fg]];
+}
+
+#OrientationButton:checked {
+    background: [[accent_soft]];
+    border-color: [[accent_border]];
+    color: [[fg]];
+}
+
+/* Combos (units, color mode, profile) */
+
+#SettingCombo {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 11px;
+    min-height: 26px;
+}
+
+#SettingCombo:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#SettingCombo:focus {
+    background: [[input_focus]];
+    border-color: [[outline_focus]];
+}
+
+#SettingCombo::drop-down {
+    border: none;
+    width: 16px;
+}
+
+#SettingCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}
+
+#SettingCombo QAbstractItemView {
+    background: [[popup_bg]];
+    color: [[fg]];
+    selection-background-color: [[accent_soft]];
+    selection-color: [[fg]];
+    border: 1px solid [[popup_border]];
+    border-radius: 10px;
+    padding: 4px;
+    outline: none;
+}
+
+/* Background swatches */
+
+#BgSwatch {
+    border: 2px solid [[outline_soft]];
+    border-radius: 8px;
+    min-width: 28px;
+    min-height: 28px;
+    max-width: 28px;
+    max-height: 28px;
+}
+
+#BgSwatch:hover {
+    border-color: [[outline_strong]];
+}
+
+#BgSwatch:checked {
+    border-color: [[accent]];
+    border-width: 2px;
+}
+
+/* Preview panel */
+#LivePreview {
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 12px;
+    min-height: 140px;
+}
+
+#FileSizeLabel {
+    color: [[fg_dim]];
+    font-size: 10px;
+    background: transparent;
+}
+
+/* Bottom buttons */
+
+#CreateButton {
+    background: [[accent]];
+    color: [[fg_accent]];
+    border: 1px solid [[accent_border]];
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 32px;
+    min-height: 34px;
+    min-width: 120px;
+}
+
+#CreateButton:hover {
+    background: [[accent_hover]];
+}
+
+#CreateButton:pressed {
+    background: [[accent_pressed]];
+}
+
+#CancelButton {
+    background: [[button_bg]];
+    color: [[fg]];
+    border: 1px solid [[button_border]];
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 24px;
+    min-height: 34px;
+    min-width: 90px;
+}
+
+#CancelButton:hover {
+    background: [[button_hover]];
+}

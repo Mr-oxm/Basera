@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import math
+import sys
 from typing import Callable
 
 from PySide6.QtCore import Qt, QPointF, QSignalBlocker, QTimer
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox, QScrollBar, QWidget
+from PySide6.QtWidgets import (
+    QDockWidget, QMainWindow, QMessageBox, QScrollBar, QWidget, QStackedWidget,
+)
 
 from ..commands.base import Command
 from ..core.brush_engine import BrushManager
@@ -41,8 +44,9 @@ _IMG_FLT = "Images (*.png *.jpg *.jpeg *.webp *.tiff *.tif *.bmp)"
 class MainWindow(QMainWindow):
     """Top-level application window."""
 
-    def __init__(self) -> None:
+    def __init__(self, dev_mode: bool = False) -> None:
         super().__init__()
+        self._dev_mode = dev_mode or ("--dev" in sys.argv)
         self.setWindowTitle("Basera")
         self.resize(1440, 900)
         self.setWindowIcon(app_icon())
@@ -148,13 +152,20 @@ class MainWindow(QMainWindow):
         self._props_panel.brush_bar.set_brush_manager(self._brush_mgr)
         self._brush_mgr.brush_changed.connect(self._on_brush_preset_changed)
 
-        self._document_ctrl.new_document(1920, 1080)
+        # Dev mode: auto-create 1080p project, skip welcome screen
+        if self._dev_mode:
+            self._document_ctrl.new_document(1920, 1080)
+        else:
+            # Start with welcome screen
+            self._show_welcome_screen()
+            self._set_editor_visible(False)
 
     # ---- UI assembly --------------------------------------------------------
 
     def _build_ui(self) -> None:
         from PySide6.QtWidgets import QVBoxLayout, QGridLayout, QToolBar
         from .widgets.rulers import HorizontalRuler, VerticalRuler, RulerCorner, Guide, RULER_SIZE
+        from .welcome_screen import WelcomeScreen
         
         self._menu = EditorMenuBar(self)
         self.setMenuBar(self._menu)
@@ -217,8 +228,19 @@ class MainWindow(QMainWindow):
         # Ruler/guide signals wired by ViewController
 
         central_layout.addWidget(ruler_grid, 1)
-        
-        self.setCentralWidget(central)
+
+        # Stacked widget: 0 = welcome screen, 1 = editor
+        self._stacked = QStackedWidget()
+
+        self._welcome = WelcomeScreen()
+        self._welcome.new_project_requested.connect(self._on_welcome_new)
+        self._welcome.open_image_requested.connect(self._on_welcome_open_image)
+        self._welcome.open_basera_requested.connect(self._on_welcome_open_basera)
+
+        self._stacked.addWidget(self._welcome)   # index 0
+        self._stacked.addWidget(central)          # index 1
+
+        self.setCentralWidget(self._stacked)
         
         # Dock panels on the sides
         # Ensure all dock tabs are at the top, not bottom
@@ -236,29 +258,36 @@ class MainWindow(QMainWindow):
 
         self._layers_panel = LayersPanel()
         self._layers_dock = self._dock(self._layers_panel, "Layers", Qt.DockWidgetArea.RightDockWidgetArea)
-        self._history_panel = HistoryPanel()
-        self._history_dock = self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
         
         self._color_panel = ColorPanel()
         self._color_dock = self._dock(self._color_panel, "Color", Qt.DockWidgetArea.RightDockWidgetArea)
-        self.tabifyDockWidget(self._layers_dock, self._color_dock)
         
         self._transform_panel = TransformPanel()
         self._transform_dock = self._dock(self._transform_panel, "Transform", Qt.DockWidgetArea.RightDockWidgetArea)
-        self.tabifyDockWidget(self._layers_dock, self._transform_dock)
 
-        self._layers_dock.raise_()
+        self._history_panel = HistoryPanel()
+        self._history_dock = self._dock(self._history_panel, "History", Qt.DockWidgetArea.RightDockWidgetArea)
 
-        # Brushes panel (docked right, tabbed with history)
         self._brushes_panel = BrushesPanel()
         self._brushes_dock = self._dock(self._brushes_panel, "Brushes", Qt.DockWidgetArea.RightDockWidgetArea)
-        self.tabifyDockWidget(self._history_dock, self._brushes_dock)
         
         self._channels_panel = ChannelsPanel()
         self._channels_dock = self._dock(self._channels_panel, "Channels", Qt.DockWidgetArea.RightDockWidgetArea)
-        self.tabifyDockWidget(self._brushes_dock, self._channels_dock)
 
+        # Tabify top group
+        self.tabifyDockWidget(self._layers_dock, self._color_dock)
+        self.tabifyDockWidget(self._layers_dock, self._transform_dock)
+
+        # Tabify bottom group
+        self.tabifyDockWidget(self._history_dock, self._brushes_dock)
+        self.tabifyDockWidget(self._history_dock, self._channels_dock)
+
+        # Ensure correct active tabs
+        self._layers_dock.raise_()
         self._history_dock.raise_()
+
+        # Set vertical height of top and bottom panel groups to 50/50 by default
+        self.resizeDocks([self._layers_dock, self._history_dock], [500, 500], Qt.Orientation.Vertical)
 
         self._status = EditorStatusBar(self)
         self.setStatusBar(self._status)
@@ -609,3 +638,63 @@ class MainWindow(QMainWindow):
         """Apply the selected brush preset to the active brush-type tool."""
         if preset is not None and hasattr(self, "_tool_ctrl"):
             self._tool_ctrl.apply_brush_preset(preset)
+
+    # ---- Welcome screen integration ----------------------------------------
+
+    def _show_welcome_screen(self) -> None:
+        """Switch the stacked widget to the welcome screen."""
+        self._stacked.setCurrentIndex(0)
+        self._set_editor_visible(False)
+
+    def _show_editor(self) -> None:
+        """Switch the stacked widget to the editor view."""
+        self._stacked.setCurrentIndex(1)
+        self._set_editor_visible(True)
+
+    def _set_editor_visible(self, visible: bool) -> None:
+        """Hide or show all panels, toolbars, and status bar."""
+        self._toolbar.setVisible(visible)
+        self._props_toolbar.setVisible(visible)
+        self._layers_dock.setVisible(visible)
+        self._history_dock.setVisible(visible)
+        self._color_dock.setVisible(visible)
+        self._transform_dock.setVisible(visible)
+        self._brushes_dock.setVisible(visible)
+        self._channels_dock.setVisible(visible)
+        self._status.setVisible(visible)
+        self._file_tabs.setVisible(visible)
+
+    def _activate_project(self) -> None:
+        """Transition from welcome screen to the editor with active project."""
+        self._show_editor()
+
+    def _on_welcome_new(self) -> None:
+        """Handle 'New Project' from welcome screen."""
+        from .dialogs.new_project_dialog import NewProjectDialog
+        dlg = NewProjectDialog(self)
+        if dlg.exec():
+            w, h, dpi = dlg.get_values()
+            self._document_ctrl.new_document(w, h, dpi)
+            self._activate_project()
+
+    def _on_welcome_open_image(self) -> None:
+        """Handle 'Open Image' from welcome screen."""
+        self._document_ctrl.on_open()
+        if self._doc is not None:
+            self._activate_project()
+
+    def _on_welcome_open_basera(self) -> None:
+        """Handle 'Open .basera' from welcome screen."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Basera Project", "", "Basera Projects (*.basera)"
+        )
+        if path:
+            # TODO: implement .basera project loading
+            self._status.showMessage(f"Basera project loading not yet implemented: {path}", 5000)
+
+    def _on_last_tab_closed(self) -> None:
+        """Called when the last tab is closed — return to welcome screen."""
+        self._doc = None
+        if not self._dev_mode:
+            self._show_welcome_screen()

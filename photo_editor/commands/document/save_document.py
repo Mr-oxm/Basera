@@ -20,11 +20,22 @@ class SaveDocumentCommand(Command):
     Caller must call document.mark_clean() and update UI after success.
     """
 
-    def __init__(self, path: str | Path, pipeline: RenderPipeline) -> None:
+    def __init__(
+        self, path: str | Path, pipeline: RenderPipeline, quality: int = 95,
+    ) -> None:
         self.path = Path(path)
         self._pipeline = pipeline
+        self._quality = int(quality)
 
     def execute(self, document: Document) -> None:
+        suffix = self.path.suffix.lower()
+        if suffix == ".basera":
+            from ...utils.project_io import save_basera_project
+
+            save_basera_project(document, self.path)
+            return
+
         from ...utils.image_io import save_image
+
         merged = self._pipeline.execute(document)
-        save_image(merged, self.path)
+        save_image(merged, self.path, quality=self._quality)

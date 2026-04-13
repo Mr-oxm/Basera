@@ -6,8 +6,9 @@ automatically when the user changes preset or edits a binding.
 
 from __future__ import annotations
 
-from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QMenuBar
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtWidgets import QLabel, QMenuBar
 
 from .shortcut_manager import ShortcutManager
 from .styles import render_qss
@@ -20,6 +21,16 @@ class EditorMenuBar(QMenuBar):
         super().__init__(parent)
         self.actions_map: dict[str, QAction] = {}
         self._mgr = ShortcutManager.instance()
+        
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        logo_path = os.path.join(base_dir, "assets", "app", "logo.svg")
+        self._logo_label = QLabel()
+        self._logo_label.setPixmap(QIcon(logo_path).pixmap(24, 24))
+        self._logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._logo_label.setContentsMargins(12, 0, 8, 0)
+        self.setCornerWidget(self._logo_label, Qt.Corner.TopLeftCorner)
+
         self._build()
         self._mgr.shortcuts_changed.connect(self._refresh_shortcuts)
         self.setNativeMenuBar(False)
@@ -44,13 +55,14 @@ class EditorMenuBar(QMenuBar):
 
     def _file_menu(self) -> None:
         m = self.addMenu("&File")
-        self._add(m, "new", "&New…")
-        self._add(m, "open", "&Open…")
+        self._add(m, "new", "&New Project…")
+        self._add(m, "open", "&Open Image…")
         self._add(m, "import_svg", "Import &SVG…")
         self._add(m, "place_image", "&Place Image as Layer…")
         m.addSeparator()
-        self._add(m, "save", "&Save")
-        self._add(m, "save_as", "Save &As…")
+        self._add(m, "save", "&Save Project")
+        self._add(m, "save_as", "Save Project &As…")
+        m.addSeparator()
         self._add(m, "export", "&Export…")
         self._add(m, "export_svg", "Export S&VG…")
         self._add(m, "export_pdf", "Export &PDF…")

@@ -1,0 +1,261 @@
+/* Export dialog — premium design matching app language */
+
+#ExportDialog {
+    background: [[surface_panel_alt]];
+    color: [[fg]];
+    font-family: "Segoe UI Variable Text", "Aptos", "Inter", sans-serif;
+    font-size: 12px;
+}
+
+#ExportDialog QLabel {
+    color: [[fg]];
+    background: transparent;
+}
+
+#ExportTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: [[fg]];
+    background: transparent;
+    letter-spacing: 0.02em;
+}
+
+/* ---------- Format list ---------- */
+
+#FormatCard {
+    background: [[surface_card]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 10px;
+    padding: 8px 14px;
+    color: [[fg]];
+    font-size: 11px;
+    font-weight: 600;
+    min-height: 32px;
+}
+
+#FormatCard:hover {
+    border-color: [[outline_strong]];
+    background: [[surface_hover]];
+}
+
+#FormatCard:checked {
+    border-color: [[accent_border]];
+    background: [[accent_soft]];
+}
+
+#FormatBadge {
+    color: [[fg_dim]];
+    font-size: 9px;
+    font-weight: 500;
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+/* ---------- Settings panel ---------- */
+
+#ExportSettingsPanel {
+    background: [[surface_panel]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 14px;
+    padding: 16px;
+}
+
+#ExportSettingLabel {
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 600;
+    background: transparent;
+}
+
+/* Quality slider */
+
+#QualitySlider::groove:horizontal {
+    background: [[slider_track]];
+    height: 5px;
+    border-radius: 2px;
+}
+
+#QualitySlider::handle:horizontal {
+    background: [[slider_handle]];
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+#QualitySlider::handle:horizontal:hover {
+    background: [[slider_hover]];
+}
+
+#QualityValue {
+    color: [[fg]];
+    font-size: 13px;
+    font-weight: 700;
+    background: transparent;
+    min-width: 36px;
+}
+
+/* Size preset combo */
+
+#SizePresetCombo {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 11px;
+    min-height: 26px;
+}
+
+#SizePresetCombo:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#SizePresetCombo::drop-down {
+    border: none;
+    width: 16px;
+}
+
+#SizePresetCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}
+
+#SizePresetCombo QAbstractItemView {
+    background: [[popup_bg]];
+    color: [[fg]];
+    selection-background-color: [[accent_soft]];
+    border: 1px solid [[popup_border]];
+    border-radius: 10px;
+    padding: 4px;
+    outline: none;
+}
+
+/* Metadata toggles */
+
+#MetadataCheck {
+    color: [[fg]];
+    font-size: 11px;
+    spacing: 8px;
+    background: transparent;
+}
+
+#MetadataCheck::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid [[outline_strong]];
+    border-radius: 5px;
+    background: [[input_bg]];
+}
+
+#MetadataCheck::indicator:hover {
+    border-color: [[accent_border]];
+}
+
+#MetadataCheck::indicator:checked {
+    background: [[accent]];
+    border-color: [[accent]];
+}
+
+/* Preview */
+#ExportPreview {
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 12px;
+}
+
+#ExportSizeEstimate {
+    color: [[fg_dim]];
+    font-size: 10px;
+    background: transparent;
+}
+
+/* Bottom buttons */
+
+#ExportButton {
+    background: [[accent]];
+    color: [[fg_accent]];
+    border: 1px solid [[accent_border]];
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 32px;
+    min-height: 34px;
+    min-width: 120px;
+}
+
+#ExportButton:hover {
+    background: [[accent_hover]];
+}
+
+#ExportButton:pressed {
+    background: [[accent_pressed]];
+}
+
+#ClipboardButton {
+    background: [[button_bg]];
+    color: [[fg]];
+    border: 1px solid [[button_border]];
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 20px;
+    min-height: 34px;
+}
+
+#ClipboardButton:hover {
+    background: [[button_hover]];
+}
+
+#ExportCancelButton {
+    background: [[button_bg]];
+    color: [[fg]];
+    border: 1px solid [[button_border]];
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 24px;
+    min-height: 34px;
+    min-width: 90px;
+}
+
+#ExportCancelButton:hover {
+    background: [[button_hover]];
+}
+
+/* Subsampling combo */
+#SubsamplingCombo {
+    background: [[input_bg]];
+    color: [[fg]];
+    border: 1px solid [[input_border]];
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 11px;
+    min-height: 26px;
+}
+
+#SubsamplingCombo:hover {
+    background: [[input_hover]];
+    border-color: [[outline_strong]];
+}
+
+#SubsamplingCombo::drop-down {
+    border: none;
+    width: 16px;
+}
+
+#SubsamplingCombo::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid [[fg_dim]];
+}

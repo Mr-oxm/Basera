@@ -1,0 +1,124 @@
+/* Welcome screen — premium glass + gradient design */
+
+#WelcomeScreen {
+    background: [[window_gradient]];
+}
+
+#WelcomeLogo {
+    background: transparent;
+}
+
+#WelcomeTitle {
+    color: [[fg]];
+    font-size: 28px;
+    font-weight: 700;
+    font-family: "Segoe UI Variable Display", "Inter", sans-serif;
+    background: transparent;
+    letter-spacing: 0.04em;
+}
+
+#WelcomeSubtitle {
+    color: [[fg_dim]];
+    font-size: 13px;
+    font-weight: 400;
+    background: transparent;
+    letter-spacing: 0.02em;
+}
+
+#WelcomeActionCard {
+    background: [[surface_card]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 16px;
+    padding: 0px;
+}
+
+#WelcomeActionButton {
+    background: [[surface_card]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 14px;
+    color: [[fg]];
+    font-size: 14px;
+    font-weight: 600;
+    padding: 18px 28px;
+    min-height: 48px;
+    min-width: 220px;
+    text-align: left;
+}
+
+#WelcomeActionButton:hover {
+    background: [[surface_hover]];
+    border-color: [[accent_border]];
+}
+
+#WelcomeActionButton:pressed {
+    background: [[surface_pressed]];
+    border-color: [[accent]];
+}
+
+#WelcomePrimaryButton {
+    background: [[accent]];
+    border: 1px solid [[accent_border]];
+    border-radius: 14px;
+    color: [[fg_accent]];
+    font-size: 14px;
+    font-weight: 700;
+    padding: 18px 28px;
+    min-height: 48px;
+    min-width: 220px;
+    text-align: left;
+}
+
+#WelcomePrimaryButton:hover {
+    background: [[accent_hover]];
+    border-color: [[accent_border]];
+}
+
+#WelcomePrimaryButton:pressed {
+    background: [[accent_pressed]];
+}
+
+#WelcomeSectionTitle {
+    color: [[fg_dim]];
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    background: transparent;
+    padding: 0px;
+}
+
+#WelcomeRecentItem {
+    background: [[surface_card]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 12px;
+    padding: 10px 14px;
+}
+
+#WelcomeRecentItem:hover {
+    background: [[surface_hover]];
+    border-color: [[outline_strong]];
+}
+
+#WelcomeRecentName {
+    color: [[fg]];
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+
+#WelcomeRecentInfo {
+    color: [[fg_dim]];
+    font-size: 10px;
+    background: transparent;
+}
+
+#WelcomeRecentThumb {
+    background: [[bg1_alt]];
+    border: 1px solid [[outline_soft]];
+    border-radius: 8px;
+}
+
+#WelcomeVersion {
+    color: [[fg_dim]];
+    font-size: 10px;
+    background: transparent;
+}

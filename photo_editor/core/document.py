@@ -448,7 +448,8 @@ class Document:
     def save_snapshot(self, action: str) -> None:
         self._snapshot(action)
 
-    def _snapshot(self, action: str) -> None:
+    def _build_history_state(self, action: str) -> HistoryState:
+        """Create a serializable snapshot of the current document state."""
         state = HistoryState(name=action)
         # Save pixel data and mask data for every layer
         for layer in self.layers:
@@ -506,6 +507,10 @@ class Document:
         # Save selection mask
         if self.selection._mask is not None:
             state.layer_data["__selection_mask__"] = self.selection._mask.copy()
+        return state
+
+    def _snapshot(self, action: str) -> None:
+        state = self._build_history_state(action)
         self.history.push(state)
 
     def _restore(self, state: HistoryState) -> None:

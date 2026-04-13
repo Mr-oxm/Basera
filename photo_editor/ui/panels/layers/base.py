@@ -66,13 +66,5 @@ def toolbar_btn(icon: QIcon, tooltip: str, signal) -> QPushButton:
     b.setFixedSize(24, 24)
     b.setFlat(True)
     b.setToolTip(tooltip)
-    b.setStyleSheet(f"""
-        QPushButton {{
-            background: transparent; border: none; border-radius: 3px;
-        }}
-        QPushButton:hover {{
-            background: {BTN_HOVER};
-        }}
-    """)
     b.clicked.connect(lambda: signal.emit())
     return b
