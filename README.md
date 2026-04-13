@@ -3,7 +3,7 @@
 
 
 
-> **v0.4.5-alpha** — Performance optimizations, dynamic themes, full brush system, advanced vector booleans, UI overhaul, and multi-layer select.
+> **v0.5.0-alpha** — Native `.basera` project format, full project creation & export workflows, completely reworked UI with centralized theming, new adjustment layers, clipping/child layers, and zoom-to-cursor.
 
 A **professional-grade, Photoshop-style photo editor** built in Python with a modular, extensible architecture. Designed for scalability, performance, and clean code — not a toy.
 
@@ -26,7 +26,55 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ---
 
-## What's New in v0.4.0 (Basera - بصيرة)
+## What's New in v0.5.0
+
+### Native `.basera` Project Format
+- **Save & Share Projects**: Projects are now saved as `.basera` files — open, continue, and share your work at any time with nothing lost.
+- **Full Fidelity**: All layers, adjustments, masks, history, and settings are preserved across sessions.
+
+### Project Creation Window
+- **Templates Library**: Dozens of built-in templates covering common print, web, and social media sizes.
+- **Custom Dimensions**: Set width and height with full unit conversion support — pixels, centimeters, millimeters, inches, and more.
+- **DPI Support**: Choose your output resolution (72, 96, 150, 300 dpi, or custom).
+- **Color Profiles**: Select the working color space — RGB or CMYK — at project creation time.
+- **Project Background**: Choose the initial canvas background (white, black, transparent, or a custom color).
+
+### Export Window
+- **Flexible Export**: Export your finished work to any supported format directly from a dedicated export dialog.
+- **Format Options**: Configure extension-specific settings (quality, compression, color space) before exporting.
+
+### Splash Screen
+- **Reworked Splash Logic**: The splash screen flow has been redesigned for a cleaner, faster startup experience.
+
+### Complete UI Refresh
+- **Brand-new visual design** across the entire application — every panel, toolbar, and dialog has been modernized.
+- **Centralized UI Theming**: All styling is driven through a single theming system, making it easy to scale and maintain visual consistency.
+- **Reworked Theme List**: A new curated set of built-in UI themes is available, replacing the previous selection.
+
+### Adjustment Windows
+- Dedicated, purpose-built dialogs for **Hue/Saturation**, **Levels**, **Brightness/Contrast**, **Curves**, and **Vibrance** — each with real-time canvas preview.
+
+### New Non-Destructive Adjustment Layers and Their Windows
+- **Split Toning**: Apply independent color toning to highlights and shadows.
+- **Normals**: Normal-map-aware adjustment for texture and 3D workflows.
+- **Recolorer**: Remap specific hue ranges to new colors non-destructively.
+- **White Balance**: Correct or creatively shift color temperature and tint.
+
+### Clipping & Child Layers
+- **Clipping Layers**: Clip any layer to the content of the layer below — fully implemented and composited correctly.
+- **Child Layers**: Nest layers inside parent layers for organized, hierarchical compositing.
+
+### Layers Panel Overhaul
+- **Refactored Panel**: Significant bug fixes and a cleaner internal architecture.
+- **Drag & Drop**: Improved drag-and-drop for reordering, nesting, and grouping layers with better visual feedback.
+- **Groups & Nesting**: Easier creation and management of layer groups and nested hierarchies.
+
+### Zoom to Mouse Position
+- **Smart Zoom**: The canvas now zooms toward the cursor position, matching the behaviour of professional design tools.
+
+---
+
+## Previous v0.4.0 Highlights
 
 ### Performance & Engine Optimizations
 - **Off-UI-Thread Compositing**: Rendering is now fully asynchronous in a background worker.
@@ -92,23 +140,6 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 
 ---
 
-## Architecture
-
-```
-┌──────────┐    ┌─────────────┐    ┌─────────────────┐    ┌──────────────┐    ┌──────────────┐
-│  Canvas   │ →  │ Layer Stack  │ →  │ Blending Engine  │ →  │ Effects Pipe │ →  │ Final Render │
-│ Viewport  │    │  (ordered)   │    │ (28 blend modes) │    │ (styles etc) │    │  (RGBA buf)  │
-└──────────┘    └─────────────┘    └─────────────────┘    └──────────────┘    └──────────────┘
-```
-
-### Rendering Pipeline
-
-1. **Canvas** — viewport state (zoom, pan, grid, guides)
-2. **Layer Stack** — ordered collection of layers with group, mask, and clipping support
-3. **Blending Engine** — composites each layer onto the canvas using Photoshop-compatible blend modes with proper Porter-Duff alpha compositing
-4. **Effects Pipeline** — applies non-destructive adjustment layers, filters, and layer styles
-5. **Final Render** — outputs RGBA float32 buffer, converted to uint8 for display
-
 ### Module Map
 
 | Module | Responsibility |
@@ -135,6 +166,8 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 - **Raster, Vector, Text, Shape, Adjustment, Group, Smart Object** (architecture-ready)
 - **Text layers** with full typography controls (font, bold, italic, alignment, spacing, color)
 - Opacity, visibility, locking, reordering, clipping masks
+- **Clipping layers** — clip any layer to the content boundary of the layer below
+- **Child layers** — nest layers inside parent layers for hierarchical compositing
 - Layer masks with feather, grow, shrink, refine
 - Layer groups with nested compositing
 - **Layer styles** — Color Overlay, Stroke, Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Bevel & Emboss, Satin, Gradient Overlay, Pattern Overlay
@@ -142,8 +175,8 @@ A **professional-grade, Photoshop-style photo editor** built in Python with a mo
 ### Blending Modes (28)
 Normal · Dissolve · Darken · Multiply · Color Burn · Linear Burn · Darker Color · Lighten · Screen · Color Dodge · Linear Dodge · Lighter Color · Overlay · Soft Light · Hard Light · Vivid Light · Linear Light · Pin Light · Hard Mix · Difference · Exclusion · Subtract · Divide · Hue · Saturation · Color · Luminosity
 
-### Non-Destructive Adjustments (15)
-Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturation · Color Balance · Black & White · Photo Filter · Gradient Map · Selective Color · Channel Mixer · Invert · Posterize · Threshold
+### Non-Destructive Adjustments (19)
+Brightness/Contrast · Levels · Curves · Exposure · Vibrance · Hue/Saturation · Color Balance · Black & White · Photo Filter · Gradient Map · Selective Color · Channel Mixer · Invert · Posterize · Threshold · **Split Toning** · **Normals** · **Recolorer** · **White Balance**
 
 ### Filters (24)
 **Blur:** Gaussian · Motion · Radial · Surface · Lens  
@@ -190,18 +223,21 @@ Rectangle · Ellipse · Lasso · Magic Wand · Feather · Grow/Shrink · Invert
 Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ### UI
-- Professional dark theme
+- Professional dark theme with a **centralized theming system** for scalable UI customization
+- **Reworked theme list** — a new curated set of built-in UI themes
 - Dockable panels (Layers, History, Adjustments, **Properties Bar**, Color, **Transform**)
 - **Projects bar** for multi-document navigation
 - Full menu bar with keyboard shortcuts
-- Zoomable canvas with pan (middle-click), scroll-wheel zoom, and **rulers/guides**
+- Zoomable canvas with pan (middle-click), scroll-wheel zoom, **rulers/guides**, and **zoom-to-cursor**
 - Transparency checkerboard
 - Status bar with cursor position, zoom level, document info
 - Drag & drop image loading
-- New Document dialog with presets
+- **Project Creation dialog** — templates, custom dimensions, unit conversion, DPI, color profiles (RGB/CMYK), and background
+- **Export dialog** — export to any supported format with per-format settings
 - **Real-time blend mode preview** — hover over blend modes in the dropdown to see a live preview on the canvas before committing
 - **Real-time brush/eraser preview** — see stroke as you paint
 - **Real-time layer style preview** — adjust parameters and see results instantly
+- **Adjustment windows** — dedicated dialogs for Hue/Saturation, Levels, Brightness/Contrast, Curves, and Vibrance
 
 ---
 
@@ -435,12 +471,15 @@ This is an early alpha — the following are known problems that need to be addr
 - [ ] No crash recovery or auto-save
 - [x] ~~Filter previews are not live — must apply to see result~~ (blend mode preview is now live on hover)
 - [x] ~~No file save/export~~ (Save / Save As now functional)
+- [x] ~~No native project format~~ (`.basera` project files in v0.5.0)
+- [x] ~~Clipping masks may not update visually in real time~~ (clipping layers fully implemented in v0.5.0)
+- [x] ~~Dragging layers to reorder can be unreliable~~ (layers panel overhauled in v0.5.0)
 
 ---
 
 ## Roadmap
 
-- [ ] GPU acceleration via CuPy backend
+- [ ] GPU acceleration
 - [ ] Plugin system with hot-reload
 - [ ] PSD file import/export
 - [ ] RAW file support (via rawpy)
@@ -448,13 +487,19 @@ This is an early alpha — the following are known problems that need to be addr
 - [x] ~~Multi-layer selection~~ (v0.4.0)
 - [x] ~~Vector boolean operations~~ (v0.4.0)
 - [x] ~~Vector layer rendering (SVG)~~ (v0.3.0)
+- [x] ~~Native project file format (save/share/resume)~~ (`.basera` in v0.5.0)
+- [x] ~~Project creation dialog with templates, units, DPI, and color profiles~~ (v0.5.0)
+- [x] ~~Dedicated export dialog~~ (v0.5.0)
+- [x] ~~Clipping layers and child layers~~ (v0.5.0)
+- [x] ~~Zoom to mouse position~~ (v0.5.0)
+- [x] ~~Centralized UI theming system~~ (v0.5.0)
 - [ ] Smart Object editing
 - [ ] Content-Aware Fill
 - [ ] Liquify tool
 - [ ] Actions / macro recording
 - [ ] Batch processing
 - [ ] HDR tone mapping
-- [ ] Color management (ICC profiles)
+- [ ] Color management (full ICC profile pipeline)
 - [x] ~~Multi-document tabs~~ (implemented as Projects bar in v0.2.0)
 - [ ] Pen tablet pressure sensitivity
 
