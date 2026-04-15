@@ -78,10 +78,16 @@ class Layer:
         self._source_pixels: np.ndarray | None = None
         self._source_mask: np.ndarray | None = None
         self._pixels_dirty: bool = False
+        # --- Alpha presence tracking ---
+        # None = unknown (needs scan), True = has non-zero alpha pixels,
+        # False = entirely transparent.  Updated by mark_alpha_dirty().
+        self._has_alpha: bool | None = None
         # --- Vector layer data ---
         # When layer_type == SHAPE, this holds the VectorLayer scene graph.
         # The rasterizer converts vector data → _pixels on demand.
         self._vector_data: object | None = None  # VectorLayer instance
+        # Cached rasterization result: (version_hash, pixels, position)
+        self._raster_cache: tuple[str, np.ndarray, tuple[int, int]] | None = None
 
     # ---- Pixel data ---------------------------------------------------------
 
@@ -95,6 +101,22 @@ class Layer:
     def pixels(self, value: np.ndarray) -> None:
         self._pixels = value.astype(np.float32) if value.dtype != np.float32 else value
         self.height, self.width = value.shape[:2]
+        self._has_alpha = None  # invalidate — will be recomputed on demand
+
+    @property
+    def has_alpha(self) -> bool:
+        """Whether this layer has any non-zero alpha pixels.
+
+        Cached per pixel mutation.  Avoids an O(N) ``np.any()`` scan on
+        every blend call in the compositor.
+        """
+        if self._has_alpha is None:
+            self._has_alpha = bool(np.any(self._pixels[..., 3]))
+        return self._has_alpha
+
+    def mark_alpha_dirty(self) -> None:
+        """Invalidate the cached alpha presence flag after painting."""
+        self._has_alpha = None
 
     # ---- Non-destructive transform API --------------------------------------
 
@@ -328,3 +350,4 @@ class Layer:
 
     def fill(self, color: np.ndarray) -> None:
         self._pixels[:] = color.astype(np.float32)
+        self._has_alpha = None

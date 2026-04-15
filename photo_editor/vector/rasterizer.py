@@ -262,10 +262,19 @@ def set_auto_rasterize(enabled: bool) -> None:
 def get_auto_rasterize() -> bool:
     return _auto_rasterize_enabled
 
+def _compute_vector_state_hash(vl: VectorLayer) -> str:
+    """Compute a combined hash of all visible objects for cache invalidation."""
+    h = hashlib.md5(usedforsecurity=False)
+    for obj in vl.objects:
+        h.update(f"V{obj.visible}".encode())
+        if obj.visible:
+            h.update(_shared_rasterizer._object_state_hash(obj).encode())
+    return h.hexdigest()
+
+
 def rasterize_vector_layer_tight(
     doc: object, *, layer: object | None = None, force: bool = False,
 ) -> None:
-    # Retain the tight bounding box logic using QPainter
     if not force and not _auto_rasterize_enabled:
         return
 
@@ -284,6 +293,18 @@ def rasterize_vector_layer_tight(
     if vl is None:
         return
 
+    # Check rasterisation cache — skip if vector scene hasn't changed
+    state_hash = _compute_vector_state_hash(vl)
+    cache = getattr(layer, "_raster_cache", None)
+    if cache is not None and not force:
+        cached_hash, cached_pixels, cached_pos = cache
+        if cached_hash == state_hash:
+            layer._pixels = cached_pixels
+            layer.position = cached_pos
+            layer.height, layer.width = cached_pixels.shape[:2]
+            layer._pixels_dirty = False
+            return
+
     union = BBox.empty()
     for obj in vl.objects:
         if obj.visible:
@@ -293,6 +314,7 @@ def rasterize_vector_layer_tight(
         layer._pixels = np.zeros((1, 1, 4), dtype=np.float32)
         layer.position = (0, 0)
         layer._pixels_dirty = False
+        layer._raster_cache = (state_hash, layer._pixels, layer.position)
         return
 
     x0 = int(math.floor(union.min_pt.x)) - 2
@@ -305,12 +327,11 @@ def rasterize_vector_layer_tight(
     pixels = _shared_rasterizer.rasterize_layer(
         vl, bw, bh, origin=(float(x0), float(y0))
     )
-    # Assign via property to update width/height automatically
     layer.pixels = pixels
     layer.position = (x0, y0)
     layer._pixels_dirty = False
+    layer._raster_cache = (state_hash, layer._pixels, layer.position)
 
-    # Update parent group bbox when vector layer content changes
     if getattr(layer, "parent_id", None):
         stack = getattr(doc, "layers", None)
         if stack is not None:

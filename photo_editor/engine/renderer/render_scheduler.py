@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 
+from .cancel_token import CancelToken
+from .render_snapshot import RenderSnapshot, create_render_snapshot
 from .render_worker import RenderCommand, RenderWorker
 
 if TYPE_CHECKING:
@@ -23,6 +25,7 @@ class _PendingJob:
     """A render job waiting to be executed."""
 
     document: Document
+    snapshot: RenderSnapshot | None
     command: RenderCommand
     generation_id: int
     full_refresh: bool = False  # True = refresh panels too
@@ -53,6 +56,7 @@ class RenderScheduler(QObject):
         self._generation = 0
         self._last_shown_generation = 0  # Only show results newer than this
         self._pending: _PendingJob | None = None
+        self._active_cancel_token: CancelToken | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(interval_ms)
         self._timer.setSingleShot(True)
@@ -74,8 +78,10 @@ class RenderScheduler(QObject):
             preview_max_size=0 if full_resolution else self._preview_max_size,
             full_resolution=full_resolution,
         )
+        snapshot = create_render_snapshot(document, self._generation)
         self._pending = _PendingJob(
             document=document,
+            snapshot=snapshot,
             command=cmd,
             generation_id=self._generation,
             full_refresh=full_refresh,
@@ -99,8 +105,10 @@ class RenderScheduler(QObject):
             preview_max_size=0 if full_resolution else self._preview_max_size,
             full_resolution=full_resolution,
         )
+        snapshot = create_render_snapshot(document, self._generation)
         job = _PendingJob(
             document=document,
+            snapshot=snapshot,
             command=cmd,
             generation_id=self._generation,
             full_refresh=full_refresh,
@@ -118,12 +126,21 @@ class RenderScheduler(QObject):
 
     def _run_worker(self, job: _PendingJob) -> None:
         """Start a RenderWorker for the given job."""
+        # Cancel the previous in-flight render so it stops early
+        if self._active_cancel_token is not None:
+            self._active_cancel_token.cancel()
+
+        token = CancelToken()
+        self._active_cancel_token = token
+
         worker = RenderWorker(
             pipeline=self._pipeline,
             document=job.document,
             command=job.command,
             generation_id=job.generation_id,
             full_refresh=job.full_refresh,
+            snapshot=job.snapshot,
+            cancel_token=token,
         )
         worker.signals.finished.connect(self._on_finished)
         worker.signals.error.connect(self._on_error)

@@ -1,0 +1,22 @@
+[package]
+name = "photo_engine"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "photo_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+numpy = "0.25"
+rayon = "1"
+lru = "0.14"
+wgpu = "25"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

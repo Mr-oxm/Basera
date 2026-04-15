@@ -142,7 +142,6 @@ class BrushTool(Tool):
         tip = self._get_active_tip()
 
         if tip is not None:
-            # Use preset tip image
             tip_size = max(1, int(self.size * pressure))
             for px, py in self._stroke_points(x0, y0, x1, y1, step):
                 self._stamp_tip(layer.pixels, px - lx, py - ly,
@@ -150,11 +149,11 @@ class BrushTool(Tool):
                                 eff_opacity, hardness=self.hardness,
                                 sel_mask=sel_mask)
         else:
-            # Fallback to circular dab
             for px, py in self._stroke_points(x0, y0, x1, y1, step):
                 self._stamp_circle(layer.pixels, px - lx, py - ly, radius,
                                    paint_color, self.hardness, eff_opacity,
                                    sel_mask=sel_mask)
+        layer.mark_alpha_dirty()
 
     # ------------------------------------------------------------------
     # Tool interface

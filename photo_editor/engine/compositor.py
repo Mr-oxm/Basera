@@ -19,6 +19,7 @@ from ..styles.style_engine import StyleEngine
 
 if TYPE_CHECKING:
     from .cache.image_pool import ImagePool
+    from .renderer.render_snapshot import RenderSnapshot
 
 
 class Compositor:
@@ -27,6 +28,20 @@ class Compositor:
     def __init__(self, image_pool: ImagePool | None = None) -> None:
         self._blending = BlendingEngine()
         self._pool = image_pool
+
+    # ------------------------------------------------------------------
+    # Thread-safe snapshot-based compositing
+    # ------------------------------------------------------------------
+
+    def composite_snapshot(self, snapshot: RenderSnapshot) -> np.ndarray:
+        """Composite from an immutable RenderSnapshot.
+
+        Delegates to the main ``composite()`` method using a lightweight
+        adapter that makes the snapshot's layer list quack like a
+        ``LayerStack``.
+        """
+        adapter = _SnapshotStackAdapter(snapshot)
+        return self.composite(adapter, snapshot.width, snapshot.height)
 
     @staticmethod
     def _calc_filter_padding(adj_layers: list[Layer]) -> int:
@@ -68,6 +83,9 @@ class Compositor:
             padded[pad:pad + h, pad:pad + w] = pixels
             pixels = padded
         else:
+            # Must copy: np.clip(out=pixels) below would mutate the
+            # source layer's pixel array in-place if no apply() call
+            # reassigned pixels.
             pixels = pixels.copy()
         for adj_layer in adj_layers:
             adj = adj_layer.adjustment
@@ -94,70 +112,22 @@ class Compositor:
         """
         return MaskManager.get_combined_mask(layer, stack)
 
+    def invalidate_topology(self) -> None:
+        """No-op kept for API compatibility."""
+
     def composite(self, stack: LayerStack, width: int, height: int) -> np.ndarray:
         canvas = np.zeros((height, width, 4), dtype=np.float32)
         layers = list(stack)
 
-        # Set of mask-layer IDs so we skip them in the main loop
-        mask_layer_ids: set[str] = set()
-        for l in layers:
-            for mid in l.mask_layers:
-                mask_layer_ids.add(mid)
-
-        # Build map of child adjustment/filter layers per parent
-        adj_children: dict[str, list[Layer]] = {}
-        adj_child_ids: set[str] = set()
-        for l in layers:
-            if (l.parent_id
-                    and l.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
-                    and l.visible):
-                adj_children.setdefault(l.parent_id, []).append(l)
-                adj_child_ids.add(l.id)
-
-        # Standalone mask IDs (no parent, not attached to any layer)
-        standalone_mask_ids: set[str] = set()
-        for l in layers:
-            if (l.layer_type == LayerType.MASK
-                    and l.parent_id is None
-                    and l.id not in mask_layer_ids):
-                standalone_mask_ids.add(l.id)
-
-        # Regular (non-mask, non-adj) children of non-group parents.
-        # Groups handle their children via _composite_group; non-group
-        # parents clip children to the parent's alpha boundaries.
-        group_ids = {l.id for l in layers if l.layer_type == LayerType.GROUP}
-        regular_children: dict[str, list[Layer]] = {}
-        for l in layers:
-            if (l.parent_id and l.visible
-                    and l.parent_id not in group_ids
-                    and l.layer_type not in (
-                        LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK)
-                    and l.id not in mask_layer_ids
-                    and l.id not in adj_child_ids):
-                regular_children.setdefault(l.parent_id, []).append(l)
-
-        # Pre-scan for clipping-mask needs — keep standalone masks in-line
-        # Root-level adjustment/filter layers ARE included here; they act as
-        # canvas-wide effects applied to everything composited below them
-        # (Photoshop adjustment-layer semantics).  Child adj/filter layers are
-        # excluded via adj_child_ids (they are applied per-parent instead).
-        visible = [
-            l for l in layers
-            if l.visible and l.parent_id is None
-            and l.id not in mask_layer_ids
-            and (l.layer_type != LayerType.MASK or l.id in standalone_mask_ids)
-            and l.id not in adj_child_ids
-        ]
-        needs_placed: set[str] = set()
-        # Only raster/group/mask layers participate in clipping-mask chains;
-        # skip root-level adjustment/filter layers in this scan.
-        clippable = [
-            l for l in visible
-            if l.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER)
-        ]
-        for i in range(len(clippable) - 1):
-            if clippable[i + 1].clipping_mask:
-                needs_placed.add(clippable[i].id)
+        topo = _TopologyCache.build(layers)
+        mask_layer_ids = topo.mask_layer_ids
+        adj_children = topo.adj_children
+        adj_child_ids = topo.adj_child_ids
+        standalone_mask_ids = topo.standalone_mask_ids
+        group_ids = topo.group_ids
+        regular_children = topo.regular_children
+        visible = topo.visible
+        needs_placed = topo.needs_placed
 
         prev_img: np.ndarray | None = None
 
@@ -236,6 +206,12 @@ class Compositor:
                     layer.blend_mode, layer.opacity,
                 )
                 prev_img = group_img
+                continue
+
+            # Skip entirely transparent layers early (avoids O(N) scan in
+            # blend_region_inplace for layers with no visible content).
+            if not layer.has_alpha:
+                prev_img = None
                 continue
 
             # Combined mask: legacy mask + mask layers
@@ -706,3 +682,106 @@ class Compositor:
         if w > 0 and h > 0:
             canvas[dy : dy + h, dx : dx + w] = combined[sy : sy + h, sx : sx + w]
         return canvas
+
+
+# =====================================================================
+# Pre-scan topology cache — avoids O(n) scans on every render
+# =====================================================================
+
+class _TopologyCache:
+    """Cached layer-topology structures built from a flat layer list.
+
+    These only change when the layer stack structure changes (add, remove,
+    reorder, reparent), not on every render.
+    """
+
+    __slots__ = (
+        'mask_layer_ids', 'adj_children', 'adj_child_ids',
+        'standalone_mask_ids', 'group_ids', 'regular_children',
+        'visible', 'needs_placed',
+    )
+
+    def __init__(self) -> None:
+        self.mask_layer_ids: set[str] = set()
+        self.adj_children: dict[str, list] = {}
+        self.adj_child_ids: set[str] = set()
+        self.standalone_mask_ids: set[str] = set()
+        self.group_ids: set[str] = set()
+        self.regular_children: dict[str, list] = {}
+        self.visible: list = []
+        self.needs_placed: set[str] = set()
+
+    @classmethod
+    def build(cls, layers: list) -> '_TopologyCache':
+        topo = cls()
+
+        for l in layers:
+            for mid in l.mask_layers:
+                topo.mask_layer_ids.add(mid)
+
+        for l in layers:
+            if (l.parent_id
+                    and l.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER)
+                    and l.visible):
+                topo.adj_children.setdefault(l.parent_id, []).append(l)
+                topo.adj_child_ids.add(l.id)
+
+        for l in layers:
+            if (l.layer_type == LayerType.MASK
+                    and l.parent_id is None
+                    and l.id not in topo.mask_layer_ids):
+                topo.standalone_mask_ids.add(l.id)
+
+        topo.group_ids = {l.id for l in layers if l.layer_type == LayerType.GROUP}
+
+        for l in layers:
+            if (l.parent_id and l.visible
+                    and l.parent_id not in topo.group_ids
+                    and l.layer_type not in (
+                        LayerType.ADJUSTMENT, LayerType.FILTER, LayerType.MASK)
+                    and l.id not in topo.mask_layer_ids
+                    and l.id not in topo.adj_child_ids):
+                topo.regular_children.setdefault(l.parent_id, []).append(l)
+
+        topo.visible = [
+            l for l in layers
+            if l.visible and l.parent_id is None
+            and l.id not in topo.mask_layer_ids
+            and (l.layer_type != LayerType.MASK or l.id in topo.standalone_mask_ids)
+            and l.id not in topo.adj_child_ids
+        ]
+
+        clippable = [
+            l for l in topo.visible
+            if l.layer_type not in (LayerType.ADJUSTMENT, LayerType.FILTER)
+        ]
+        for i in range(len(clippable) - 1):
+            if clippable[i + 1].clipping_mask:
+                topo.needs_placed.add(clippable[i].id)
+
+        return topo
+
+
+# =====================================================================
+# Snapshot adapter — lets Compositor.composite() work with RenderSnapshot
+# =====================================================================
+
+class _SnapshotStackAdapter:
+    """Makes a RenderSnapshot's layer list behave like a LayerStack.
+
+    The compositor accesses ``stack`` via iteration and ``.get(id)``.
+    This adapter provides both without copying any data.
+    """
+
+    def __init__(self, snapshot: object) -> None:
+        self._layers = snapshot.layers
+        self._map = snapshot.layer_map
+
+    def __iter__(self):
+        return iter(self._layers)
+
+    def __len__(self):
+        return len(self._layers)
+
+    def get(self, layer_id: str):
+        return self._map.get(layer_id)
