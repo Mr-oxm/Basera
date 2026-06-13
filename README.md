@@ -256,9 +256,9 @@ Scale · Rotate · Skew · Flip · Perspective · Free Transform · Grid Warp
 
 ```bash
 # Clone the repository
-git clone https://github.com/Mr-oxm/PhotoEditor
+git clone https://github.com/Mr-oxm/Basera
 
-cd PhotoEditor
+cd Basera
 
 # Create environment and install dependencies
 uv sync
