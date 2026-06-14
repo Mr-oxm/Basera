@@ -733,6 +733,23 @@ class TestGroups:
         # Both children counted (implementation doesn't filter by visible)
         assert gb[0] + gb[2] == 150
 
+    def test_bb067_group_preview_layers(self):
+        """BB-067: preview_layers returns the group layer itself and all descendants."""
+        doc, grp, c1, c2 = self._setup_group()
+        mask = doc.layers.add_mask_layer(c1.id, 512, 512)
+        
+        tool = MoveTool()
+        tool._active_layer = grp
+        tool._group_children = [c1, c2]
+        
+        layers = tool.preview_layers(doc)
+        layer_ids = {l.id for l in layers}
+        assert grp.id in layer_ids
+        assert c1.id in layer_ids
+        assert c2.id in layer_ids
+        assert mask.id in layer_ids
+
+
 
 # ======================================================================
 # Section 7: Group with Clips — BB-070 .. BB-071

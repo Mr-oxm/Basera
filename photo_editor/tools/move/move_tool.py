@@ -154,16 +154,46 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         return self._group_preview_angle
 
     def preview_layers(self, doc: Document) -> list[Layer]:
+        base_layers = []
         if getattr(self, "_multi_layers", []):
-            return list(self._multi_layers)
-        if self._group_children:
-            return list(self._group_children)
-        if self._active_layer is not None:
-            chain = self._clipping_chain_for_base(doc, self._active_layer)
-            if chain:
-                return list(chain)
-            return [self._active_layer]
-        return []
+            base_layers = list(self._multi_layers)
+        elif self._active_layer is not None:
+            if self._active_layer.layer_type == LayerType.GROUP:
+                base_layers = [self._active_layer]
+            elif self._group_children:  # Pseudo-group
+                base_layers = [self._active_layer]
+            else:
+                chain = self._clipping_chain_for_base(doc, self._active_layer)
+                if chain:
+                    base_layers = list(chain)
+                else:
+                    base_layers = [self._active_layer]
+        else:
+            return []
+
+        # Recursively collect all descendants and masks
+        collected = []
+        seen = set()
+
+        def visit(layer):
+            if layer.id in seen:
+                return
+            seen.add(layer.id)
+            collected.append(layer)
+            # Find children
+            for child in doc.layers:
+                if child.parent_id == layer.id:
+                    visit(child)
+            # Find masks
+            for mid in layer.mask_layers:
+                mc = doc.layers.get(mid)
+                if mc is not None:
+                    visit(mc)
+
+        for l in base_layers:
+            visit(l)
+        return collected
+
 
     def can_preview_transform(self, doc: Document) -> bool:
         layer = self._active_layer or doc.layers.active_layer
