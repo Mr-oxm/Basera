@@ -139,6 +139,8 @@ class CanvasController(ControllerBase):
                 tool.shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
 
         mw._tools.on_press(mw._doc, x, y, pressure)
+        if tool_type == ToolType.MOVE:
+            mw._handle_transform_preview()
         if tool_type in (ToolType.RECT_SELECT, ToolType.ELLIPSE_SELECT):
             self._drag_start = (x, y)
         elif tool_type == ToolType.TEXT:
@@ -179,6 +181,7 @@ class CanvasController(ControllerBase):
         mw._tools.on_move(mw._doc, x, y, pressure)
 
         if tool_type == ToolType.MOVE:
+            mw._handle_transform_preview()
             # Repaint canvas for marquee overlay and transform box updates
             self.signals.canvas_update_requested.emit()
             self.signals.transform_box_requested.emit()

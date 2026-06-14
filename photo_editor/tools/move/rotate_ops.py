@@ -52,7 +52,7 @@ class RotateMixin:
     # Single-layer rotate
     # ------------------------------------------------------------------
 
-    def _apply_rotate(self, layer, x: int, y: int) -> None:
+    def _apply_rotate(self, layer, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive rotate: update angle and recompute display from source.
 
         The layer centre is kept stationary; the position is adjusted
@@ -75,23 +75,29 @@ class RotateMixin:
 
         # Total angle = angle at drag start + delta this drag
         total_angle = self._base_angle + delta_deg
-        layer.transform_angle = total_angle
-        layer.compute_display(fast=True)
 
-        # Reposition so the visual centre stays fixed
-        layer.position = (int(cx - layer.width / 2),
-                          int(cy - layer.height / 2))
+        if preview_only:
+            self._preview_angle = total_angle
+            self._preview_center = (cx, cy)
+            self._current_angle = 0.0
+        else:
+            layer.transform_angle = total_angle
+            layer.compute_display(fast=True)
 
-        # The angle is already committed to the layer, so the mid-drag
-        # accumulator stays at 0.  rotation_info_for / hit_test both
-        # read layer.transform_angle directly.
-        self._current_angle = 0.0
+            # Reposition so the visual centre stays fixed
+            layer.position = (int(cx - layer.width / 2),
+                              int(cy - layer.height / 2))
+
+            # The angle is already committed to the layer, so the mid-drag
+            # accumulator stays at 0.  rotation_info_for / hit_test both
+            # read layer.transform_angle directly.
+            self._current_angle = 0.0
 
     # ------------------------------------------------------------------
     # Group rotate
     # ------------------------------------------------------------------
 
-    def _apply_group_rotate(self, x: int, y: int) -> None:
+    def _apply_group_rotate(self, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive group rotate: rotate every child around the group centre."""
         bbox = self._group_orig_bbox
         if bbox is None:
@@ -109,41 +115,45 @@ class RotateMixin:
         # Otherwise rotation_info_for() double-counts the delta (BB at 2×).
         self._current_angle = 0.0
 
-        rad = math.radians(angle_deg)
-        cos_a = math.cos(rad)
-        sin_a = math.sin(rad)
+        if preview_only:
+            self._group_preview_angle = angle_deg
+            self._group_preview_center = (gcx, gcy)
+        else:
+            rad = math.radians(angle_deg)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
 
-        for child in self._group_children:
-            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
-                continue
-            if child._source_pixels is None:
-                continue
+            for child in self._group_children:
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                if child._source_pixels is None:
+                    continue
 
-            base_angle = self._group_child_base_angle[child.id]
-            child.transform_angle = base_angle + angle_deg
-            child.compute_display(fast=True)
+                base_angle = self._group_child_base_angle[child.id]
+                child.transform_angle = base_angle + angle_deg
+                child.compute_display(fast=True)
 
-            # Rotate child centre around the group centre
-            orig_cx, orig_cy = self._group_child_positions[child.id]
-            orig_cw, orig_ch = self._group_child_dims[child.id]
+                # Rotate child centre around the group centre
+                orig_cx, orig_cy = self._group_child_positions[child.id]
+                orig_cw, orig_ch = self._group_child_dims[child.id]
 
-            child_mid_x = orig_cx + orig_cw / 2.0
-            child_mid_y = orig_cy + orig_ch / 2.0
-            dx_c = child_mid_x - gcx
-            dy_c = child_mid_y - gcy
-            new_dx = dx_c * cos_a + dy_c * sin_a
-            new_dy = -dx_c * sin_a + dy_c * cos_a
+                child_mid_x = orig_cx + orig_cw / 2.0
+                child_mid_y = orig_cy + orig_ch / 2.0
+                dx_c = child_mid_x - gcx
+                dy_c = child_mid_y - gcy
+                new_dx = dx_c * cos_a + dy_c * sin_a
+                new_dy = -dx_c * sin_a + dy_c * cos_a
 
-            child.position = (
-                int(gcx + new_dx - child.width / 2),
-                int(gcy + new_dy - child.height / 2),
-            )
+                child.position = (
+                    int(gcx + new_dx - child.width / 2),
+                    int(gcy + new_dy - child.height / 2),
+                )
 
     # ------------------------------------------------------------------
     # Multi-selection rotate (virtual group)
     # ------------------------------------------------------------------
 
-    def _apply_multi_rotate(self, x: int, y: int) -> None:
+    def _apply_multi_rotate(self, x: int, y: int, *, preview_only: bool = False) -> None:
         """Non-destructive multi-layer rotate: rotate every selected layer
         around their combined bounding-box centre — same as group rotate."""
         bbox = getattr(self, "_multi_orig_bbox", None)
@@ -157,51 +167,57 @@ class RotateMixin:
         a0 = math.atan2(self._start_y - gcy, self._start_x - gcx)
         a1 = math.atan2(y - gcy, x - gcx)
         angle_deg = -math.degrees(a1 - a0)
-        self._current_angle = angle_deg
+        self._current_angle = 0.0
 
-        rad = math.radians(angle_deg)
-        cos_a = math.cos(rad)
-        sin_a = math.sin(rad)
+        if preview_only:
+            self._group_preview_angle = angle_deg
+            self._group_preview_center = (gcx, gcy)
+        else:
+            rad = math.radians(angle_deg)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
 
-        for child in getattr(self, "_multi_layers", []):
-            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
-                continue
-            if child._source_pixels is None:
-                continue
+            for child in getattr(self, "_multi_layers", []):
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                if child._source_pixels is None:
+                    continue
 
-            multi_base_angle = getattr(self, "_multi_base_angle", {})
-            multi_dims = getattr(self, "_multi_dims", {})
-            multi_positions = getattr(self, "_multi_positions", {})
+                multi_base_angle = getattr(self, "_multi_base_angle", {})
+                multi_dims = getattr(self, "_multi_dims", {})
+                multi_positions = getattr(self, "_multi_positions", {})
 
-            base_angle = multi_base_angle.get(child.id, 0.0)
-            child.transform_angle = base_angle + angle_deg
-            child.compute_display(fast=True)
+                base_angle = multi_base_angle.get(child.id, 0.0)
+                child.transform_angle = base_angle + angle_deg
+                child.compute_display(fast=True)
 
-            orig_cx, orig_cy = multi_positions[child.id]
-            orig_cw, orig_ch = multi_dims[child.id]
+                orig_cx, orig_cy = multi_positions[child.id]
+                orig_cw, orig_ch = multi_dims[child.id]
 
-            child_mid_x = orig_cx + orig_cw / 2.0
-            child_mid_y = orig_cy + orig_ch / 2.0
-            dx_c = child_mid_x - gcx
-            dy_c = child_mid_y - gcy
-            new_dx = dx_c * cos_a + dy_c * sin_a
-            new_dy = -dx_c * sin_a + dy_c * cos_a
+                child_mid_x = orig_cx + orig_cw / 2.0
+                child_mid_y = orig_cy + orig_ch / 2.0
+                dx_c = child_mid_x - gcx
+                dy_c = child_mid_y - gcy
+                new_dx = dx_c * cos_a + dy_c * sin_a
+                new_dy = -dx_c * sin_a + dy_c * cos_a
 
-            child.position = (
-                int(gcx + new_dx - child.width / 2),
-                int(gcy + new_dy - child.height / 2),
-            )
+                child.position = (
+                    int(gcx + new_dx - child.width / 2),
+                    int(gcy + new_dy - child.height / 2),
+                )
 
     # ------------------------------------------------------------------
     # Mask-children sync
     # ------------------------------------------------------------------
 
-    def _sync_mask_transforms(self, parent) -> None:
+    def _sync_mask_transforms(self, parent, *, preview_only: bool = False) -> None:
         """Mirror the parent layer's scale / angle onto all its mask children.
 
         Each mask child tracks the parent transform so it always aligns
         with the parent's rendered output.
         """
+        if preview_only:
+            return
         for mc in getattr(self, "_mask_children", []):
             if mc._source_pixels is None:
                 continue

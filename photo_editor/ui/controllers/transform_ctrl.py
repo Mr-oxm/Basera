@@ -66,6 +66,39 @@ class TransformController(ControllerBase):
             mw._canvas.set_transform_box(None)
             return
 
+        tool = mw._tools.active_tool
+        if tool is not None and getattr(tool, "using_live_transform_preview", False):
+            if getattr(tool, "is_group_or_multi_preview", False):
+                orig_bbox = getattr(tool, "_group_orig_bbox", None) or getattr(tool, "_multi_orig_bbox", None)
+                if orig_bbox is not None:
+                    bw, bh = orig_bbox[2], orig_bbox[3]
+                    sx, sy = tool.group_preview_scale
+                    cx, cy = tool.group_preview_center
+                    angle = tool.group_preview_angle
+                    
+                    pw = bw * sx
+                    ph = bh * sy
+                    px = cx - pw / 2.0
+                    py = cy - ph / 2.0
+                    mw._canvas.set_transform_box((int(px), int(py), int(pw), int(ph)), angle)
+                    return
+            else:
+                layer = getattr(tool, "_active_layer", None)
+                if layer is not None:
+                    cx, cy = tool._preview_center
+                    sx, sy = tool._preview_scale_x, tool._preview_scale_y
+                    angle = tool._preview_angle
+                    
+                    bw = layer.source_width
+                    bh = layer.source_height
+                    
+                    pw = bw * sx
+                    ph = bh * sy
+                    px = cx - pw / 2.0
+                    py = cy - ph / 2.0
+                    mw._canvas.set_transform_box((int(px), int(py), int(pw), int(ph)), angle)
+                    return
+
         # Multi-selection: display a union bounding box (with rotation)
         sel = self.doc.layers.selected_indices
         if len(sel) > 1:

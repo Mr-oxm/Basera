@@ -24,7 +24,7 @@ try:
 except ImportError:
     _BASE_CLASS = QWidget
 
-from ..core.enums import ToolType
+from ..core.enums import BlendMode, ToolType
 from .canvas.canvas_cursors import (
     CURSORS,
     HANDLE_CURSORS,
@@ -93,6 +93,19 @@ class CanvasView(_BASE_CLASS):
         self._dab_is_eraser: bool = False
         # Cache identity of last rgba buffer to skip redundant QPixmap builds
         self._last_rgba: np.ndarray | None = None
+
+        # Interactive Live Transform Preview state variables
+        self._preview_active: bool = False
+        self._preview_background_pixmap: QPixmap | None = None
+        self._preview_active_pixmap: QPixmap | None = None
+        self._preview_blend_position: tuple[int, int] = (0, 0)
+        self._preview_orig_pivot: tuple[float, float] = (0.0, 0.0)
+        self._preview_opacity: float = 1.0
+        self._preview_blend_mode: BlendMode = None
+        self._preview_center: tuple[float, float] = (0.0, 0.0)
+        self._preview_scale_x: float = 1.0
+        self._preview_scale_y: float = 1.0
+        self._preview_angle: float = 0.0
 
         # Text editing overlay state
         self._text_cursor_pos: tuple[int, int] | None = None   # (x, y) in doc coords
@@ -166,7 +179,51 @@ class CanvasView(_BASE_CLASS):
         # copies the data internally so we don't need a second copy.
         qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
         self._pixmap = QPixmap.fromImage(qimg)
+        self.clear_transform_preview()
         self.update()
+
+    def setup_transform_preview(
+        self,
+        background_pixmap: QPixmap,
+        active_pixmap: QPixmap,
+        blend_position: tuple[int, int],
+        orig_pivot: tuple[float, float],
+        opacity: float,
+        blend_mode: BlendMode,
+    ) -> None:
+        self._preview_background_pixmap = background_pixmap
+        self._preview_active_pixmap = active_pixmap
+        self._preview_blend_position = blend_position
+        self._preview_orig_pivot = orig_pivot
+        self._preview_opacity = opacity
+        self._preview_blend_mode = blend_mode
+        self._preview_active = True
+        
+        self._preview_center = orig_pivot
+        self._preview_scale_x = 1.0
+        self._preview_scale_y = 1.0
+        self._preview_angle = 0.0
+        self.update()
+
+    def update_transform_preview_params(
+        self,
+        center: tuple[float, float],
+        scale_x: float,
+        scale_y: float,
+        angle: float,
+    ) -> None:
+        self._preview_center = center
+        self._preview_scale_x = scale_x
+        self._preview_scale_y = scale_y
+        self._preview_angle = angle
+        self.update()
+
+    def clear_transform_preview(self) -> None:
+        if self._preview_active:
+            self._preview_active = False
+            self._preview_background_pixmap = None
+            self._preview_active_pixmap = None
+            self.update()
 
     def set_selection_mask(self, mask: np.ndarray | None) -> None:
         """Set the selection mask for marching-ants overlay rendering."""
@@ -509,8 +566,50 @@ class CanvasView(_BASE_CLASS):
         p.drawTiledPixmap(dr.toAlignedRect(), checker_tile())
         p.restore()
 
-        # Document image
-        p.drawPixmap(dr.toAlignedRect(), self._pixmap)
+        if self._preview_active:
+            # Background image (composited excluding active layers)
+            if self._preview_background_pixmap is not None:
+                p.drawPixmap(dr.toAlignedRect(), self._preview_background_pixmap)
+
+            # Active layer preview (drawn with translation, rotation, scale)
+            if self._preview_active_pixmap is not None:
+                p.save()
+                w_pivot = self._doc_to_widget(dr, self._preview_center[0], self._preview_center[1])
+                p.translate(w_pivot.x(), w_pivot.y())
+                p.rotate(-self._preview_angle)
+                
+                sx = dr.width() / self._doc_w if self._doc_w else 1.0
+                sy = dr.height() / self._doc_h if self._doc_h else 1.0
+                p.scale(self._preview_scale_x * sx, self._preview_scale_y * sy)
+                
+                orig_px, orig_py = self._preview_orig_pivot
+                bx, by = self._preview_blend_position
+                rel_x = bx - orig_px
+                rel_y = by - orig_py
+                p.translate(rel_x, rel_y)
+                
+                p.setOpacity(self._preview_opacity)
+                SUPPORTED_BLENDS = {
+                    BlendMode.NORMAL: QPainter.CompositionMode.CompositionMode_SourceOver,
+                    BlendMode.MULTIPLY: QPainter.CompositionMode.CompositionMode_Multiply,
+                    BlendMode.SCREEN: QPainter.CompositionMode.CompositionMode_Screen,
+                    BlendMode.OVERLAY: QPainter.CompositionMode.CompositionMode_Overlay,
+                    BlendMode.DARKEN: QPainter.CompositionMode.CompositionMode_Darken,
+                    BlendMode.LIGHTEN: QPainter.CompositionMode.CompositionMode_Lighten,
+                    BlendMode.COLOR_DODGE: QPainter.CompositionMode.CompositionMode_ColorDodge,
+                    BlendMode.COLOR_BURN: QPainter.CompositionMode.CompositionMode_ColorBurn,
+                    BlendMode.HARD_LIGHT: QPainter.CompositionMode.CompositionMode_HardLight,
+                    BlendMode.SOFT_LIGHT: QPainter.CompositionMode.CompositionMode_SoftLight,
+                    BlendMode.DIFFERENCE: QPainter.CompositionMode.CompositionMode_Difference,
+                    BlendMode.EXCLUSION: QPainter.CompositionMode.CompositionMode_Exclusion,
+                }
+                if self._preview_blend_mode in SUPPORTED_BLENDS:
+                    p.setCompositionMode(SUPPORTED_BLENDS[self._preview_blend_mode])
+                p.drawPixmap(0, 0, self._preview_active_pixmap)
+                p.restore()
+        else:
+            # Document image
+            p.drawPixmap(dr.toAlignedRect(), self._pixmap)
 
         # Selection overlay — marching ants
         if self._sel_contours:

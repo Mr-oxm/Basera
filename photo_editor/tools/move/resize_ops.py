@@ -82,7 +82,7 @@ class ResizeMixin:
     # Single-layer resize
     # ------------------------------------------------------------------
 
-    def _apply_resize(self, layer, dx: int, dy: int) -> None:
+    def _apply_resize(self, layer, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive resize: update scale params and recompute from source."""
         if layer._source_pixels is None:
             return
@@ -121,40 +121,65 @@ class ResizeMixin:
         new_sx = new_w / max(layer.source_width, 1)
         new_sy = new_h / max(layer.source_height, 1)
 
-        layer.transform_scale_x = new_sx
-        layer.transform_scale_y = new_sy
-        layer.compute_display(fast=True)
-
-        if is_rot:
-            # Rotated resize: reposition so the anchor corner stays fixed
-            asx, asy = self._anchor_sign
-            cos_a = math.cos(math.radians(angle))
-            sin_a = math.sin(math.radians(angle))
-            new_anchor_lx = asx * (new_w / 2.0)
-            new_anchor_ly = asy * (new_h / 2.0)
-            new_anchor_sx = new_anchor_lx * cos_a + new_anchor_ly * sin_a
-            new_anchor_sy = -new_anchor_lx * sin_a + new_anchor_ly * cos_a
-
-            new_cx = self._anchor_screen[0] - new_anchor_sx
-            new_cy = self._anchor_screen[1] - new_anchor_sy
-
-            layer.position = (int(new_cx - layer.width / 2),
-                              int(new_cy - layer.height / 2))
+        if preview_only:
+            self._preview_scale_x = new_sx
+            self._preview_scale_y = new_sy
+            self._preview_w = int(round(new_w))
+            self._preview_h = int(round(new_h))
+            if is_rot:
+                asx, asy = self._anchor_sign
+                cos_a = math.cos(math.radians(angle))
+                sin_a = math.sin(math.radians(angle))
+                new_anchor_lx = asx * (new_w / 2.0)
+                new_anchor_ly = asy * (new_h / 2.0)
+                new_anchor_sx = new_anchor_lx * cos_a + new_anchor_ly * sin_a
+                new_anchor_sy = -new_anchor_lx * sin_a + new_anchor_ly * cos_a
+                new_cx = self._anchor_screen[0] - new_anchor_sx
+                new_cy = self._anchor_screen[1] - new_anchor_sy
+                self._preview_center = (new_cx, new_cy)
+                self._preview_position = (int(new_cx - new_w / 2), int(new_cy - new_h / 2))
+            else:
+                ox, oy = self._orig_position
+                new_x, new_y = float(ox), float(oy)
+                if h in (_Handle.TL, _Handle.L, _Handle.BL):
+                    new_x = ox + (ow - new_w)
+                if h in (_Handle.TL, _Handle.T, _Handle.TR):
+                    new_y = oy + (oh - new_h)
+                self._preview_center = (new_x + new_w / 2.0, new_y + new_h / 2.0)
+                self._preview_position = (int(new_x), int(new_y))
         else:
-            # Non-rotated: classic top-left repositioning
-            ox, oy = self._orig_position
-            new_x, new_y = float(ox), float(oy)
-            if h in (_Handle.TL, _Handle.L, _Handle.BL):
-                new_x = ox + (ow - new_w)
-            if h in (_Handle.TL, _Handle.T, _Handle.TR):
-                new_y = oy + (oh - new_h)
-            layer.position = (int(new_x), int(new_y))
+            layer.transform_scale_x = new_sx
+            layer.transform_scale_y = new_sy
+            layer.compute_display(fast=True)
+
+            if is_rot:
+                asx, asy = self._anchor_sign
+                cos_a = math.cos(math.radians(angle))
+                sin_a = math.sin(math.radians(angle))
+                new_anchor_lx = asx * (new_w / 2.0)
+                new_anchor_ly = asy * (new_h / 2.0)
+                new_anchor_sx = new_anchor_lx * cos_a + new_anchor_ly * sin_a
+                new_anchor_sy = -new_anchor_lx * sin_a + new_anchor_ly * cos_a
+
+                new_cx = self._anchor_screen[0] - new_anchor_sx
+                new_cy = self._anchor_screen[1] - new_anchor_sy
+
+                layer.position = (int(new_cx - layer.width / 2),
+                                  int(new_cy - layer.height / 2))
+            else:
+                ox, oy = self._orig_position
+                new_x, new_y = float(ox), float(oy)
+                if h in (_Handle.TL, _Handle.L, _Handle.BL):
+                    new_x = ox + (ow - new_w)
+                if h in (_Handle.TL, _Handle.T, _Handle.TR):
+                    new_y = oy + (oh - new_h)
+                layer.position = (int(new_x), int(new_y))
 
     # ------------------------------------------------------------------
     # Group resize
     # ------------------------------------------------------------------
 
-    def _apply_group_resize(self, dx: int, dy: int) -> None:
+    def _apply_group_resize(self, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive group resize: scale each child relative to the group bbox."""
         bbox = self._group_orig_bbox
         if bbox is None:
@@ -187,29 +212,34 @@ class ResizeMixin:
         if h in (_Handle.TL, _Handle.T, _Handle.TR):
             new_by = by + (oh - new_h)
 
-        for child in self._group_children:
-            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
-                continue
-            if child._source_pixels is None:
-                continue
+        if preview_only:
+            self._group_preview_sx = sx
+            self._group_preview_sy = sy
+            self._group_preview_center = (new_bx + new_w / 2.0, new_by + new_h / 2.0)
+        else:
+            for child in self._group_children:
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                if child._source_pixels is None:
+                    continue
 
-            base_sx = self._group_child_base_sx[child.id]
-            base_sy = self._group_child_base_sy[child.id]
+                base_sx = self._group_child_base_sx[child.id]
+                base_sy = self._group_child_base_sy[child.id]
 
-            child.transform_scale_x = base_sx * sx
-            child.transform_scale_y = base_sy * sy
-            child.compute_display(fast=True)
+                child.transform_scale_x = base_sx * sx
+                child.transform_scale_y = base_sy * sy
+                child.compute_display(fast=True)
 
-            orig_cx, orig_cy = self._group_child_positions[child.id]
-            rel_x = orig_cx - bx
-            rel_y = orig_cy - by
-            child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
+                orig_cx, orig_cy = self._group_child_positions[child.id]
+                rel_x = orig_cx - bx
+                rel_y = orig_cy - by
+                child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
 
     # ------------------------------------------------------------------
     # Multi-selection resize (virtual group)
     # ------------------------------------------------------------------
 
-    def _apply_multi_resize(self, dx: int, dy: int) -> None:
+    def _apply_multi_resize(self, dx: int, dy: int, *, preview_only: bool = False) -> None:
         """Non-destructive multi-layer resize: scale each selected layer
         relative to their combined bounding box — same as group resize."""
         bbox = getattr(self, "_multi_orig_bbox", None)
@@ -242,20 +272,25 @@ class ResizeMixin:
         if h in (_Handle.TL, _Handle.T, _Handle.TR):
             new_by = by + (oh - new_h)
 
-        for child in getattr(self, "_multi_layers", []):
-            if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
-                continue
-            if child._source_pixels is None:
-                continue
+        if preview_only:
+            self._group_preview_sx = sx
+            self._group_preview_sy = sy
+            self._group_preview_center = (new_bx + new_w / 2.0, new_by + new_h / 2.0)
+        else:
+            for child in getattr(self, "_multi_layers", []):
+                if child.layer_type in (LayerType.ADJUSTMENT, LayerType.FILTER):
+                    continue
+                if child._source_pixels is None:
+                    continue
 
-            base_sx = getattr(self, "_multi_base_sx", {}).get(child.id, 1.0)
-            base_sy = getattr(self, "_multi_base_sy", {}).get(child.id, 1.0)
+                base_sx = getattr(self, "_multi_base_sx", {}).get(child.id, 1.0)
+                base_sy = getattr(self, "_multi_base_sy", {}).get(child.id, 1.0)
 
-            child.transform_scale_x = base_sx * sx
-            child.transform_scale_y = base_sy * sy
-            child.compute_display(fast=True)
+                child.transform_scale_x = base_sx * sx
+                child.transform_scale_y = base_sy * sy
+                child.compute_display(fast=True)
 
-            orig_cx, orig_cy = self._multi_positions[child.id]
-            rel_x = orig_cx - bx
-            rel_y = orig_cy - by
-            child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))
+                orig_cx, orig_cy = self._multi_positions[child.id]
+                rel_x = orig_cx - bx
+                rel_y = orig_cy - by
+                child.position = (int(new_bx + rel_x * sx), int(new_by + rel_y * sy))

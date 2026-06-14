@@ -94,7 +94,13 @@ class Compositor:
         """
         return MaskManager.get_combined_mask(layer, stack)
 
-    def composite(self, stack: LayerStack, width: int, height: int) -> np.ndarray:
+    def composite(
+        self,
+        stack: LayerStack,
+        width: int,
+        height: int,
+        excluded_layer_ids: set[str] | None = None,
+    ) -> np.ndarray:
         canvas = np.zeros((height, width, 4), dtype=np.float32)
         layers = list(stack)
 
@@ -148,6 +154,8 @@ class Compositor:
             and (l.layer_type != LayerType.MASK or l.id in standalone_mask_ids)
             and l.id not in adj_child_ids
         ]
+        if excluded_layer_ids:
+            visible = [l for l in visible if l.id not in excluded_layer_ids]
         needs_placed: set[str] = set()
         # Only raster/group/mask layers participate in clipping-mask chains;
         # skip root-level adjustment/filter layers in this scan.

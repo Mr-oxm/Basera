@@ -195,6 +195,29 @@ class Layer:
         self.height, self.width = result.shape[:2]
         self._pixels_dirty = False
 
+    def update_transform_preview_geometry(self) -> None:
+        """Update layer dimensions according to the current transform parameters,
+        without computing display pixels or resizing source arrays.
+        """
+        if self._source_pixels is None:
+            return
+        import math
+        src_h, src_w = self._source_pixels.shape[:2]
+        base_w = int(round(src_w * abs(self.transform_scale_x)))
+        base_h = int(round(src_h * abs(self.transform_scale_y)))
+        self.transform_base_w = max(1, base_w)
+        self.transform_base_h = max(1, base_h)
+        
+        if self.transform_angle != 0.0:
+            rad = math.radians(self.transform_angle)
+            cos_a = abs(math.cos(rad))
+            sin_a = abs(math.sin(rad))
+            self.width = max(1, int(round(self.transform_base_w * cos_a + self.transform_base_h * sin_a)))
+            self.height = max(1, int(round(self.transform_base_w * sin_a + self.transform_base_h * cos_a)))
+        else:
+            self.width = self.transform_base_w
+            self.height = self.transform_base_h
+
     def invalidate_transform(self) -> None:
         """Mark display pixels as needing lazy recompute from source."""
         if self._source_pixels is not None:

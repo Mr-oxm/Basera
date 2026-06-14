@@ -66,6 +66,9 @@ class MainWindow(QMainWindow):
             preview_max_size=0,  # Full res for now; set to 2048 when coord scaling is ready
         )
         self._tools = ToolManager()
+        move_tool = self._tools._tools.get(ToolType.MOVE)
+        if move_tool is not None:
+            move_tool.supports_live_transform_preview = self._supports_move_tool_transform_preview
 
         # Brush manager — load ABR files from assets
         self._brush_mgr = BrushManager.instance()
@@ -462,6 +465,8 @@ class MainWindow(QMainWindow):
         """
         if not self._doc:
             return
+        if self._handle_transform_preview():
+            return
         self._canvas.set_document_ref(self._doc)
         if invalidate:
             # Immediately refresh the layers panel structure (no thumbnails)
@@ -487,6 +492,8 @@ class MainWindow(QMainWindow):
         """Re-render and update canvas only (skip panel updates). Async."""
         if not self._doc:
             return
+        if self._handle_transform_preview():
+            return
         active = self._doc.layers.active_layer
         self._pipeline.invalidate(active.id if active else None)
         self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
@@ -495,6 +502,8 @@ class MainWindow(QMainWindow):
         """Re-render canvas + lightweight panel sync (no thumbnails). Async."""
         if not self._doc:
             return
+        if self._handle_transform_preview():
+            return
         active = self._doc.layers.active_layer
         self._pipeline.invalidate(active.id if active else None)
         self._render_scheduler.enqueue_render(self._doc, full_refresh=False)
@@ -502,6 +511,8 @@ class MainWindow(QMainWindow):
     def _schedule_render(self) -> None:
         """Request a deferred render (throttled ~30fps, off UI thread)."""
         if not self._doc:
+            return
+        if self._handle_transform_preview():
             return
         active = self._doc.layers.active_layer
         self._pipeline.invalidate(active.id if active else None)
@@ -738,6 +749,208 @@ class MainWindow(QMainWindow):
         self._doc = None
         if not self._dev_mode:
             self._show_welcome_screen()
+
+    def _supports_move_tool_transform_preview(self, doc: Document, layer) -> bool:
+        return True
+
+    def _setup_transform_preview_session(self, move_tool) -> None:
+        if not self._doc:
+            return
+            
+        target_layers = move_tool.preview_layers(self._doc)
+        if not target_layers:
+            return
+        excluded_ids = {l.id for l in target_layers}
+        
+        w, h = self._doc.width, self._doc.height
+        from ..engine.compositor import Compositor
+        from ..engine.cache.image_pool import ImagePool
+        from ..core.enums import LayerType
+        import numpy as np
+        from PySide6.QtGui import QImage, QPixmap
+        
+        pool = ImagePool(max_buffers_per_shape=4)
+        comp = Compositor(image_pool=pool)
+        
+        # Background Composition Optimization
+        bg_layers = [l for l in self._doc.layers if l.visible and l.id not in excluded_ids]
+        use_bg_opt = False
+        if len(bg_layers) == 1:
+            bg_layer = bg_layers[0]
+            if (bg_layer.layer_type == LayerType.RASTER
+                    and not bg_layer.styles
+                    and not bg_layer.mask_layers
+                    and bg_layer.mask is None
+                    and bg_layer.position == (0, 0)
+                    and bg_layer.width == w
+                    and bg_layer.height == h):
+                has_adj = any(child.parent_id == bg_layer.id and child.visible for child in self._doc.layers)
+                if not has_adj:
+                    use_bg_opt = True
+                    
+        if use_bg_opt:
+            bg_uint8 = np.clip(bg_layer.pixels * 255.0, 0, 255).astype(np.uint8)
+            bg_qimg = QImage(bg_uint8.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+            bg_pixmap = QPixmap.fromImage(bg_qimg.copy())
+        else:
+            bg_float = comp.composite(self._doc.layers, w, h, excluded_layer_ids=excluded_ids)
+            bg_uint8 = np.clip(bg_float * 255.0, 0, 255).astype(np.uint8)
+            bg_qimg = QImage(bg_uint8.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+            bg_pixmap = QPixmap.fromImage(bg_qimg.copy())
+        
+        # Foreground
+        all_ids = {l.id for l in self._doc.layers}
+        excluded_for_fg = all_ids - excluded_ids
+        
+        # Combined bounding box of target layers
+        bbox = None
+        if len(self._doc.layers.selected_indices) > 1:
+            from ..tools.move.hit_test import multi_bbox
+            bbox = multi_bbox(self._doc)
+        elif move_tool._group_children:
+            bbox = getattr(move_tool, "_group_orig_bbox", None)
+            if bbox is None:
+                from ..tools.move.hit_test import group_bbox
+                bbox = group_bbox(self._doc, move_tool._active_layer)
+        else:
+            layer = move_tool._active_layer
+            if layer is not None:
+                lx, ly = layer.position
+                bbox = (lx, ly, layer.width, layer.height)
+                
+        if bbox is None:
+            bbox = (0, 0, w, h)
+            
+        bx, by, bw, bh = bbox
+        bw = max(1, bw)
+        bh = max(1, bh)
+        
+        # Check if the foreground can be optimized as a single simple layer
+        use_fg_opt = False
+        if len(target_layers) == 1:
+            fg_layer = target_layers[0]
+            if (fg_layer.layer_type == LayerType.RASTER
+                    and getattr(fg_layer, "_source_pixels", None) is not None
+                    and not fg_layer.styles
+                    and not fg_layer.mask_layers
+                    and fg_layer.mask is None):
+                has_adj = any(child.parent_id == fg_layer.id and child.visible for child in self._doc.layers)
+                if not has_adj:
+                    use_fg_opt = True
+                    
+        if use_fg_opt:
+            fg_uint8 = np.clip(fg_layer._source_pixels * 255.0, 0, 255).astype(np.uint8)
+            cw, ch = fg_layer._source_pixels.shape[1], fg_layer._source_pixels.shape[0]
+            fg_qimg = QImage(fg_uint8.data, cw, ch, cw * 4, QImage.Format.Format_RGBA8888)
+            fg_pixmap = QPixmap.fromImage(fg_qimg.copy())
+            blend_position = (0, 0)
+            orig_pivot = (cw / 2.0, ch / 2.0)
+            
+            self._preview_start_scale_x = 1.0
+            self._preview_start_scale_y = 1.0
+            self._preview_start_angle = 0.0
+        else:
+            # Shift positions for local composition
+            orig_positions = {}
+            for l in target_layers:
+                orig_positions[l.id] = l.position
+                l.position = (l.position[0] - bx, l.position[1] - by)
+            
+            try:
+                fg_float = comp.composite(self._doc.layers, bw, bh, excluded_layer_ids=excluded_for_fg)
+            finally:
+                for l in target_layers:
+                    l.position = orig_positions[l.id]
+            
+            fg_uint8 = np.clip(fg_float * 255.0, 0, 255).astype(np.uint8)
+            fg_qimg = QImage(fg_uint8.data, bw, bh, bw * 4, QImage.Format.Format_RGBA8888)
+            fg_pixmap = QPixmap.fromImage(fg_qimg.copy())
+            blend_position = (bx, by)
+            
+            if getattr(move_tool, "is_group_or_multi_preview", False):
+                orig_pivot = getattr(move_tool, "_group_preview_center", None)
+                if orig_pivot is None:
+                    orig_pivot = (bx + bw / 2.0, by + bh / 2.0)
+            else:
+                layer = move_tool._active_layer
+                if layer is not None:
+                    orig_pivot = (layer.position[0] + layer.width / 2.0, layer.position[1] + layer.height / 2.0)
+                else:
+                    orig_pivot = (bx + bw / 2.0, by + bh / 2.0)
+            
+            self._preview_start_scale_x = getattr(move_tool, "_preview_scale_x", 1.0)
+            self._preview_start_scale_y = getattr(move_tool, "_preview_scale_y", 1.0)
+            self._preview_start_angle = getattr(move_tool, "_preview_angle", 0.0)
+            
+        if not getattr(move_tool, "is_group_or_multi_preview", False) and move_tool._active_layer is not None:
+            opacity = move_tool._active_layer.opacity
+            blend_mode = move_tool._active_layer.blend_mode
+        else:
+            opacity = 1.0
+            blend_mode = BlendMode.NORMAL
+            
+        self._canvas.setup_transform_preview(
+            background_pixmap=bg_pixmap,
+            active_pixmap=fg_pixmap,
+            blend_position=blend_position,
+            orig_pivot=orig_pivot,
+            opacity=opacity,
+            blend_mode=blend_mode,
+        )
+
+    def _handle_transform_preview(self) -> bool:
+        if not self._doc:
+            return False
+        
+        move_tool = self._tools.active_tool
+        is_move_tool = (
+            self._tools.active_type == ToolType.MOVE
+            and move_tool is not None
+        )
+        
+        if is_move_tool and getattr(move_tool, "using_live_transform_preview", False):
+            if not getattr(self._canvas, "_preview_active", False):
+                self._setup_transform_preview_session(move_tool)
+            
+            # Update params
+            if getattr(move_tool, "is_group_or_multi_preview", False):
+                center = getattr(move_tool, "group_preview_center", None)
+                sx, sy = getattr(move_tool, "group_preview_scale", (1.0, 1.0))
+                angle = getattr(move_tool, "group_preview_angle", 0.0)
+            else:
+                center = getattr(move_tool, "_preview_center", (0.0, 0.0))
+                abs_sx = getattr(move_tool, "_preview_scale_x", 1.0)
+                abs_sy = getattr(move_tool, "_preview_scale_y", 1.0)
+                abs_angle = getattr(move_tool, "_preview_angle", 0.0)
+                
+                start_sx = getattr(self, "_preview_start_scale_x", 1.0)
+                start_sy = getattr(self, "_preview_start_scale_y", 1.0)
+                start_angle = getattr(self, "_preview_start_angle", 0.0)
+                
+                sx = abs_sx / start_sx if start_sx != 0.0 else 1.0
+                sy = abs_sy / start_sy if start_sy != 0.0 else 1.0
+                angle = abs_angle - start_angle
+                
+            if center is not None:
+                self._canvas.update_transform_preview_params(
+                    center=center,
+                    scale_x=sx,
+                    scale_y=sy,
+                    angle=angle,
+                )
+            
+            self._transform_ctrl.update_transform_box()
+            self._canvas.update()
+            return True
+        else:
+            should_clear = True
+            if is_move_tool:
+                if not getattr(move_tool, "_dragging", False):
+                    should_clear = False
+            
+            if should_clear and getattr(self._canvas, "_preview_active", False):
+                self._canvas.clear_transform_preview()
+            return False
 
     # ---- Application close --------------------------------------------------
 

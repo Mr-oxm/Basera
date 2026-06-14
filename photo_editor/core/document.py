@@ -39,6 +39,7 @@ class Document:
         self.history = HistoryManager()
         self.selection = Selection(width, height)
         self._dirty = False
+        self._pending_dirty_region: tuple[int, int, int, int] | None = None
 
         bg = Layer(name="Background", width=width, height=height)
         bg.pixels[:] = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
@@ -420,6 +421,112 @@ class Document:
         self._snapshot("Apply Mask Layer")
         self._dirty = True
 
+    # ---- Visual Bounds and Dirty Region Invalidation ------------------------
+
+    @staticmethod
+    def _rect_from_bounds(
+        bounds: tuple[float, float, float, float] | None,
+    ) -> tuple[int, int, int, int] | None:
+        if bounds is None:
+            return None
+        x0, y0, x1, y1 = bounds
+        ix0 = int(np.floor(x0))
+        iy0 = int(np.floor(y0))
+        ix1 = int(np.ceil(x1))
+        iy1 = int(np.ceil(y1))
+        if ix1 <= ix0 or iy1 <= iy0:
+            return None
+        return (ix0, iy0, ix1 - ix0, iy1 - iy0)
+
+    def _layer_local_bounds(self, layer: Layer) -> tuple[int, int, int, int] | None:
+        try:
+            lx, ly = layer.position
+            lh, lw = layer.pixels.shape[:2]
+        except (AttributeError, IndexError, ValueError):
+            return None
+        if lw <= 0 or lh <= 0:
+            return None
+        return (int(lx), int(ly), int(lw), int(lh))
+
+    def _related_layer_ids(self, layer_id: str, out: set[str]) -> None:
+        if layer_id in out:
+            return
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return
+        out.add(layer_id)
+        for child_id in getattr(layer, "children", []):
+            self._related_layer_ids(child_id, out)
+        for mask_id in getattr(layer, "mask_layers", []):
+            self._related_layer_ids(mask_id, out)
+
+    def layer_visual_bounds(self, layer_id: str, include_related: bool = True) -> tuple[int, int, int, int] | None:
+        from .layer_stack import LayerStack
+
+        layer = self.layers.get(layer_id)
+        if layer is None:
+            return None
+
+        rect = self._rect_from_bounds(LayerStack._content_bounds(layer, self.layers))
+        if not include_related:
+            return rect or self._layer_local_bounds(layer)
+
+        related_ids: set[str] = set()
+        self._related_layer_ids(layer_id, related_ids)
+        merged = rect or self._layer_local_bounds(layer)
+        for related_id in related_ids:
+            related = self.layers.get(related_id)
+            if related is None or related_id == layer_id:
+                continue
+            merged = self._merge_rects(merged, self._layer_local_bounds(related))
+        return merged
+
+    def layers_visual_bounds(self, layer_ids: list[str] | set[str], include_related: bool = True) -> tuple[int, int, int, int] | None:
+        merged: tuple[int, int, int, int] | None = None
+        for layer_id in layer_ids:
+            merged = self._merge_rects(
+                merged,
+                self.layer_visual_bounds(layer_id, include_related=include_related),
+            )
+        return merged
+
+    def mark_region_pair_dirty(
+        self,
+        before: tuple[int, int, int, int] | None,
+        after: tuple[int, int, int, int] | None,
+    ) -> None:
+        merged = self._merge_rects(before, after)
+        if merged is not None:
+            self.mark_dirty_region(*merged)
+
+    @staticmethod
+    def _merge_rects(
+        first: tuple[int, int, int, int] | None,
+        second: tuple[int, int, int, int] | None,
+    ) -> tuple[int, int, int, int] | None:
+        if first is None:
+            return second
+        if second is None:
+            return first
+        x0 = min(first[0], second[0])
+        y0 = min(first[1], second[1])
+        x1 = max(first[0] + first[2], second[0] + second[2])
+        y1 = max(first[1] + first[3], second[1] + second[3])
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    def mark_dirty_region(self, x: int, y: int, width: int, height: int) -> None:
+        if width <= 0 or height <= 0:
+            return
+        self._pending_dirty_region = self._merge_rects(
+            self._pending_dirty_region,
+            (x, y, width, height),
+        )
+
+    def consume_dirty_region(self) -> tuple[int, int, int, int] | None:
+        region = self._pending_dirty_region
+        self._pending_dirty_region = None
+        return region
+
     # ---- History ------------------------------------------------------------
 
     def _save_live_state(self) -> None:
@@ -463,18 +570,23 @@ class Document:
     def save_snapshot(self, action: str) -> None:
         self._snapshot(action)
 
-    def _build_history_state(self, action: str) -> HistoryState:
+    def save_metadata_snapshot(self, action: str) -> None:
+        """Save a lightweight history state for metadata-only edits."""
+        self._snapshot(action, include_pixels=False)
+
+    def _build_history_state(self, action: str, include_pixels: bool = True) -> HistoryState:
         """Create a serializable snapshot of the current document state."""
         state = HistoryState(name=action)
         # Save pixel data and mask data for every layer
-        for layer in self.layers:
-            state.layer_data[layer.id] = layer.pixels.copy()
-            if layer._source_pixels is not None:
-                state.layer_data[f"_src_{layer.id}"] = layer._source_pixels.copy()
-            if layer._source_mask is not None:
-                state.layer_data[f"_srcmask_{layer.id}"] = layer._source_mask.copy()
-            if layer._mask is not None:
-                state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
+        if include_pixels:
+            for layer in self.layers:
+                state.layer_data[layer.id] = layer.pixels.copy()
+                if layer._source_pixels is not None:
+                    state.layer_data[f"_src_{layer.id}"] = layer._source_pixels.copy()
+                if layer._source_mask is not None:
+                    state.layer_data[f"_srcmask_{layer.id}"] = layer._source_mask.copy()
+                if layer._mask is not None:
+                    state.layer_data[f"_mask_{layer.id}"] = layer._mask.copy()
         # Save the full layer structure so add/remove can be undone
         layer_metas = []
         for layer in self.layers:
@@ -519,18 +631,19 @@ class Document:
         state.metadata["_active_index"] = self.layers.active_index
         state.metadata["_doc_width"] = self.width
         state.metadata["_doc_height"] = self.height
+        state.metadata["_pixel_snapshot"] = include_pixels
         # Save selection mask
-        if self.selection._mask is not None:
+        if include_pixels and self.selection._mask is not None:
             state.layer_data["__selection_mask__"] = self.selection._mask.copy()
         return state
 
-    def _snapshot(self, action: str) -> None:
-        state = self._build_history_state(action)
+    def _snapshot(self, action: str, include_pixels: bool = True) -> None:
+        state = self._build_history_state(action, include_pixels)
         self.history.push(state)
         # Every snapshot represents an edit — mark document dirty so the
         # unsaved-changes guard in closeEvent / tab-close picks it up.
         # (Structural ops like add_layer set _dirty explicitly too, but tool
-        # strokes only call save_snapshot() → _snapshot(), so we must set it
+        # strokes only call save_snapshot() -> _snapshot(), so we must set it
         # here to cover that path.)
         if action != "__Live__":
             self._dirty = True
@@ -538,6 +651,8 @@ class Document:
     def _restore(self, state: HistoryState) -> None:
         order: list[str] | None = state.metadata.get("_layer_order")
         meta_map: dict | None = state.metadata.get("_layer_meta")
+        include_pixels = state.metadata.get("_pixel_snapshot", True)
+        existing_layers = {layer.id: layer for layer in self.layers}
 
         if order is not None and meta_map is not None:
             # Rebuild the layer stack from the snapshot
@@ -572,16 +687,24 @@ class Document:
                 # Restore pixel data
                 if lid in state.layer_data:
                     layer.pixels = state.layer_data[lid].copy()
+                elif not include_pixels and lid in existing_layers:
+                    layer.pixels = existing_layers[lid].pixels.copy()
                 src_key = f"_src_{lid}"
                 if src_key in state.layer_data:
                     layer._source_pixels = state.layer_data[src_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._source_pixels is not None:
+                    layer._source_pixels = existing_layers[lid]._source_pixels.copy()
                 srcmask_key = f"_srcmask_{lid}"
                 if srcmask_key in state.layer_data:
                     layer._source_mask = state.layer_data[srcmask_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._source_mask is not None:
+                    layer._source_mask = existing_layers[lid]._source_mask.copy()
                 # Restore mask data
                 mask_key = f"_mask_{lid}"
                 if mask_key in state.layer_data:
                     layer._mask = state.layer_data[mask_key].copy()
+                elif not include_pixels and lid in existing_layers and existing_layers[lid]._mask is not None:
+                    layer._mask = existing_layers[lid]._mask.copy()
                 # Restore text layer data
                 td_dict = meta.get("_text_data")
                 if td_dict is not None:
