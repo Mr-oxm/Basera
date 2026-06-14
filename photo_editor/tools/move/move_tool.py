@@ -111,6 +111,9 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         self._pending_autoselect_idx: int | None = None
         self._move_snapshot_saved: bool = False
         self._use_live_transform_preview: bool = False
+        # Canvas zoom level — set by the UI before on_press so that
+        # hit-test margins scale with screen pixels, not document pixels.
+        self.canvas_zoom: float = 1.0
         self._preview_scale_x: float = 1.0
         self._preview_scale_y: float = 1.0
         self._preview_angle: float = 0.0
@@ -262,7 +265,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         return _ht.group_bbox(doc, group)
 
     def _hit_test(self, doc: Document, x: int, y: int) -> tuple[_Mode, _Handle]:
-        return _ht.hit_test(doc, x, y, current_angle=self._current_angle)
+        return _ht.hit_test(doc, x, y, current_angle=self._current_angle, zoom=self.canvas_zoom)
 
     @staticmethod
     def _hit_test_rect(

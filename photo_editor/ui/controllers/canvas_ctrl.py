@@ -132,11 +132,13 @@ class CanvasController(ControllerBase):
                         self._dragging = True
                         return
 
-        # Pass shift state to Move tool for multi-select
+        # Pass shift state and canvas zoom to Move tool
         if tool_type == ToolType.MOVE:
             tool = mw._tools.active_tool
             if tool is not None and hasattr(tool, "shift_held"):
                 tool.shift_held = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            if tool is not None and hasattr(tool, "canvas_zoom"):
+                tool.canvas_zoom = mw._canvas.zoom
 
         mw._tools.on_press(mw._doc, x, y, pressure)
         if tool_type == ToolType.MOVE:

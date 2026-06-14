@@ -132,6 +132,7 @@ def hit_test(
     x: int,
     y: int,
     current_angle: float = 0.0,
+    zoom: float = 1.0,
 ) -> tuple[_Mode, _Handle]:
     """Return ``(Mode, Handle)`` for a click at *(x, y)*.
 
@@ -157,7 +158,7 @@ def hit_test(
         bb = multi_bbox(doc)
         if bb is None:
             return _Mode.NONE, _Handle.NONE
-        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y, zoom=zoom)
 
     # Non-group parent with children (pseudo-group) — hit-test uses the
     # parent's own bounds.  When the parent is rotated, inverse-rotate
@@ -178,11 +179,12 @@ def hit_test(
                 layer.transform_base_w,
                 layer.transform_base_h,
                 rx, ry,
+                zoom=zoom,
             )
         bb = bbox(doc)
         if bb is None:
             return _Mode.NONE, _Handle.NONE
-        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y, zoom=zoom)
 
     total_angle = layer.transform_angle + current_angle
 
@@ -203,6 +205,7 @@ def hit_test(
             layer.transform_base_w,
             layer.transform_base_h,
             rx, ry,
+            zoom=zoom,
         )
 
     # Normal (no rotation) hit-test on current layer bounds
@@ -210,12 +213,13 @@ def hit_test(
     if bb is None:
         return _Mode.NONE, _Handle.NONE
     bx, by, bw, bh = bb
-    return hit_test_rect(bx, by, bw, bh, x, y)
+    return hit_test_rect(bx, by, bw, bh, x, y, zoom=zoom)
 
 
 def hit_test_rect(
     bx: float, by: float, bw: float, bh: float,
     x: float, y: float,
+    zoom: float = 1.0,
 ) -> tuple[_Mode, _Handle]:
     """Hit-test *(x, y)* against a rectangle and its transform handles.
 
@@ -228,8 +232,10 @@ def hit_test_rect(
     5. Near a corner within ROTATE_PROXIMITY → ``(ROTATE, NONE)``
     6. Everything else → ``(NONE, NONE)``   (no interaction)
     """
-    m = HANDLE_MARGIN
-    rh_offset = ROTATE_HANDLE_OFFSET
+    # Scale margins by 1/zoom so they stay a constant screen-pixel size
+    inv_zoom = 1.0 / max(zoom, 0.01)
+    m = HANDLE_MARGIN * inv_zoom
+    rh_offset = ROTATE_HANDLE_OFFSET * inv_zoom
     mx, my = bx + bw / 2, by + bh / 2
 
     # 1. Rotation handle node above top-centre
@@ -253,7 +259,7 @@ def hit_test_rect(
             return _Mode.RESIZE, hid
 
     # 3. Bounding box border lines (thin strip around the edges)
-    border = 6  # pixels either side of the border line
+    border = 6 * inv_zoom  # pixels either side of the border line
     inside_outer = (bx - border <= x <= bx + bw + border
                     and by - border <= y <= by + bh + border)
     inside_inner = (bx + border < x < bx + bw - border
@@ -267,7 +273,7 @@ def hit_test_rect(
 
     # 5. Rotation zones — only near corners and rotation handle, within
     #    ROTATE_PROXIMITY distance from the closest corner.
-    rp = ROTATE_PROXIMITY
+    rp = ROTATE_PROXIMITY * inv_zoom
     corners = [
         (bx,       by),        # TL
         (bx + bw,  by),        # TR
