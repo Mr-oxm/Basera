@@ -28,6 +28,11 @@ class CanvasOverlays:
     def __init__(self, canvas: CanvasView) -> None:
         self._canvas = canvas
 
+    @property
+    def canvas(self) -> CanvasView:
+        return self._canvas
+
+
     def draw_marching_ants(self, p: QPainter, dr: QRectF) -> None:
         """Draw animated marching-ants contour from the selection mask."""
         c = self._canvas
@@ -973,7 +978,7 @@ class CanvasOverlays:
         represents, so the overlay reads as "these two edges line up"
         rather than as a full-canvas grid.
         """
-        c = self.canvas
+        c = self._canvas
         if not c._snap_lines or not c._doc_w or not c._doc_h:
             return
         from ...core.snapping import SnapSource
