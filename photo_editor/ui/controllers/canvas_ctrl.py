@@ -37,6 +37,7 @@ class CanvasController(ControllerBase):
         mw._canvas.tool_moved.connect(self.on_move)
         mw._canvas.tool_released.connect(self.on_release)
         mw._canvas.tool_double_clicked.connect(self.on_double_click)
+        mw._canvas.view_changed.connect(self._sync_view_zoom)
 
     def on_hover(self, x: int, y: int) -> None:
         mw = self._mw
@@ -110,7 +111,14 @@ class CanvasController(ControllerBase):
         suppressed = bool(mods & Qt.KeyboardModifier.ControlModifier)
         engine.enabled = getattr(mw, "_snap_enabled", True) and not suppressed
         tool.snap_zoom = mw._canvas.zoom
+        tool.view_zoom = mw._canvas.zoom
         tool.snap_guides = getattr(mw, "_guides", None)
+
+    def _sync_view_zoom(self) -> None:
+        mw = self._mw
+        tool = mw._tools.active_tool
+        if tool is not None:
+            tool.view_zoom = mw._canvas.zoom
 
     def _sync_snap_lines(self) -> None:
         """Mirror the Move tool's snap lines onto the canvas overlay."""
@@ -119,6 +127,9 @@ class CanvasController(ControllerBase):
 
     def on_press(self, x: int, y: int, pressure: float) -> None:
         mw = self._mw
+        tool = mw._tools.active_tool
+        if tool is not None:
+            tool.view_zoom = mw._canvas.zoom
         self._dragging = True
         self._prime_snapping()
         self._begin_interaction()

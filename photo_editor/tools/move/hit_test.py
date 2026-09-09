@@ -132,6 +132,7 @@ def hit_test(
     x: int,
     y: int,
     current_angle: float = 0.0,
+    zoom: float = 1.0,
 ) -> tuple[_Mode, _Handle]:
     """Return ``(Mode, Handle)`` for a click at *(x, y)*.
 
@@ -144,6 +145,8 @@ def hit_test(
     current_angle:
         Any mid-drag rotation that has not yet been committed to
         ``layer.transform_angle`` (the tool's ``_current_angle``).
+    zoom:
+        Canvas view zoom factor (screen px / document px).
     """
     layer = doc.layers.active_layer
     if layer is None:
@@ -157,7 +160,7 @@ def hit_test(
         bb = multi_bbox(doc)
         if bb is None:
             return _Mode.NONE, _Handle.NONE
-        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y, zoom=zoom)
 
     # Non-group parent with children (pseudo-group) — hit-test uses the
     # parent's own bounds.  When the parent is rotated, inverse-rotate
@@ -178,11 +181,12 @@ def hit_test(
                 layer.transform_base_w,
                 layer.transform_base_h,
                 rx, ry,
+                zoom=zoom,
             )
         bb = bbox(doc)
         if bb is None:
             return _Mode.NONE, _Handle.NONE
-        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y)
+        return hit_test_rect(bb[0], bb[1], bb[2], bb[3], x, y, zoom=zoom)
 
     total_angle = layer.transform_angle + current_angle
 
@@ -203,6 +207,7 @@ def hit_test(
             layer.transform_base_w,
             layer.transform_base_h,
             rx, ry,
+            zoom=zoom,
         )
 
     # Normal (no rotation) hit-test on current layer bounds
@@ -210,34 +215,48 @@ def hit_test(
     if bb is None:
         return _Mode.NONE, _Handle.NONE
     bx, by, bw, bh = bb
-    return hit_test_rect(bx, by, bw, bh, x, y)
+    return hit_test_rect(bx, by, bw, bh, x, y, zoom=zoom)
 
 
 def hit_test_rect(
     bx: float, by: float, bw: float, bh: float,
     x: float, y: float,
+    zoom: float = 1.0,
 ) -> tuple[_Mode, _Handle]:
     """Hit-test *(x, y)* against a rectangle and its transform handles.
+
+    Parameters
+    ----------
+    bx, by, bw, bh:
+        Rectangle bounding box in document coordinates.
+    x, y:
+        Click position in document coordinates.
+    zoom:
+        Canvas view zoom factor (screen px / document px).  Used to scale
+        hit margins so handles maintain a consistent, comfortable click
+        target size in screen pixels regardless of document resolution or
+        zoom level.
 
     Detection priority
     ------------------
     1. Rotation handle node (circle above top-centre)
-    2. Resize handles (TL, T, TR, L, R, BL, B, BR) — expanded hit area
+    2. Resize handles (TL, T, TR, L, R, BL, B, BR) — closest handle hit
     3. Bounding box border lines (thin margin strip)
     4. Interior  → ``(MOVE, NONE)``
     5. Near a corner within ROTATE_PROXIMITY → ``(ROTATE, NONE)``
     6. Everything else → ``(NONE, NONE)``   (no interaction)
     """
-    m = HANDLE_MARGIN
-    rh_offset = ROTATE_HANDLE_OFFSET
-    mx, my = bx + bw / 2, by + bh / 2
+    z = max(0.0001, zoom)
+    m = HANDLE_MARGIN / z
+    rh_offset = ROTATE_HANDLE_OFFSET / z
+    mx, my = bx + bw / 2.0, by + bh / 2.0
 
     # 1. Rotation handle node above top-centre
     rh_x, rh_y = mx, by - rh_offset
     if abs(x - rh_x) <= m and abs(y - rh_y) <= m:
         return _Mode.ROTATE, _Handle.NONE
 
-    # 2. Resize handles (expanded hit area)
+    # 2. Resize handles (expanded hit area, picks closest handle)
     handles = [
         (_Handle.TL, bx,       by),
         (_Handle.T,  mx,       by),
@@ -248,12 +267,22 @@ def hit_test_rect(
         (_Handle.B,  mx,       by + bh),
         (_Handle.BR, bx + bw,  by + bh),
     ]
+    best_handle = None
+    min_dist_sq = float("inf")
     for hid, hx, hy in handles:
-        if abs(x - hx) <= m and abs(y - hy) <= m:
-            return _Mode.RESIZE, hid
+        dx_h = abs(x - hx)
+        dy_h = abs(y - hy)
+        if dx_h <= m and dy_h <= m:
+            dist_sq = dx_h * dx_h + dy_h * dy_h
+            if dist_sq < min_dist_sq:
+                min_dist_sq = dist_sq
+                best_handle = hid
+
+    if best_handle is not None:
+        return _Mode.RESIZE, best_handle
 
     # 3. Bounding box border lines (thin strip around the edges)
-    border = 6  # pixels either side of the border line
+    border = 6.0 / z  # pixels either side of the border line in doc coords
     inside_outer = (bx - border <= x <= bx + bw + border
                     and by - border <= y <= by + bh + border)
     inside_inner = (bx + border < x < bx + bw - border
@@ -267,7 +296,7 @@ def hit_test_rect(
 
     # 5. Rotation zones — only near corners and rotation handle, within
     #    ROTATE_PROXIMITY distance from the closest corner.
-    rp = ROTATE_PROXIMITY
+    rp = ROTATE_PROXIMITY / z
     corners = [
         (bx,       by),        # TL
         (bx + bw,  by),        # TR

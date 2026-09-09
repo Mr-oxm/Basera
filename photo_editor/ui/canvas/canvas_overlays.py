@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 
 from ...core.enums import ToolType
+from ...tools.move.hit_test import ROTATE_HANDLE_OFFSET
 
 if TYPE_CHECKING:
     from ..canvas_view import CanvasView  # noqa: F401
@@ -138,7 +139,7 @@ class CanvasOverlays:
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(-hw, -hh, br.width(), br.height()))
 
-        rh_offset = 20.0
+        rh_offset = ROTATE_HANDLE_OFFSET
         rh_x, rh_y = 0, -hh - rh_offset
         p.setPen(QPen(QColor(0, 150, 255), 1.0))
         p.drawLine(QPointF(0, -hh), QPointF(rh_x, rh_y))
@@ -147,13 +148,13 @@ class CanvasOverlays:
         p.setBrush(QColor(255, 255, 255))
         p.drawEllipse(QPointF(rh_x, rh_y), 5.0, 5.0)
 
-        hs = 7
+        hs = 8.0
         handle_pts = [
             (-hw, -hh), (0, -hh), (hw, -hh),
             (-hw, 0), (hw, 0),
             (-hw, hh), (0, hh), (hw, hh),
         ]
-        p.setPen(QPen(QColor(0, 150, 255), 1))
+        p.setPen(QPen(QColor(0, 150, 255), 1.5))
         p.setBrush(QColor(255, 255, 255))
         for hx, hy in handle_pts:
             p.drawRect(QRectF(hx - hs / 2, hy - hs / 2, hs, hs))

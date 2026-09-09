@@ -44,6 +44,7 @@ from .canvas.canvas_cursors import (
 )
 from .canvas.canvas_overlays import CanvasOverlays
 from .canvas.canvas_input import CanvasInputHandler
+from ..tools.move.hit_test import ROTATE_HANDLE_OFFSET, ROTATE_PROXIMITY
 
 
 class CanvasView(_BASE_CLASS):
@@ -727,29 +728,39 @@ class CanvasView(_BASE_CLASS):
             px, py = rx, ry
 
         # Rotation handle node (above top-center)
-        rh_offset = 20.0
+        rh_offset = ROTATE_HANDLE_OFFSET
         rh_x, rh_y = 0, -hh - rh_offset
         if abs(px - rh_x) <= HANDLE_HIT and abs(py - rh_y) <= HANDLE_HIT:
             self.setCursor(QCursor(build_rotate_cursor()))
             return
 
-        # Hit-test against centered handle positions (expanded hit area)
+        # Hit-test against centered handle positions (expanded hit area, picks closest)
         local_handles = [
             ("TL", -hw, -hh), ("T", 0, -hh), ("TR", hw, -hh),
             ("L", -hw, 0), ("R", hw, 0),
             ("BL", -hw, hh), ("B", 0, hh), ("BR", hw, hh),
         ]
+        best_name = None
+        min_dist_sq = float("inf")
         for name, hx, hy in local_handles:
-            if abs(px - hx) <= HANDLE_HIT and abs(py - hy) <= HANDLE_HIT:
-                self.setCursor(QCursor(HANDLE_CURSORS[name]))
-                return
+            dx_h = abs(px - hx)
+            dy_h = abs(py - hy)
+            if dx_h <= HANDLE_HIT and dy_h <= HANDLE_HIT:
+                d2 = dx_h * dx_h + dy_h * dy_h
+                if d2 < min_dist_sq:
+                    min_dist_sq = d2
+                    best_name = name
+
+        if best_name is not None:
+            self.setCursor(QCursor(HANDLE_CURSORS[best_name]))
+            return
 
         if -hw <= px <= hw and -hh <= py <= hh:
             self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
             return
 
         # Rotate cursor only near corners (within ROTATE_PROX pixels)
-        ROTATE_PROX = 50.0
+        ROTATE_PROX = ROTATE_PROXIMITY
         corners = [
             (-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh),
             (rh_x, rh_y),

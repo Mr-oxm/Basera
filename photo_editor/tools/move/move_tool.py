@@ -52,6 +52,7 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         from ...core.snapping import SnapEngine
         self.snap_engine = SnapEngine(enabled=False)
         self.snap_zoom: float = 1.0
+        self.view_zoom: float = 1.0
         self.snap_guides = None
         self.snap_lines: list = []
         self._snap_origin = None
@@ -151,14 +152,16 @@ class MoveTool(FloatSelectionMixin, ResizeMixin, RotateMixin, VectorCommitMixin,
         return _ht.group_bbox(doc, group)
 
     def _hit_test(self, doc: Document, x: int, y: int) -> tuple[_Mode, _Handle]:
-        return _ht.hit_test(doc, x, y, current_angle=self._current_angle)
+        zoom = getattr(self, "view_zoom", 1.0) or getattr(self, "snap_zoom", 1.0) or 1.0
+        return _ht.hit_test(doc, x, y, current_angle=self._current_angle, zoom=zoom)
 
     @staticmethod
     def _hit_test_rect(
         bx: float, by: float, bw: float, bh: float,
         x: float, y: float,
+        zoom: float = 1.0,
     ) -> tuple[_Mode, _Handle]:
-        return _ht.hit_test_rect(bx, by, bw, bh, x, y)
+        return _ht.hit_test_rect(bx, by, bw, bh, x, y, zoom=zoom)
 
     # ------------------------------------------------------------------
     # Auto-select wrappers (delegate to auto_select module)
