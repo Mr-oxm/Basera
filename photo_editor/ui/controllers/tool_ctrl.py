@@ -48,6 +48,9 @@ class ToolController(ControllerBase):
             mw._canvas.set_source_drawing(False)
             mw._canvas.set_clone_preview(None)
         mw._tools.select(t)
+        new_tool = mw._tools.active_tool
+        if new_tool is not None:
+            new_tool.view_zoom = mw._canvas.zoom
         mw._status.set_tool(t.name.replace("_", " ").title())
         mw._canvas.set_tool_cursor(t)
 

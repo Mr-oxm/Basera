@@ -119,9 +119,20 @@ class CropTool(Tool):
         """Return the handle name, ``'move'``, or ``None``."""
         if self._box is None:
             return None
+        zoom = getattr(self, "view_zoom", 1.0)
+        margin = max(_HANDLE_DOC_PX, int(12.0 / zoom)) if zoom > 0 else _HANDLE_DOC_PX
+        best_name = None
+        min_dist_sq = float("inf")
         for name, hx, hy in self._handle_positions():
-            if abs(dx - hx) <= _HANDLE_DOC_PX and abs(dy - hy) <= _HANDLE_DOC_PX:
-                return name
+            dx_h = abs(dx - hx)
+            dy_h = abs(dy - hy)
+            if dx_h <= margin and dy_h <= margin:
+                d2 = dx_h * dx_h + dy_h * dy_h
+                if d2 < min_dist_sq:
+                    min_dist_sq = d2
+                    best_name = name
+        if best_name is not None:
+            return best_name
         x, y, w, h = self._box
         if x <= dx <= x + w and y <= dy <= y + h:
             return "move"

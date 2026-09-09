@@ -15,15 +15,19 @@ def _blend_cool_desaturated(image: QImage, amount: float) -> QImage:
     import numpy as np
 
     amount = max(0.0, min(1.0, amount))
-    source = image.convertToFormat(QImage.Format.Format_ARGB32)
+    source = image.convertToFormat(QImage.Format.Format_RGBA8888)
 
     ptr = source.bits()
-    arr = np.frombuffer(ptr, dtype=np.uint8).reshape((source.height(), source.width(), 4)).copy()
+    bytes_per_line = source.bytesPerLine()
 
-    # ARGB32 channels: [B, G, R, A]
-    b = arr[:, :, 0].astype(np.float32)
+    raw_arr = np.frombuffer(ptr, dtype=np.uint8).reshape((source.height(), bytes_per_line))
+    arr = raw_arr[:, :source.width() * 4].reshape((source.height(), source.width(), 4)).copy()
+
+    # RGBA8888 channels: [R, G, B, A]
+    r = arr[:, :, 0].astype(np.float32)
     g = arr[:, :, 1].astype(np.float32)
-    r = arr[:, :, 2].astype(np.float32)
+    b = arr[:, :, 2].astype(np.float32)
+    a = arr[:, :, 3]
 
     gray = 0.299 * r + 0.587 * g + 0.114 * b
 
@@ -31,16 +35,23 @@ def _blend_cool_desaturated(image: QImage, amount: float) -> QImage:
     cool_g = gray * 0.9
     cool_b = np.clip(gray * 1.05 + 10, 0, 255)
 
-    arr[:, :, 0] = np.clip(cool_b + (b - cool_b) * amount, 0, 255).astype(np.uint8)
+    arr[:, :, 0] = np.clip(cool_r + (r - cool_r) * amount, 0, 255).astype(np.uint8)
     arr[:, :, 1] = np.clip(cool_g + (g - cool_g) * amount, 0, 255).astype(np.uint8)
-    arr[:, :, 2] = np.clip(cool_r + (r - cool_r) * amount, 0, 255).astype(np.uint8)
+    arr[:, :, 2] = np.clip(cool_b + (b - cool_b) * amount, 0, 255).astype(np.uint8)
+    arr[:, :, 3] = a
 
-    result = QImage(arr.tobytes(), source.width(), source.height(), QImage.Format.Format_ARGB32)
+    result = QImage(
+        arr.tobytes(),
+        source.width(),
+        source.height(),
+        source.width() * 4,
+        QImage.Format.Format_RGBA8888,
+    )
     return result.copy()
 
 
 def _show_animated_splash(app: QApplication, splash_path: str) -> QSplashScreen | None:
-    """Show the splash screen and animate it from grayscale to colour."""
+    """Show the splash screen, animating it from grey to full RGB colour."""
     if not os.path.exists(splash_path):
         return None
 
@@ -63,19 +74,26 @@ def _show_animated_splash(app: QApplication, splash_path: str) -> QSplashScreen 
             (screen.geometry().height() - splash.height()) // 2,
         )
 
+    splash.raise_()
+    splash.activateWindow()
     app.processEvents()
 
     frame_count = 10
-    frame_interval_ms = 100
+    frame_interval_ms = 35
     loop = QEventLoop()
 
     def update_frame(frame: int) -> None:
+        if not splash.isVisible():
+            if loop.isRunning():
+                loop.quit()
+            return
         splash.setPixmap(
             QPixmap.fromImage(_blend_cool_desaturated(base_image, frame / frame_count))
         )
         app.processEvents()
         if frame >= frame_count:
-            loop.quit()
+            if loop.isRunning():
+                loop.quit()
 
     for frame in range(1, frame_count + 1):
         QTimer.singleShot(frame * frame_interval_ms, lambda f=frame: update_frame(f))
@@ -118,6 +136,10 @@ def run() -> int:
 
     if splash:
         splash.finish(window)
+
+    # Offer any work a previous session left behind, once the window is up
+    # so the dialog has a parent to centre on.
+    QTimer.singleShot(0, window.offer_recovery)
 
     return app.exec()
 
