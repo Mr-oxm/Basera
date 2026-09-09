@@ -536,3 +536,92 @@ class LayerController(ControllerBase):
                 lambda pixels, size: cv2.resize(pixels, size, interpolation=cv2.INTER_AREA),
             )
             self.ctx.refresh()
+
+    def nudge_layer(self, dx: int, dy: int) -> bool:
+        """Nudge active or selected layer(s) by (dx, dy) pixels."""
+        if not self.doc or not self.doc.layers:
+            return False
+        active = self.doc.layers.active_layer
+        if active is None or active.locked:
+            return False
+
+        mw = self.mw
+        # Floating selection support if MoveTool is active and floating
+        if mw._tools.active_type == ToolType.MOVE:
+            tool = mw._tools.active_tool
+            if (tool is not None
+                    and getattr(tool, "_floating", False) is True
+                    and getattr(tool, "_float_pixels", None) is not None
+                    and getattr(tool, "_float_base", None) is not None):
+                self.doc.save_snapshot("Nudge Selection")
+                tool._float_committed_dx += dx
+                tool._float_dx = tool._float_committed_dx
+                tool._float_committed_dy += dy
+                tool._float_dy = tool._float_committed_dy
+                active.begin_write()
+                active.pixels[:] = tool._float_base
+                tool._composite_float(active.pixels, tool._float_dx, tool._float_dy)
+                self.ctx.refresh()
+                return True
+
+        sel_indices = self.doc.layers.selected_indices
+        if len(sel_indices) > 1:
+            target_layers = [
+                self.doc.layers.layers[i] for i in sel_indices
+                if 0 <= i < len(self.doc.layers.layers) and not self.doc.layers.layers[i].locked
+            ]
+        else:
+            target_layers = [active]
+
+        if not target_layers:
+            return False
+
+        self.doc.save_snapshot("Nudge Layer")
+
+        moved_ids: set[str] = set()
+
+        def _move_layer_internal(l) -> None:
+            if l.id in moved_ids:
+                return
+            moved_ids.add(l.id)
+
+            if l.layer_type == LayerType.SHAPE:
+                vl = getattr(l, "_vector_data", None)
+                if vl is not None and getattr(vl, "objects", None):
+                    from ...vector.geometry import AffineTransform
+                    from ...vector.rasterizer import rasterize_vector_layer_tight
+                    xf = AffineTransform.translation(dx, dy)
+                    for obj in vl.objects:
+                        obj.transform = xf.concat(obj.transform)
+                        obj.invalidate()
+                    rasterize_vector_layer_tight(self.doc, layer=l, force=True)
+                else:
+                    l.position = (l.position[0] + dx, l.position[1] + dy)
+            elif l.layer_type == LayerType.GROUP:
+                pass  # Position updated by update_group_bbox
+            else:
+                l.position = (l.position[0] + dx, l.position[1] + dy)
+
+            # Move associated mask layers
+            for mid in getattr(l, "mask_layers", []):
+                if mid not in moved_ids:
+                    mc = self.doc.layers.get(mid)
+                    if mc is not None:
+                        moved_ids.add(mid)
+                        mc.position = (mc.position[0] + dx, mc.position[1] + dy)
+
+            # Move children (for GROUP or pseudo-group parent)
+            for child in self.doc.layers:
+                if child.parent_id == l.id and child.id not in getattr(l, "mask_layers", []):
+                    _move_layer_internal(child)
+
+        for l in target_layers:
+            _move_layer_internal(l)
+
+        # Update group bounding boxes
+        for l in self.doc.layers:
+            if l.layer_type == LayerType.GROUP:
+                self.doc.layers.update_group_bbox(l)
+
+        self.ctx.refresh()
+        return True

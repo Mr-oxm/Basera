@@ -104,6 +104,25 @@ class ShortcutController(ControllerBase):
             sc.activated.connect(self._on_toggle_fullscreen)
             self._active_shortcuts.append(sc)
 
+        nudge_actions = {
+            "nudge_up": (0, -1),
+            "nudge_down": (0, 1),
+            "nudge_left": (-1, 0),
+            "nudge_right": (1, 0),
+            "nudge_up_10": (0, -10),
+            "nudge_down_10": (0, 10),
+            "nudge_left_10": (-10, 0),
+            "nudge_right_10": (10, 0),
+        }
+        for action_id, (dx, dy) in nudge_actions.items():
+            key_seq = mgr.binding(action_id)
+            if not key_seq:
+                continue
+            sc = QShortcut(QKeySequence(key_seq), mw)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(lambda d_x=dx, d_y=dy: self._on_nudge(d_x, d_y))
+            self._active_shortcuts.append(sc)
+
     def update_text_editing_shortcuts(self, editing: bool) -> None:
         """Disable single-key shortcuts during text editing to prevent conflicts."""
         for sc in self._active_shortcuts:
@@ -168,3 +187,26 @@ class ShortcutController(ControllerBase):
         from ..dialogs.shortcuts_dialog import KeyboardShortcutsDialog
         dlg = KeyboardShortcutsDialog(self.mw)
         dlg.exec()
+
+    def _on_nudge(self, dx: int, dy: int) -> None:
+        if self._skip_if_text_editing():
+            return
+        from PySide6.QtWidgets import (
+            QApplication, QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox,
+        )
+        widget = QApplication.focusWidget()
+        if widget is not None:
+            # If in a spinbox or its child lineEdit, step the spinbox
+            spin = None
+            if isinstance(widget, QAbstractSpinBox):
+                spin = widget
+            elif isinstance(widget.parent(), QAbstractSpinBox):
+                spin = widget.parent()
+            if spin is not None:
+                steps = -dy if dy != 0 else dx
+                spin.stepBy(steps)
+                return
+            # If typing in a text field, do not nudge layer
+            if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                return
+        self.mw._layer_ctrl.nudge_layer(dx, dy)

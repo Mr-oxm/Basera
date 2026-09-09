@@ -66,6 +66,14 @@ _PHOTOSHOP_PRESET: Dict[str, str] = {
     "invert_mask_layer":"",
     "convert_to_mask":  "",
     "toggle_vis":       "",
+    "nudge_up":         "Up",
+    "nudge_down":       "Down",
+    "nudge_left":       "Left",
+    "nudge_right":      "Right",
+    "nudge_up_10":      "Shift+Up",
+    "nudge_down_10":    "Shift+Down",
+    "nudge_left_10":    "Shift+Left",
+    "nudge_right_10":   "Shift+Right",
 
     # ---- Select -------------------------------------------------------------
     "select_all":       "Ctrl+A",
@@ -163,6 +171,14 @@ _AFFINITY_PRESET: Dict[str, str] = {
     "invert_mask_layer":"Ctrl+I",
     "convert_to_mask":  "",
     "toggle_vis":       "",
+    "nudge_up":         "Up",
+    "nudge_down":       "Down",
+    "nudge_left":       "Left",
+    "nudge_right":      "Right",
+    "nudge_up_10":      "Shift+Up",
+    "nudge_down_10":    "Shift+Down",
+    "nudge_left_10":    "Shift+Left",
+    "nudge_right_10":   "Shift+Right",
 
     # ---- Select -------------------------------------------------------------
     "select_all":       "Ctrl+A",
@@ -266,6 +282,14 @@ ACTION_REGISTRY: List[Tuple[str, str, str]] = [
     ("Layer",   "invert_mask_layer","Invert Mask Layer"),
     ("Layer",   "convert_to_mask",  "Convert to Mask"),
     ("Layer",   "toggle_vis",       "Toggle Visibility"),
+    ("Layer",   "nudge_up",         "Nudge Layer Up (1px)"),
+    ("Layer",   "nudge_down",       "Nudge Layer Down (1px)"),
+    ("Layer",   "nudge_left",       "Nudge Layer Left (1px)"),
+    ("Layer",   "nudge_right",      "Nudge Layer Right (1px)"),
+    ("Layer",   "nudge_up_10",      "Nudge Layer Up (10px)"),
+    ("Layer",   "nudge_down_10",    "Nudge Layer Down (10px)"),
+    ("Layer",   "nudge_left_10",    "Nudge Layer Left (10px)"),
+    ("Layer",   "nudge_right_10",   "Nudge Layer Right (10px)"),
 
     # ---- Select -------------------------------------------------------------
     ("Select",  "select_all",       "Select All"),
