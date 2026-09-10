@@ -770,7 +770,7 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         """Show the About dialog."""
         about_text = (
-            "<h3>Basera (v0.4-alpha)</h3>"
+            "<h3>Basera (v0.6-alpha)</h3>"
             "<p><b>A professional-grade, Photoshop-style photo editor</b> built in Python "
             "with a modular, extensible architecture.</p>"
             "<p><b>Key Features:</b><ul>"
@@ -784,6 +784,8 @@ class MainWindow(QMainWindow):
             "<hr>"
             "<p>Developed by <b>Omar Ahmed Emara</b><br>"
             "GitHub: <a href='https://github.com/Mr-oxm'>https://github.com/Mr-oxm</a></p>"
+            "<p>Follow Our Page<br>"
+            "LinkedIn: <a href='https://www.linkedin.com/company/basera-the-photo-editor/'>https://www.linkedin.com/company/basera-the-photo-editor/</a></p>"
         )
         QMessageBox.about(self, "About Basera", about_text)
 

@@ -145,7 +145,7 @@ class WelcomeScreen(QWidget):
         center_layout.addStretch(3)
 
         # Version
-        version = QLabel("v0.4-alpha")
+        version = QLabel("v0.6-alpha")
         version.setObjectName("WelcomeVersion")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         center_layout.addWidget(version)
